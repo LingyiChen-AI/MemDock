@@ -494,5 +494,146 @@
     "roleAssistant": "Assistant",
     "quoteHit": "Match",
     "quoteNotFound": "The quote was not found in the context"
+  },
+  "usage": {
+    "title": "Usage",
+    "subtitle": "Token usage from local Claude Code and Codex logs, cost estimated with public prices",
+    "refresh": "Rescan",
+    "scanning": "Scanning local logs for the first time; numbers will fill in shortly…",
+    "quota": {
+      "fiveHour": "5-hour window",
+      "weekly": "This week",
+      "used": "{pct}% used",
+      "resetsIn": "resets in {time}",
+      "resetUnknown": "reset time unknown",
+      "unavailable": "Unavailable",
+      "unavailableReason": "Quota endpoint unavailable ({reason}); token statistics are not affected",
+      "noData": "No quota data yet; it appears after you use Codex",
+      "disabledTitle": "Claude Code quota lookup is off",
+      "explain": "When on, MemDock reads Claude Code's local login credentials and asks Anthropic's usage endpoint for the 5-hour and weekly quota. The endpoint is not public and may stop working; the credentials are used only for that request and are never stored or logged. While off, no network request is made.",
+      "enable": "Turn on",
+      "updated": "Data from {time}"
+    },
+    "views": {
+      "today": "Today",
+      "daily": "Daily",
+      "monthly": "Monthly"
+    },
+    "range": {
+      "last7": "Last 7 days",
+      "last30": "Last 30 days",
+      "thisMonth": "This month",
+      "last6m": "Last 6 months",
+      "last12m": "Last 12 months",
+      "from": "From",
+      "to": "To"
+    },
+    "filter": {
+      "tool": "Tool",
+      "model": "Model",
+      "allTools": "All tools",
+      "allModels": "All models"
+    },
+    "export": "Export CSV",
+    "exported": "Exported to {path}",
+    "exportFailed": "Export failed: {error}",
+    "loadFailed": "Could not load usage: {error}",
+    "summary": {
+      "cost": "Cost in range",
+      "tokens": "Tokens in range",
+      "dailyAvg": "Daily average",
+      "peakDay": "Peak day",
+      "peakHour": "Peak hour",
+      "peakMonth": "Peak month",
+      "hitRate": "Cache hit rate",
+      "perDay": "{cost} · {tokens} tokens",
+      "none": "None"
+    },
+    "estimateNote": "Costs are estimated with public list prices (price table updated {date}); subscription plans are not billed this way.",
+    "unknownPrice": "Includes models without a known price: {models}. Their tokens are counted but not included in the cost.",
+    "chart": {
+      "daily": "Daily cost",
+      "today": "Hourly cost today",
+      "monthly": "Monthly cost",
+      "total": "Total",
+      "hint": "Click a bar to see that day"
+    },
+    "table": {
+      "date": "Date",
+      "hour": "Hour",
+      "month": "Month",
+      "input": "Input",
+      "output": "Output",
+      "cacheRead": "Cache read",
+      "cacheWrite": "Cache write",
+      "total": "Total tokens",
+      "cost": "Cost",
+      "expand": "Show tool × model details for {key}",
+      "collapse": "Collapse",
+      "unknown": "Unknown price"
+    },
+    "empty": "No usage in this range",
+    "duration": {
+      "d": "{d}d {h}h",
+      "h": "{h}h {m}m",
+      "m": "{m}m"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "env": {
+      "title": "Environment",
+      "desc": "Checks Claude Code, Codex and Node.js on this machine. Missing CLIs can be installed with npm in one click.",
+      "recheck": "Check again",
+      "checking": "Checking…",
+      "installed": "Installed",
+      "notInstalled": "Not installed",
+      "version": "Version {v}",
+      "loggedIn": "Logged in",
+      "notLoggedIn": "Not logged in",
+      "install": "Install",
+      "installing": "Installing…",
+      "installOk": "{name} installed",
+      "installFailed": "{name} installation failed: {error}",
+      "desktopOnly": "The Codex desktop app is installed, but the command-line version is not (extraction needs the CLI)",
+      "loginHint": "Run {cmd} in a terminal to log in",
+      "copy": "Copy command",
+      "copied": "Copied",
+      "npmMissing": "npm was not found. Install Node.js first",
+      "nodeLink": "Open nodejs.org",
+      "log": "Install log",
+      "busy": "Another installation is running",
+      "names": {
+        "claude": "Claude Code",
+        "codex": "Codex CLI",
+        "node": "Node.js",
+        "npm": "npm",
+        "git": "Git"
+      }
+    },
+    "appearance": {
+      "title": "Appearance"
+    },
+    "extract": {
+      "title": "Memory extraction",
+      "desc": "The extraction tool, schedule and project scope are configured on the Extraction page.",
+      "open": "Open extraction settings"
+    },
+    "sync": {
+      "title": "GitHub sync",
+      "desc": "Bind a repository to sync memories and the skill list across machines.",
+      "open": "Open sync settings",
+      "pending": "Available once the sync feature is merged"
+    },
+    "quota": {
+      "title": "Claude Code quota lookup",
+      "toggle": "Look up Claude Code quota"
+    },
+    "data": {
+      "title": "Data folder",
+      "desc": "MemDock's settings, snapshots, usage cache and backups live here.",
+      "open": "Open folder",
+      "openFailed": "Could not open: {error}"
+    }
   }
 }

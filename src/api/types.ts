@@ -127,6 +127,7 @@ export interface Settings {
   /** "green" | "blue" | "violet" | "orange" | "teal"; null = green. */
   accent: string | null;
   manual_projects: string[];
+  claude_quota_enabled?: boolean;
 }
 
 export interface MemoryChangedPayload {
@@ -384,3 +385,106 @@ export interface SuggestionContext {
   evidence: SuggestionEvidence;
   turns: ContextTurn[];
 }
+
+// ---- Usage statistics (plan 5) ----
+
+export type UsageView = "today" | "daily" | "monthly";
+
+export interface UsageTotals {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  total_tokens: number;
+  /** Estimated USD for the priced part. */
+  cost: number;
+  /** Tokens of models without a known price (not in `cost`). */
+  unpriced_tokens: number;
+}
+
+export interface UsageBreakdown {
+  tool: Tool;
+  model: string;
+  totals: UsageTotals;
+}
+
+export interface UsageRow {
+  /** `HH` (today), `YYYY-MM-DD` (daily) or `YYYY-MM` (monthly). */
+  key: string;
+  totals: UsageTotals;
+  claude: UsageTotals;
+  codex: UsageTotals;
+  breakdown: UsageBreakdown[];
+}
+
+export interface UsageSummary {
+  totals: UsageTotals;
+  days: number;
+  daily_avg_cost: number;
+  daily_avg_tokens: number;
+  peak: { key: string; cost: number; tokens: number } | null;
+  cache_hit_rate: number | null;
+}
+
+export interface UsageReport {
+  view: UsageView;
+  from: string;
+  to: string;
+  rows: UsageRow[];
+  summary: UsageSummary;
+  models: string[];
+  unknown_models: string[];
+  pricing_updated: string;
+  scanning: boolean;
+}
+
+export interface UsageQuery {
+  view: UsageView;
+  from: string;
+  to: string;
+  tools: Tool[];
+  models: string[];
+}
+
+export interface QuotaWindow {
+  used_percent: number;
+  /** Epoch ms. */
+  resets_at: number | null;
+  window_minutes: number | null;
+}
+
+export interface ToolQuota {
+  status: "ok" | "disabled" | "unavailable" | "no_data";
+  five_hour: QuotaWindow | null;
+  weekly: QuotaWindow | null;
+  updated_at: number | null;
+  reason?: string;
+}
+
+export interface QuotaDto {
+  claude: ToolQuota;
+  codex: ToolQuota;
+}
+
+// ---- Environment (plan 5) ----
+
+export type EnvToolName = "claude" | "codex" | "node" | "npm" | "git";
+
+export interface EnvToolStatus {
+  name: EnvToolName;
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  logged_in: boolean | null;
+  desktop_app: string | null;
+}
+
+export interface EnvReport {
+  tools: EnvToolStatus[];
+  data_dir: string;
+  installing: string | null;
+}
+
+export type InstallEvent =
+  | { kind: "log"; tool: string; line: string }
+  | { kind: "done"; tool: string; ok: boolean; code: number | null; error: string | null };

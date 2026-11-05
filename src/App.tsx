@@ -7,6 +7,7 @@ import { MemoryPage } from "@/pages/memory/MemoryPage";
 import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
+import { UsagePage } from "@/pages/usage/UsagePage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 
 function Shell() {
@@ -34,6 +35,7 @@ function Shell() {
           review: <ReviewPage onNavigate={navigate} />,
           extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
           skills: <SkillsPage onDirtyChange={onDirty} />,
+          usage: <UsagePage />,
         }}
       >
         <MemoryPage onDirtyChange={onDirty} pendingByProject={pending?.by_project} />

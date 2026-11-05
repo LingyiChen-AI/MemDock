@@ -146,6 +146,12 @@ pub struct CommandError {
     /// Present for skill `exists` errors: the directory that is in the way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
+    /// Present for skill `exists` errors: every directory that is in the way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirs: Option<Vec<String>>,
+    /// Present for skill `local_changes`: no baseline exists, local edits cannot be ruled out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unknown: Option<bool>,
 }
 
 impl CommandError {
@@ -155,6 +161,8 @@ impl CommandError {
             message: message.into(),
             current_hash: None,
             dir: None,
+            dirs: None,
+            unknown: None,
         }
     }
 }
@@ -173,6 +181,8 @@ impl From<WriteError> for CommandError {
                 message: "file changed on disk".into(),
                 current_hash: Some(current_hash),
                 dir: None,
+                dirs: None,
+                unknown: None,
             },
             WriteError::Io(e) => e.into(),
         }

@@ -60,3 +60,11 @@ export function sameSkill(a: SkillEntry, b: SkillEntry): boolean {
   if (!a.source || !b.source) return !a.source && !b.source;
   return normUrl(a.source.url) === normUrl(b.source.url);
 }
+
+/** Every directory an `exists` error reports (older backends only send `dir`). */
+export function existingDirs(e: unknown): string[] {
+  const ce = asCommandError(e);
+  if (!ce) return [];
+  if (ce.dirs && ce.dirs.length > 0) return ce.dirs;
+  return ce.dir ? [ce.dir] : [];
+}

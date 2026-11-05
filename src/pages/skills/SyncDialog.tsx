@@ -7,7 +7,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { fmt } from "@/pages/memory/paths";
 import { FlowDialog, InlineError, TargetPicker, describeError, selectionProblem, targetLabel, targetsOf, type TargetSelection } from "./flowParts";
-import { asCommandError } from "./skillUtils";
+import { asCommandError, existingDirs } from "./skillUtils";
 
 export interface SyncDialogProps {
   entry: SkillEntry;
@@ -33,7 +33,7 @@ export function SyncDialog({ entry, open, onOpenChange, projects, onSynced }: Sy
   const [target, setTarget] = React.useState<TargetSelection>(initial);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [confirm, setConfirm] = React.useState<{ dir?: string } | null>(null);
+  const [confirm, setConfirm] = React.useState<{ dirs: string[] } | null>(null);
   const busyRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -61,7 +61,7 @@ export function SyncDialog({ entry, open, onOpenChange, projects, onSynced }: Sy
       onOpenChange(false);
     } catch (e) {
       const ce = asCommandError(e);
-      if (ce?.code === "exists") setConfirm({ dir: ce.dir });
+      if (ce?.code === "exists") setConfirm({ dirs: existingDirs(e) });
       else setError(fmt(s.syncFailed, { message: describeError(e, s) }));
     } finally {
       busyRef.current = false;
@@ -98,7 +98,7 @@ export function SyncDialog({ entry, open, onOpenChange, projects, onSynced }: Sy
       <ConfirmDialog
         open={confirm !== null}
         title={s.existsTitle}
-        body={confirm?.dir ? fmt(s.existsBodyDir, { dir: confirm.dir }) : s.existsBody}
+        body={confirm && confirm.dirs.length > 0 ? fmt(s.existsBodyDirs, { dirs: confirm.dirs.join("\n") }) : s.existsBody}
         confirmLabel={s.overwrite}
         cancelLabel={s.cancel}
         destructive

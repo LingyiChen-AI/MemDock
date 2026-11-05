@@ -10,7 +10,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { fmt } from "@/pages/memory/paths";
 import { FlowDialog, InlineError, TargetPicker, describeError, selectionProblem, targetsOf, type TargetSelection } from "./flowParts";
-import { asCommandError, shortCommit } from "./skillUtils";
+import { asCommandError, existingDirs, shortCommit } from "./skillUtils";
 
 type Tab = "github" | "local" | "template";
 
@@ -50,12 +50,15 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
   const [target, setTarget] = React.useState<TargetSelection>(INITIAL_TARGET);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [confirm, setConfirm] = React.useState<{ dir?: string } | null>(null);
+  const [confirm, setConfirm] = React.useState<{ dirs: string[] } | null>(null);
   // What is left to install after an `exists` prompt, and what already got installed.
   const queue = React.useRef<{ rest: InstallFrom[]; done: SkillEntry[] }>({ rest: [], done: [] });
   const busyRef = React.useRef(false);
+  // Bumped on every inspect and on every (re)open: older responses are ignored.
+  const inspectSeq = React.useRef(0);
 
   React.useEffect(() => {
+    inspectSeq.current += 1;
     if (!open) return;
     setTab(gitOk ? "github" : "local");
     setInput("");
@@ -77,19 +80,21 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
   const inspect = async () => {
     const value = input.trim();
     if (!value || inspecting) return;
+    const seq = ++inspectSeq.current;
     setInspecting(true);
     setInspectError(null);
     setInspected(null);
     setPicked([]);
     try {
       const r = await inspectGitSource(value);
+      if (seq !== inspectSeq.current) return;
       setInspected(r);
       if (r.preselected && r.skills.some((x) => x.skill_path === r.preselected)) setPicked([r.preselected]);
       else if (r.skills.length === 1) setPicked([r.skills[0].skill_path]);
     } catch (e) {
-      setInspectError(describeError(e, s));
+      if (seq === inspectSeq.current) setInspectError(describeError(e, s));
     } finally {
-      setInspecting(false);
+      if (seq === inspectSeq.current) setInspecting(false);
     }
   };
 
@@ -144,7 +149,7 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
     } catch (e) {
       if (asCommandError(e)?.code === "exists") {
         queue.current = { rest: left, done };
-        setConfirm({ dir: asCommandError(e)?.dir });
+        setConfirm({ dirs: existingDirs(e) });
       } else {
         setError(fmt(s.installFailed, { message: describeError(e, s) }));
         if (done.length > 0) onInstalled(done);
@@ -343,7 +348,7 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
       <ConfirmDialog
         open={confirm !== null}
         title={s.existsTitle}
-        body={confirm?.dir ? fmt(s.existsBodyDir, { dir: confirm.dir }) : s.existsBody}
+        body={confirm && confirm.dirs.length > 0 ? fmt(s.existsBodyDirs, { dirs: confirm.dirs.join("\n") }) : s.existsBody}
         confirmLabel={s.overwrite}
         cancelLabel={s.cancel}
         destructive

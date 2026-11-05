@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 
@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 import { inspectGitSource, installSkill } from "@/api/skills";
 import type { InspectResult } from "@/api/types";
+import { AppProviders } from "@/providers";
 import { mkProject, renderApp } from "@/test/fixtures";
 import { AddSkillDialog } from "./AddSkillDialog";
 import { mkSkill } from "./testUtils";
@@ -138,6 +139,50 @@ describe("AddSkillDialog", () => {
     await waitFor(() => expect(installSkill).toHaveBeenCalledTimes(2));
     expect((installSkill as Mock).mock.calls[1][2]).toBe(true);
     await waitFor(() => expect(props.onInstalled).toHaveBeenCalled());
+  });
+
+  it("lists every conflicting directory and overwrites only after confirmation", async () => {
+    (installSkill as Mock)
+      .mockRejectedValueOnce({ code: "exists", message: "exists", dir: "C:\\a\\demo", dirs: ["C:\\a\\demo", "C:\\b\\demo"] })
+      .mockResolvedValueOnce([mkSkill({ name: "demo" })]);
+    setup();
+    await userEvent.click(screen.getByRole("tab", { name: "空白模板" }));
+    await userEvent.type(screen.getByLabelText("名称"), "demo");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Codex" }));
+    await userEvent.click(screen.getByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("C:\\a\\demo");
+    expect(dialog).toHaveTextContent("C:\\b\\demo");
+    expect(installSkill).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "覆盖" }));
+    await waitFor(() => expect(installSkill).toHaveBeenCalledTimes(2));
+    expect((installSkill as Mock).mock.calls[1][2]).toBe(true);
+  });
+
+  it("does not retry when the overwrite is declined", async () => {
+    (installSkill as Mock).mockRejectedValueOnce({ code: "exists", message: "exists", dir: "C:\\a\\demo", dirs: ["C:\\a\\demo"] });
+    setup();
+    await userEvent.click(screen.getByRole("tab", { name: "空白模板" }));
+    await userEvent.type(screen.getByLabelText("名称"), "demo");
+    await userEvent.click(screen.getByRole("button", { name: "安装" }));
+    await screen.findByRole("alertdialog");
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(installSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores an inspect response that arrives after the dialog was reopened", async () => {
+    let resolve!: (r: InspectResult) => void;
+    (inspectGitSource as Mock).mockReturnValue(new Promise<InspectResult>((r) => (resolve = r)));
+    const props = { open: true, onOpenChange: vi.fn(), projects, gitOk: true, onInstalled: vi.fn() };
+    vi.spyOn(navigator, "language", "get").mockReturnValue("zh-CN");
+    const view = render(<AppProviders><AddSkillDialog {...props} /></AppProviders>);
+    await userEvent.type(screen.getByLabelText("仓库地址"), "o/repo");
+    await userEvent.click(screen.getByRole("button", { name: "解析" }));
+    view.rerender(<AppProviders><AddSkillDialog {...props} open={false} /></AppProviders>);
+    view.rerender(<AppProviders><AddSkillDialog {...props} open /></AppProviders>);
+    resolve(inspected);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText("Beta does another")).not.toBeInTheDocument();
   });
 
   it("only offers projects whose directory exists, and passes the project scope", async () => {

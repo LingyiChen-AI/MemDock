@@ -77,8 +77,12 @@ export interface CommandError {
   code: CommandErrorCode;
   message: string;
   current_hash?: string;
-  /** Set for skill `exists`: the directory that is in the way. */
+  /** Set for skill `exists`: the first directory that is in the way. */
   dir?: string;
+  /** Set for skill `exists`: every directory that would be overwritten. */
+  dirs?: string[];
+  /** Set for skill `local_changes`: no baseline exists, local edits cannot be ruled out. */
+  unknown?: boolean;
 }
 
 export interface SearchHit {

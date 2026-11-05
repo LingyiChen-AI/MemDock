@@ -254,7 +254,6 @@
     "collapse": "Show less",
     "existsTitle": "Already exists",
     "existsBody": "It already exists. Overwrite (a backup is made first)?",
-    "existsBodyDir": "It already exists. Overwrite (a backup is made first)?\n{dir}",
     "overwrite": "Overwrite",
     "gitUnavailableErr": "git was not found. Install git first.",
     "readOnlyErr": "This location is read-only.",
@@ -289,13 +288,18 @@
     "backupsEmpty": "No backups yet",
     "backupsFailed": "Failed to read backups: {message}",
     "backupsListLabel": "Backups",
-    "backupsNoDiff": "Backup contents cannot be compared here yet; after restoring, check them on the Files tab.",
     "restore": "Restore this backup",
     "restoring": "Restoring",
     "restored": "Restored the backup from {time}",
     "restoreFailed": "Restore failed: {message}",
     "close": "Close",
-    "actionsDisabledRemoved": "This skill was deleted outside MemDock"
+    "actionsDisabledRemoved": "This skill was deleted outside MemDock",
+    "existsBodyDirs": "Already exists. Overwrite (a backup is made first)? These locations will be overwritten:\n{dirs}",
+    "restoreConfirmTitle": "Restore this backup?",
+    "restoreConfirmBody": "The current content is backed up first, then restored to the selected version",
+    "restoreConfirm": "Back up and restore",
+    "backupDiffFailed": "Failed to read the backup: {message}",
+    "backupNoSkillMd": "This backup has no SKILL.md, so it cannot be compared"
   },
   "diff": {
     "layoutLabel": "Diff layout",

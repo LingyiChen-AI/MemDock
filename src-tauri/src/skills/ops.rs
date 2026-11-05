@@ -83,14 +83,19 @@ pub fn ensure_cache(
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum OpsError {
+    /// `dir` is the first conflicting directory, `dirs` all of them.
     Exists {
         dir: String,
+        dirs: Vec<String>,
     },
     ReadOnly,
     GitUnavailable,
     Git(GitError),
     /// The skill has local edits that an update would overwrite.
-    LocalChanges,
+    /// `unknown`: there is no baseline, so local edits cannot be ruled out.
+    LocalChanges {
+        unknown: bool,
+    },
     Invalid {
         message: String,
     },
@@ -104,6 +109,13 @@ impl From<io::Error> for OpsError {
         OpsError::Io {
             message: e.to_string(),
         }
+    }
+}
+
+fn exists_err(dirs: Vec<String>) -> OpsError {
+    OpsError::Exists {
+        dir: dirs.first().cloned().unwrap_or_default(),
+        dirs,
     }
 }
 
@@ -391,9 +403,7 @@ fn place(
 ) -> Result<(), OpsError> {
     let exists = fs::symlink_metadata(dir).is_ok();
     if exists && !overwrite {
-        return Err(OpsError::Exists {
-            dir: dir.to_string_lossy().into_owned(),
-        });
+        return Err(exists_err(vec![dir.to_string_lossy().into_owned()]));
     }
     let parent = dir
         .parent()
@@ -528,6 +538,7 @@ pub fn install(
 
     // Resolve and pre-check every target before writing anything.
     let mut dirs: Vec<(InstallTarget, PathBuf)> = Vec::new();
+    let mut conflicts: Vec<String> = Vec::new();
     for t in targets {
         if is_readonly_location(t, &name) {
             return Err(OpsError::ReadOnly);
@@ -537,11 +548,13 @@ pub fn install(
             continue;
         }
         if !overwrite && fs::symlink_metadata(&dir).is_ok() {
-            return Err(OpsError::Exists {
-                dir: dir.to_string_lossy().into_owned(),
-            });
+            conflicts.push(dir.to_string_lossy().into_owned());
         }
         dirs.push((t.clone(), dir));
+    }
+    // Report every conflicting target at once so the user can confirm all of them.
+    if !conflicts.is_empty() {
+        return Err(exists_err(conflicts));
     }
 
     let mut done: Vec<(InstallTarget, PathBuf)> = Vec::new();
@@ -836,9 +849,9 @@ pub fn update(
         .clone()
         .ok_or_else(|| invalid("skill has no known source"))?;
     let reg_entry = find_reg(&reg, &entry.id);
-    let (modified, _) = local_state(&entry, reg_entry);
+    let (modified, unknown) = local_state(&entry, reg_entry);
     if modified && !accept_local_changes {
-        return Err(OpsError::LocalChanges);
+        return Err(OpsError::LocalChanges { unknown });
     }
     if !ctx.git.available() {
         return Err(OpsError::GitUnavailable);
@@ -1088,9 +1101,7 @@ pub fn sync_to(
         return Err(invalid("source and target are the same directory"));
     }
     if !overwrite && fs::symlink_metadata(&dir).is_ok() {
-        return Err(OpsError::Exists {
-            dir: dir.to_string_lossy().into_owned(),
-        });
+        return Err(exists_err(vec![dir.to_string_lossy().into_owned()]));
     }
     let source = entry.source.clone().map(|mut s| {
         if s.origin != SourceOrigin::Manual {
@@ -1361,7 +1372,8 @@ mod tests {
         assert_eq!(
             r.unwrap_err(),
             OpsError::Exists {
-                dir: dir.to_string_lossy().into_owned()
+                dir: dir.to_string_lossy().into_owned(),
+                dirs: vec![dir.to_string_lossy().into_owned()],
             }
         );
         assert!(dir.join("mine.txt").exists());
@@ -1374,6 +1386,23 @@ mod tests {
         );
         assert!(matches!(r, Err(OpsError::Exists { .. })));
         assert!(!e.ctx.paths.codex_home.join("skills").join("demo").exists());
+    }
+
+    #[test]
+    fn install_reports_every_conflicting_target() {
+        let e = env();
+        let src = folder_skill(&e, "one", "demo", "v1");
+        install(&e.ctx, InstallFrom::Folder { path: src.clone() }, &[claude(), codex()], false).unwrap();
+        let c = e.ctx.paths.claude_home.join("skills").join("demo");
+        let x = e.ctx.paths.codex_home.join("skills").join("demo");
+        let r = install(&e.ctx, InstallFrom::Folder { path: src }, &[claude(), codex()], false);
+        match r.unwrap_err() {
+            OpsError::Exists { dir, dirs } => {
+                assert_eq!(dir, c.to_string_lossy());
+                assert_eq!(dirs, vec![c.to_string_lossy().into_owned(), x.to_string_lossy().into_owned()]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]
@@ -1583,11 +1612,11 @@ mod tests {
 
     #[test]
     fn ops_error_serializes_with_code() {
-        let v = serde_json::to_value(OpsError::Exists { dir: "/x".into() }).unwrap();
+        let v = serde_json::to_value(OpsError::Exists { dir: "/x".into(), dirs: vec!["/x".into()] }).unwrap();
         assert_eq!(v["code"], "exists");
         assert_eq!(v["dir"], "/x");
         assert_eq!(
-            serde_json::to_value(OpsError::LocalChanges).unwrap()["code"],
+            serde_json::to_value(OpsError::LocalChanges { unknown: true }).unwrap()["code"],
             "local_changes"
         );
         assert_eq!(
@@ -1835,7 +1864,7 @@ mod tests {
         let id = normalize_path(&dir.to_string_lossy());
         assert_eq!(
             update(&e.ctx, &id, false).unwrap_err(),
-            OpsError::LocalChanges
+            OpsError::LocalChanges { unknown: false }
         );
         assert_eq!(fs::read_to_string(dir.join("mine.txt")).unwrap(), "mine");
         assert!(!dir.join("more.md").exists());
@@ -1936,7 +1965,7 @@ mod tests {
 
         assert_eq!(
             update(&e.ctx, &id, false).unwrap_err(),
-            OpsError::LocalChanges
+            OpsError::LocalChanges { unknown: true }
         );
         assert_eq!(git(&dir, &["rev-parse", "HEAD"]), old);
         update(&e.ctx, &id, true).unwrap();
@@ -2002,7 +2031,7 @@ mod tests {
         assert!(st[0].has_update && st[0].local_state_unknown, "{:?}", st[0]);
         assert_eq!(
             update(&e.ctx, &id, false).unwrap_err(),
-            OpsError::LocalChanges
+            OpsError::LocalChanges { unknown: true }
         );
         update(&e.ctx, &id, true).unwrap();
         assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new);
@@ -2402,7 +2431,8 @@ v2
         assert_eq!(
             r.unwrap_err(),
             OpsError::Exists {
-                dir: d.to_string_lossy().into_owned()
+                dir: d.to_string_lossy().into_owned(),
+                dirs: vec![d.to_string_lossy().into_owned()],
             }
         );
         assert!(d.join("mine.txt").exists());

@@ -23,10 +23,11 @@ vi.mock("@/api/skills", () => ({
   inspectGitSource: vi.fn(),
   listSkillBackups: vi.fn().mockResolvedValue([]),
   rollbackSkill: vi.fn(),
+  readSkillBackupFile: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
-import { checkSkillUpdates, deleteSkill, listSkillBackups, listSkills, updateSkill } from "@/api/skills";
+import { checkSkillUpdates, deleteSkill, listSkillBackups, listSkills, readSkillFile, updateSkill } from "@/api/skills";
 import { renderApp } from "@/test/fixtures";
 import { SkillsPage } from "./SkillsPage";
 import { mkSkill, mkUpdate } from "./testUtils";
@@ -42,6 +43,7 @@ const link = mkSkill({
 beforeEach(() => {
   vi.clearAllMocks();
   (listSkills as Mock).mockResolvedValue([alpha, link]);
+  (readSkillFile as Mock).mockResolvedValue({ text: "", hash: "h", has_bom: false, crlf: false, tokens: 0, imports: [], binary: false, too_large: false });
 });
 
 async function open() {
@@ -76,6 +78,22 @@ describe("skill actions", () => {
     // cancelling never retries
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(updateSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the confirmation wording from the error, without a prior update check", async () => {
+    (updateSkill as Mock).mockRejectedValueOnce({ code: "local_changes", message: "local changes", unknown: true });
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "更新" }));
+    expect(await screen.findByText(/无法判断本地是否修改过/)).toBeInTheDocument();
+  });
+
+  it("clamps long toast messages and offers to expand them", async () => {
+    (updateSkill as Mock).mockRejectedValueOnce({ code: "git_failed", message: "fatal: ".concat("x".repeat(300)) });
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "更新" }));
+    const more = await screen.findByRole("button", { name: "展开" });
+    await userEvent.click(more);
+    expect(screen.getByRole("button", { name: "收起" })).toBeInTheDocument();
   });
 
   it("shows a warning when files were updated but the registry was not saved", async () => {

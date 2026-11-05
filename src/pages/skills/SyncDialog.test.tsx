@@ -44,11 +44,11 @@ describe("SyncDialog", () => {
 
   it("asks before overwriting an existing copy, then retries", async () => {
     (syncSkill as Mock)
-      .mockRejectedValueOnce({ code: "exists", message: "exists", dir: "C:\\x" })
+      .mockRejectedValueOnce({ code: "exists", message: "exists", dir: "C:\\x", dirs: ["C:\\x"] })
       .mockResolvedValueOnce(mkSkill({ name: "alpha", tool: "codex" }));
     setup();
     await userEvent.click(screen.getByRole("button", { name: "同步" }));
-    expect(await screen.findByText(/已存在，覆盖（会先备份）？/)).toBeInTheDocument();
+    expect(await screen.findByText(/已存在，覆盖（会先备份）？/)).toHaveTextContent("C:\\x");
     await userEvent.click(screen.getByRole("button", { name: "覆盖" }));
     await waitFor(() => expect(syncSkill).toHaveBeenCalledTimes(2));
     expect((syncSkill as Mock).mock.calls[1][2]).toBe(true);

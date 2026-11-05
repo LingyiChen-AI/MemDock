@@ -289,7 +289,16 @@ mockIPC(
       case "inspect_git_source":
         return new Promise((resolve) => setTimeout(() => resolve(inspectResult), 150));
       case "install_skill":
+        if (!a.overwrite)
+          return Promise.reject({
+            code: "exists",
+            message: "already exists",
+            dir: "C:\\Users\\Admin\\.claude\\skills\\demo",
+            dirs: ["C:\\Users\\Admin\\.claude\\skills\\demo", "C:\\Users\\Admin\\.codex\\skills\\demo"],
+          });
         return [];
+      case "read_skill_backup_file":
+        return { text: skillDoc.replace("Use this skill for", "Use this for").replace("3. Render and check the result", "3. Render"), hash: "bk", has_bom: false, crlf: false, tokens: 100, imports: [], binary: false, too_large: false };
       case "update_skill":
         if (!a.acceptLocalChanges) return Promise.reject({ code: "local_changes", message: "local changes" });
         return { ...skillsList[0], source: { ...skillsList[0].source, commit: "0f1e2d3c4b5a" } };
@@ -383,6 +392,22 @@ if (flow) {
     el.dispatchEvent(new Event("input", { bubbles: true }));
   };
   wait(() => document.querySelector('[role="option"]'), () => {
+    if (flow === "add-exists") {
+      wait(btn("添加 skill"), (b) => {
+        b.click();
+        wait(() => Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]')).find((t) => t.textContent === "空白模板"), (t) => {
+          t.click();
+          setTimeout(() => {
+            const n = document.getElementById("add-tpl-name") as HTMLInputElement | null;
+            if (n) setValue(n, "demo");
+            const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+            boxes.find((x) => x.parentElement?.textContent === "Codex")?.click();
+            setTimeout(() => btn("安装")()?.click(), 200);
+          }, 150);
+        });
+      });
+      return;
+    }
     if (flow.startsWith("add")) {
       wait(btn("添加 skill"), (b) => {
         b.click();

@@ -49,9 +49,10 @@ fn git_message(e: &GitError) -> String {
 impl From<OpsError> for CommandError {
     fn from(e: OpsError) -> Self {
         match e {
-            OpsError::Exists { dir } => {
-                let mut c = CommandError::new("exists", format!("already exists: {dir}"));
+            OpsError::Exists { dir, dirs } => {
+                let mut c = CommandError::new("exists", format!("already exists: {}", dirs.join(", ")));
                 c.dir = Some(dir);
+                c.dirs = Some(dirs);
                 c
             }
             OpsError::ReadOnly => CommandError::new("read_only", "skill is read-only"),
@@ -59,8 +60,10 @@ impl From<OpsError> for CommandError {
                 CommandError::new("git_unavailable", "git is not installed")
             }
             OpsError::Git(g) => CommandError::new("git_failed", git_message(&g)),
-            OpsError::LocalChanges => {
-                CommandError::new("local_changes", "skill has local changes")
+            OpsError::LocalChanges { unknown } => {
+                let mut c = CommandError::new("local_changes", "skill has local changes");
+                c.unknown = Some(unknown);
+                c
             }
             OpsError::Invalid { message } => CommandError::new("invalid", message),
             OpsError::Io { message } => CommandError::new("io", message),
@@ -309,6 +312,44 @@ pub fn list_skill_backups_impl(
     let entry = find_entry(state, skill_id)?;
     let key = ops::skill_key(&entry)?;
     Ok(list_backups(&ops_ctx(state).backups_root(), &key))
+}
+
+/// Reads a text file of a backup (default `SKILL.md`) for comparing it with the current content.
+/// Same path rules and size / UTF-8 limits as `read_skill_file`.
+pub fn read_skill_backup_file_impl(
+    state: &AppState,
+    skill_id: &str,
+    backup_id: &str,
+    rel_path: Option<&str>,
+) -> Result<SkillFileDto, CommandError> {
+    let entry = find_entry(state, skill_id)?;
+    let key = ops::skill_key(&entry)?;
+    if backup_id.is_empty() || !backup_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid("invalid backup id"));
+    }
+    let base = ops_ctx(state).backups_root().join(&key).join(backup_id);
+    if !base.is_dir() {
+        return Err(invalid(format!("backup not found: {backup_id}")));
+    }
+    let base = fs::canonicalize(&base)?;
+    let rel = clean_rel(rel_path.unwrap_or("SKILL.md"))?;
+    let target = base.join(&rel);
+    let real = fs::canonicalize(&target).map_err(|_| invalid("file not found in the backup"))?;
+    if !real.starts_with(&base) {
+        return Err(invalid("path escapes the backup"));
+    }
+    let meta = fs::metadata(&real)?;
+    if !meta.is_file() {
+        return Err(invalid("not a file"));
+    }
+    if meta.len() > MAX_TEXT_BYTES {
+        return Ok(SkillFileDto::unreadable(true));
+    }
+    match read_memory(&real) {
+        Ok(c) => Ok(to_file_dto(state, &real, c)),
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => Ok(SkillFileDto::unreadable(false)),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// An empty `id` in the result means no backup was made.
@@ -654,6 +695,16 @@ pub fn list_skill_files(state: St, skill_id: String) -> Result<SkillFileList, Co
 }
 
 #[tauri::command(async)]
+pub fn read_skill_backup_file(
+    state: St,
+    skill_id: String,
+    backup_id: String,
+    rel_path: Option<String>,
+) -> Result<SkillFileDto, CommandError> {
+    read_skill_backup_file_impl(&state, &skill_id, &backup_id, rel_path.as_deref())
+}
+
+#[tauri::command(async)]
 pub fn read_skill_file(
     state: St,
     skill_id: String,
@@ -913,7 +964,7 @@ mod tests {
     #[test]
     fn error_codes_serialize() {
         let cases: Vec<(OpsError, &str)> = vec![
-            (OpsError::Exists { dir: "/d".into() }, "exists"),
+            (OpsError::Exists { dir: "/d".into(), dirs: vec!["/d".into()] }, "exists"),
             (OpsError::ReadOnly, "read_only"),
             (OpsError::GitUnavailable, "git_unavailable"),
             (
@@ -922,7 +973,7 @@ mod tests {
                 }),
                 "git_failed",
             ),
-            (OpsError::LocalChanges, "local_changes"),
+            (OpsError::LocalChanges { unknown: false }, "local_changes"),
             (OpsError::Invalid { message: "m".into() }, "invalid"),
             (OpsError::Io { message: "m".into() }, "io"),
         ];
@@ -937,8 +988,32 @@ mod tests {
             stderr: "boom".into(),
         }));
         assert!(ce.message.contains("boom"));
-        let ce = CommandError::from(OpsError::Exists { dir: "/d".into() });
+        let ce = CommandError::from(OpsError::Exists {
+            dir: "/d".into(),
+            dirs: vec!["/d".into(), "/e".into()],
+        });
         assert_eq!(ce.dir.as_deref(), Some("/d"));
+        assert_eq!(ce.dirs.as_deref(), Some(&["/d".to_string(), "/e".to_string()][..]));
+        let v = serde_json::to_value(CommandError::from(OpsError::LocalChanges { unknown: true })).unwrap();
+        assert_eq!(v["unknown"], true);
+    }
+
+    #[test]
+    fn read_backup_file_happy_path_and_rejections() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let e = install_demo(&st);
+        let b = delete_skill_impl(&st, &e.id).unwrap();
+        let e = install_demo(&st);
+        let dto = read_skill_backup_file_impl(&st, &e.id, &b.id, None).unwrap();
+        assert!(dto.text.contains("name: demo"));
+        // Traversal and bad ids are rejected.
+        assert_eq!(read_skill_backup_file_impl(&st, &e.id, &b.id, Some("../x")).unwrap_err().code, "invalid");
+        assert_eq!(read_skill_backup_file_impl(&st, &e.id, &b.id, Some("/etc/passwd")).unwrap_err().code, "invalid");
+        assert_eq!(read_skill_backup_file_impl(&st, &e.id, "../1", None).unwrap_err().code, "invalid");
+        assert_eq!(read_skill_backup_file_impl(&st, &e.id, "", None).unwrap_err().code, "invalid");
+        assert_eq!(read_skill_backup_file_impl(&st, &e.id, "999", None).unwrap_err().code, "invalid");
+        assert_eq!(read_skill_backup_file_impl(&st, &e.id, &b.id, Some("nope.md")).unwrap_err().code, "invalid");
     }
 
     #[test]

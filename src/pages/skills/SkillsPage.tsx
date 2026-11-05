@@ -172,7 +172,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
     } catch (e) {
       const ce = asCommandError(e);
       if (ce?.code === "local_changes") {
-        setUpdateConfirm({ entry, unknown: updates.get(entry.id)?.local_state_unknown === true });
+        setUpdateConfirm({ entry, unknown: ce.unknown ?? updates.get(entry.id)?.local_state_unknown === true });
       } else if (ce?.code === "io" && ce.message.startsWith(PARTIAL_SAVE_PREFIX)) {
         const detail = ce.message.slice(PARTIAL_SAVE_PREFIX.length).replace(/^[: ]+/, "");
         push("warning", fmt(s.partialSaved, { message: detail || ce.message }));

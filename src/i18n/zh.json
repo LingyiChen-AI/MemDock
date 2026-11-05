@@ -254,7 +254,6 @@
     "collapse": "收起",
     "existsTitle": "已存在",
     "existsBody": "已存在，覆盖（会先备份）？",
-    "existsBodyDir": "已存在，覆盖（会先备份）？\n{dir}",
     "overwrite": "覆盖",
     "gitUnavailableErr": "没有检测到 git，请先安装 git。",
     "readOnlyErr": "这个位置是只读的，不能写入。",
@@ -289,13 +288,18 @@
     "backupsEmpty": "还没有备份",
     "backupsFailed": "读取备份失败：{message}",
     "backupsListLabel": "备份列表",
-    "backupsNoDiff": "备份内容暂不能在这里对比，恢复后可在文件页查看。",
     "restore": "恢复此备份",
     "restoring": "恢复中",
     "restored": "已恢复到 {time} 的备份",
     "restoreFailed": "恢复失败：{message}",
     "close": "关闭",
-    "actionsDisabledRemoved": "这个 skill 已被外部删除"
+    "actionsDisabledRemoved": "这个 skill 已被外部删除",
+    "existsBodyDirs": "已存在，覆盖（会先备份）？以下位置会被覆盖：\n{dirs}",
+    "restoreConfirmTitle": "恢复这个备份？",
+    "restoreConfirmBody": "当前内容会先备份，再恢复为所选版本",
+    "restoreConfirm": "备份并恢复",
+    "backupDiffFailed": "读取备份内容失败：{message}",
+    "backupNoSkillMd": "这个备份里没有 SKILL.md，无法对比"
   },
   "diff": {
     "layoutLabel": "对比布局",

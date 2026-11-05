@@ -97,6 +97,7 @@ pub fn run() {
             commands_skills::register_skill_source,
             commands_skills::list_skill_files,
             commands_skills::read_skill_file,
+            commands_skills::read_skill_backup_file,
             commands_skills::write_skill_file,
         ])
         .run(tauri::generate_context!())

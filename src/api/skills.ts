@@ -80,6 +80,11 @@ export function readSkillFile(skillId: string, relPath: string): Promise<SkillFi
   return invoke<SkillFileDto>("read_skill_file", { skillId, relPath });
 }
 
+/** Reads a text file of a backup (default SKILL.md). */
+export function readSkillBackupFile(skillId: string, backupId: string, relPath?: string): Promise<SkillFileDto> {
+  return invoke<SkillFileDto>("read_skill_backup_file", { skillId, backupId, relPath: relPath ?? null });
+}
+
 /** Rejects with code `disk_changed` (carrying `current_hash`) on conflict, `read_only` for read-only skills. */
 export function writeSkillFile(
   skillId: string,

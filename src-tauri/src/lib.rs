@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod commands_skills;
 pub mod memory;
 pub mod model;
 pub mod paths;
@@ -83,6 +84,20 @@ pub fn run() {
             commands::remove_manual_project,
             commands::get_settings,
             commands::update_ui_prefs,
+            commands_skills::list_skills,
+            commands_skills::git_available,
+            commands_skills::inspect_git_source,
+            commands_skills::install_skill,
+            commands_skills::check_skill_updates,
+            commands_skills::update_skill,
+            commands_skills::rollback_skill,
+            commands_skills::list_skill_backups,
+            commands_skills::delete_skill,
+            commands_skills::sync_skill,
+            commands_skills::register_skill_source,
+            commands_skills::list_skill_files,
+            commands_skills::read_skill_file,
+            commands_skills::write_skill_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

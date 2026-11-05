@@ -583,7 +583,7 @@ pub struct UpdateStatus {
 }
 
 /// Scans skills and attaches their inferred source.
-fn scan_with_sources(ctx: &OpsCtx) -> Result<(Vec<SkillEntry>, Registry), OpsError> {
+pub fn scan_with_sources(ctx: &OpsCtx) -> Result<(Vec<SkillEntry>, Registry), OpsError> {
     let reg = load_registry(&ctx.registry_path).map_err(io_msg)?;
     let lock = read_skill_lock(&ctx.home);
     let mut all = scan_skills(&ctx.paths, &ctx.home, &ctx.projects);
@@ -699,7 +699,7 @@ pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> 
 
 /// Backup bucket / temp-name key: the skill directory's own name, never the
 /// (untrusted) frontmatter name.
-fn skill_key(entry: &SkillEntry) -> Result<String, OpsError> {
+pub fn skill_key(entry: &SkillEntry) -> Result<String, OpsError> {
     let name = Path::new(&entry.dir)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

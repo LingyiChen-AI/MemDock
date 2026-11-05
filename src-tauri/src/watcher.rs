@@ -1,5 +1,6 @@
-//! File watcher: watches the memory locations and emits `memory-changed`
-//! (debounced by 300ms) with the normalized ids of the changed files.
+//! File watcher: watches the memory locations and emits `memory-changed`, and
+//! the skills roots (emits `skills-changed`), both debounced by 300ms, with the
+//! normalized ids of the changed files.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,9 @@ use tauri::{AppHandle, Emitter};
 
 use crate::commands::AppState;
 use crate::paths::AgentPaths;
+use crate::commands_skills::SkillsChangedPayload;
 use crate::projects::normalize_path;
+use crate::skills::fsops::is_leftover_name;
 
 const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Upper bound on how long a continuous stream of events can postpone a flush.
@@ -73,6 +76,48 @@ pub fn is_relevant(path: &Path, paths: &AgentPaths, project_roots: &[String]) ->
     })
 }
 
+/// Skills root directories: global ones for both tools, the shared
+/// `~/.agents/skills`, and each project's `.claude/skills` / `.agents/skills`.
+pub fn skill_roots(paths: &AgentPaths, home: &Path, project_roots: &[String]) -> Vec<PathBuf> {
+    let mut v = vec![
+        paths.claude_home.join("skills"),
+        paths.codex_home.join("skills"),
+        home.join(".agents").join("skills"),
+    ];
+    for r in project_roots {
+        let r = Path::new(r);
+        v.push(r.join(".claude").join("skills"));
+        v.push(r.join(".agents").join("skills"));
+    }
+    v
+}
+
+/// Whether a changed `path` is a skills root or lies at most two levels below
+/// one (the skill directory, or a file directly inside it). `.git`,
+/// `node_modules` and the app's own leftover temp names are ignored.
+pub fn is_skill_relevant(
+    path: &Path,
+    paths: &AgentPaths,
+    home: &Path,
+    project_roots: &[String],
+) -> bool {
+    let n = normalize_path(&path.to_string_lossy());
+    skill_roots(paths, home, project_roots).iter().any(|root| {
+        let r = normalize_path(&root.to_string_lossy());
+        if n == r {
+            return true;
+        }
+        let Some(rest) = n.strip_prefix(&format!("{r}/")) else {
+            return false;
+        };
+        let parts: Vec<&str> = rest.split('/').collect();
+        parts.len() <= 2
+            && parts
+                .iter()
+                .all(|p| *p != ".git" && *p != "node_modules" && !is_leftover_name(p))
+    })
+}
+
 fn project_roots(state: &AppState) -> Vec<String> {
     let idx = state.index.lock().unwrap_or_else(|e| e.into_inner());
     idx.projects
@@ -99,10 +144,30 @@ fn build_watcher(tx: &Sender<Msg>, state: &AppState) -> Option<RecommendedWatche
     };
     watch(&state.paths.claude_home, RecursiveMode::Recursive);
     watch(&state.paths.codex_home, RecursiveMode::NonRecursive);
-    for root in project_roots(state) {
+    let roots = project_roots(state);
+    for root in &roots {
         let root = PathBuf::from(root);
         watch(&root, RecursiveMode::NonRecursive);
         watch(&root.join(".claude"), RecursiveMode::NonRecursive);
+        watch(&root.join(".agents"), RecursiveMode::NonRecursive);
+    }
+    // Skills: each root and each skill directory directly below it, non-recursive.
+    // The root below claude_home is already covered by its recursive watch.
+    watch(&state.home.join(".agents"), RecursiveMode::NonRecursive);
+    let claude_skills = normalize_path(&state.paths.claude_home.join("skills").to_string_lossy());
+    for root in skill_roots(&state.paths, &state.home, &roots) {
+        if normalize_path(&root.to_string_lossy()) == claude_skills {
+            continue;
+        }
+        watch(&root, RecursiveMode::NonRecursive);
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    watch(&p, RecursiveMode::NonRecursive);
+                }
+            }
+        }
     }
     Some(w)
 }
@@ -156,6 +221,7 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
         let mut _watcher = build_watcher(&thread_tx, &state);
         let mut roots = project_roots(&state);
         let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut pending_skills: BTreeSet<PathBuf> = BTreeSet::new();
         let mut deb = Debouncer::new(DEBOUNCE, MAX_WAIT);
         loop {
             let msg = match deb.deadline() {
@@ -173,9 +239,13 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
                 Some(Msg::Fs(paths)) => {
                     let now = Instant::now();
                     for p in paths {
-                        let relevant = is_relevant(&p, &state.paths, &roots);
-                        deb.offer(relevant, now);
-                        if relevant {
+                        let memory = is_relevant(&p, &state.paths, &roots);
+                        let skill = is_skill_relevant(&p, &state.paths, &state.home, &roots);
+                        deb.offer(memory || skill, now);
+                        if skill {
+                            pending_skills.insert(p.clone());
+                        }
+                        if memory {
                             pending.insert(p);
                         }
                     }
@@ -190,17 +260,30 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
                         .iter()
                         .map(|p| normalize_path(&p.to_string_lossy()))
                         .collect();
-                    if changed.is_empty() {
-                        continue;
+                    let skills_changed: BTreeSet<String> = std::mem::take(&mut pending_skills)
+                        .iter()
+                        .map(|p| normalize_path(&p.to_string_lossy()))
+                        .collect();
+                    if !changed.is_empty() {
+                        state.rescan();
+                        roots = project_roots(&state);
+                        let _ = app.emit(
+                            "memory-changed",
+                            ChangedPayload {
+                                paths: changed.into_iter().collect(),
+                            },
+                        );
                     }
-                    state.rescan();
-                    roots = project_roots(&state);
-                    let _ = app.emit(
-                        "memory-changed",
-                        ChangedPayload {
-                            paths: changed.into_iter().collect(),
-                        },
-                    );
+                    if !skills_changed.is_empty() {
+                        // New skill directories need their own watches.
+                        _watcher = build_watcher(&thread_tx, &state);
+                        let _ = app.emit(
+                            "skills-changed",
+                            SkillsChangedPayload {
+                                paths: skills_changed.into_iter().collect(),
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -227,6 +310,30 @@ mod tests {
         assert!(!yes("/h/.claude/settings.json"));
         assert!(!yes("/work/app/src/main.rs"));
         assert!(!yes("/other/CLAUDE.md"));
+    }
+
+    #[test]
+    fn is_skill_relevant_filters_paths() {
+        let home = Path::new("/h");
+        let paths = AgentPaths::from_home(home);
+        let roots = vec!["/work/app".to_string()];
+        let yes = |p: &str| is_skill_relevant(Path::new(p), &paths, home, &roots);
+        assert!(yes("/h/.claude/skills"));
+        assert!(yes("/h/.claude/skills/demo"));
+        assert!(yes("/h/.claude/skills/demo/SKILL.md"));
+        assert!(yes("/h/.codex/skills/.system/x"));
+        assert!(yes("/h/.agents/skills/demo/SKILL.md"));
+        assert!(yes("/work/app/.claude/skills/demo/SKILL.md"));
+        assert!(yes("/work/app/.agents/skills/demo"));
+        assert!(!yes("/h/.claude/skills/demo/ref/a.md"));
+        assert!(!yes("/h/.claude/skills/demo/.git"));
+        assert!(!yes("/h/.claude/skills/demo/node_modules"));
+        assert!(!yes("/h/.claude/skills/.demo.memdock-old-123"));
+        assert!(!yes("/h/.claude/CLAUDE.md"));
+        assert!(!yes("/h/.claude/settings.json"));
+        assert!(!yes("/other/.claude/skills/demo"));
+        // Skills paths never count as memory changes.
+        assert!(!is_relevant(Path::new("/h/.claude/skills/demo/SKILL.md"), &paths, &roots));
     }
 
     #[test]

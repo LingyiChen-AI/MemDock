@@ -1307,3 +1307,52 @@ fn duplicate_local_mapping_is_skipped() {
     a.finish(&plan, &BTreeMap::new()).unwrap();
     assert!(w.file(&nfc).is_some() && w.file(&nfd).is_some());
 }
+
+// ------------------------------------------------------ fix round 3 tests
+
+#[test]
+fn memory_dir_appearing_later_pulls_not_deletes() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&pa.join("CLAUDE.md"), "c\n");
+    a.sync();
+    let foo = p_path("claude/memory/foo.md");
+    w.push_raw(&[(&foo, Some("remote memory\n"))]);
+    // no Claude session for the project yet: memory files cannot map here
+    let plan = a.prepare();
+    assert!(plan.take_remote.is_empty());
+    a.finish(&plan, &BTreeMap::new()).unwrap();
+    // the first Claude session creates the enc dir with an empty memory dir
+    let mem = fake_session(&a, &pa);
+    let plan = a.prepare();
+    assert!(plan.push_local.is_empty(), "would delete: {:?}", plan.push_local);
+    assert_eq!(plan.take_remote, vec![foo.clone()]);
+    a.finish(&plan, &BTreeMap::new()).unwrap();
+    assert_eq!(w.file(&foo).as_deref(), Some("remote memory\n"));
+    assert_eq!(read(&mem.join("foo.md")), "remote memory\n");
+}
+
+#[test]
+fn memory_dir_wiped_and_recreated_pulls_not_deletes() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    let mem = fake_session(&a, &pa);
+    write(&pa.join("CLAUDE.md"), "c\n");
+    write(&mem.join("foo.md"), "memory\n");
+    a.sync();
+    let foo = p_path("claude/memory/foo.md");
+    assert_eq!(w.file(&foo).as_deref(), Some("memory\n"));
+    // session cleanup removes the whole enc dir, a sync runs in between
+    fs::remove_dir_all(mem.parent().unwrap()).unwrap();
+    a.sync();
+    assert_eq!(w.file(&foo).as_deref(), Some("memory\n"));
+    // a new session recreates it empty
+    let mem = fake_session(&a, &pa);
+    let plan = a.prepare();
+    assert!(plan.push_local.is_empty(), "would delete: {:?}", plan.push_local);
+    a.finish(&plan, &BTreeMap::new()).unwrap();
+    assert_eq!(w.file(&foo).as_deref(), Some("memory\n"));
+    assert_eq!(read(&mem.join("foo.md")), "memory\n");
+}

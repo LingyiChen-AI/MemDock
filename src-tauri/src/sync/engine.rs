@@ -220,7 +220,8 @@ pub struct ConflictFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkippedFile {
     pub repo_path: String,
-    /// `not_utf8_local` / `not_utf8_remote` / `not_utf8_base` / `case_collision`.
+    /// `not_utf8_local` / `not_utf8_remote` / `not_utf8_base` / `case_collision` /
+    /// `duplicate_local` / `not_regular_file`.
     pub reason: String,
 }
 

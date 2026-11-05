@@ -388,12 +388,22 @@ pub(super) fn build_plan(
             .filter(|k| !present.contains(k.as_str()))
             .cloned(),
     );
+    // The base is trusted only for paths this sync actually compared.
     // Skipped paths keep an untrusted base until a sync handles them; paths
     // handled normally leave the set; paths the remote no longer has drop out.
+    // Repo files of a project present here that could not be mapped locally
+    // (e.g. auto memory before the project's first Claude session) join the
+    // set, so a later empty mapping pulls them instead of deleting them.
     let skipped: BTreeSet<String> = plan.skipped.iter().map(|s| s.repo_path.clone()).collect();
+    let mine = |p: &String| p.starts_with("global/") || project_of(p, &ctx.projects).is_some();
+    let unmapped = remote_full
+        .keys()
+        .chain(base_tree.keys())
+        .filter(|p| !considered.contains(*p) && mine(p));
     plan.unsynced_after = unsynced
         .iter()
         .filter(|p| !considered.contains(*p) && remote_full.contains_key(*p))
+        .chain(unmapped)
         .cloned()
         .chain(skipped)
         .collect();

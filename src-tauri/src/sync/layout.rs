@@ -5,6 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::model::{MemoryFile, MemoryIndex, MemoryKind, Scope};
 use crate::paths::AgentPaths;
@@ -102,7 +103,8 @@ fn git_config_path(project_dir: &Path) -> Option<PathBuf> {
 /// `host/owner/repo` of the project's `origin` remote, if it has one.
 pub fn project_key(project_dir: &Path) -> Option<String> {
     let cfg = fs::read_to_string(git_config_path(project_dir)?).ok()?;
-    normalize_remote(&origin_url(&cfg)?)
+    // GitHub is case-insensitive: the whole key is lowercased.
+    normalize_remote(&origin_url(&cfg)?).map(|k| k.to_lowercase())
 }
 
 /// Key of a project without remote: `local/<directory name>`.
@@ -111,20 +113,44 @@ pub fn dir_key(project_dir: &Path) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    format!("local/{name}")
+    // lowercase so macOS / Windows (case-insensitive file systems) agree
+    format!("local/{name}").to_lowercase().nfc().collect()
 }
 
-fn safe_segment(s: &str) -> bool {
-    !s.is_empty()
-        && s != "."
-        && s != ".."
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+const WINDOWS_RESERVED: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// The one path-segment rule shared by project keys, auto-memory relative
+/// paths and remote paths: must be a valid file name on Windows, macOS and Linux.
+fn valid_segment(s: &str) -> bool {
+    if s.is_empty() || s == "." || s == ".." {
+        return false;
+    }
+    if s.chars().any(|c| c.is_control() || "\\/:*?\"<>|".contains(c)) {
+        return false;
+    }
+    if s.starts_with(' ') || s.ends_with(' ') || s.ends_with('.') {
+        return false;
+    }
+    if s.eq_ignore_ascii_case(".git") {
+        return false;
+    }
+    let stem = s.split('.').next().unwrap_or("").trim_end();
+    !WINDOWS_RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem))
 }
 
-/// Accepts only `/`-separated segments of `[A-Za-z0-9._-]`; anything else
-/// (traversal, empty segments, spaces) means the project does not sync.
+/// NFC-normalizes `path` and validates every `/`-separated segment.
+fn safe_path(path: &str) -> Option<String> {
+    let n: String = path.nfc().collect();
+    n.split('/').all(valid_segment).then_some(n)
+}
+
+/// Validates a project key (NFC-normalized result); anything unsafe means the
+/// project does not take part in sync.
 pub fn safe_key(key: &str) -> Option<String> {
-    key.split('/').all(safe_segment).then(|| key.to_string())
+    safe_path(key)
 }
 
 // ------------------------------------------------------------ file mapping
@@ -145,18 +171,22 @@ fn rel_to(base: &str, file: &str) -> Option<String> {
     file.get(base.len()..)?.strip_prefix('/').map(String::from)
 }
 
-/// Path of an auto-memory file relative to its `memory` directory
-/// (`.../projects/<enc>/memory/<rel>`).
-fn auto_rel(path: &str) -> Option<String> {
-    let p = to_slash(path);
-    let comps: Vec<&str> = p.split('/').collect();
-    let i = (2..comps.len().saturating_sub(1))
-        .find(|&i| comps[i] == "memory" && comps[i - 2] == "projects")?;
-    let rel = comps[i + 1..].join("/");
-    (!rel.is_empty()).then_some(rel)
+/// Path of an auto-memory file relative to its `memory` directory, anchored at
+/// `<claude_home>/projects/<enc>/memory/<rel>`.
+fn auto_rel(path: &str, claude_home: &str) -> Option<String> {
+    let rest = rel_to(&format!("{}/projects", to_slash(claude_home).trim_end_matches('/')), path)?;
+    let (enc, rest) = rest.split_once('/')?;
+    let rel = rest.strip_prefix("memory/")?;
+    (!enc.is_empty() && !rel.is_empty()).then(|| rel.to_string())
 }
 
-fn project_repo_path(key: &str, kind: MemoryKind, local: &str, project_dir: &str) -> Option<String> {
+fn project_repo_path(
+    key: &str,
+    kind: MemoryKind,
+    local: &str,
+    project_dir: &str,
+    claude_home: Option<&str>,
+) -> Option<String> {
     let base = format!("projects/{key}");
     match kind {
         MemoryKind::ClaudeInstructions => {
@@ -179,15 +209,11 @@ fn project_repo_path(key: &str, kind: MemoryKind, local: &str, project_dir: &str
             rel.eq_ignore_ascii_case("AGENTS.md").then(|| format!("{base}/codex/AGENTS.md"))
         }
         MemoryKind::ClaudeAuto => {
-            let rel = auto_rel(local)?;
-            rel.split('/').all(safe_rel_segment).then(|| format!("{base}/claude/memory/{rel}"))
+            let rel = safe_path(&auto_rel(local, claude_home?)?)?;
+            Some(format!("{base}/claude/memory/{rel}"))
         }
         MemoryKind::CodexDb => None,
     }
-}
-
-fn safe_rel_segment(s: &str) -> bool {
-    !s.is_empty() && s != "." && s != ".." && !s.contains(['\\', ':', '\0'])
 }
 
 fn sync_file(f: &MemoryFile, repo_path: String, key: Option<String>) -> SyncFile {
@@ -202,7 +228,14 @@ fn sync_file(f: &MemoryFile, repo_path: String, key: Option<String>) -> SyncFile
 /// Maps local memory files to repo paths. Projects without a remote take part
 /// only when their `dir_key` is in `included_local`.
 pub fn map_files(index: &MemoryIndex, included_local: &[String]) -> Vec<SyncFile> {
-    let mut out = Vec::new();
+    let mut out: Vec<SyncFile> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // claude_home is the parent of the global CLAUDE.md
+    let claude_home: Option<String> = index
+        .global
+        .iter()
+        .find(|f| f.kind == MemoryKind::ClaudeInstructions)
+        .and_then(|f| Path::new(&f.path).parent().map(|p| p.to_string_lossy().into_owned()));
     for f in &index.global {
         if f.is_symlink || !matches!(f.scope, Scope::Global) {
             continue;
@@ -212,7 +245,9 @@ pub fn map_files(index: &MemoryIndex, included_local: &[String]) -> Vec<SyncFile
             MemoryKind::CodexAgents => "global/codex/AGENTS.md",
             _ => continue,
         };
-        out.push(sync_file(f, rp.to_string(), None));
+        if seen.insert(rp.to_string()) {
+            out.push(sync_file(f, rp.to_string(), None));
+        }
     }
     for pm in &index.projects {
         let dir = Path::new(&pm.project.path);
@@ -231,7 +266,9 @@ pub fn map_files(index: &MemoryIndex, included_local: &[String]) -> Vec<SyncFile
             if f.is_symlink {
                 continue;
             }
-            if let Some(rp) = project_repo_path(&key, f.kind, &f.path, &pm.project.path) {
+            let rp = project_repo_path(&key, f.kind, &f.path, &pm.project.path, claude_home.as_deref());
+            // two clones of one remote map to the same repo path: first wins
+            if let Some(rp) = rp.filter(|rp| seen.insert(rp.clone())) {
                 out.push(sync_file(f, rp, Some(key.clone())));
             }
         }
@@ -265,9 +302,7 @@ pub fn expected_local_path(
         "codex/AGENTS.md" => Some(dir.join("AGENTS.md")),
         _ => {
             let rel = tail.strip_prefix("claude/memory/")?;
-            if !rel.split('/').all(safe_rel_segment) {
-                return None;
-            }
+            let rel = safe_path(rel)?;
             let enc = claude_project_dirs(paths).get(&normalize_path(&dir.to_string_lossy()))?.clone();
             let mut p = enc.join("memory");
             for seg in rel.split('/') {
@@ -292,21 +327,48 @@ pub struct Machine {
     pub name: String,
 }
 
+fn env_nonempty(k: &str) -> Option<String> {
+    std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// macOS: the user-visible computer name (`scutil --get ComputerName`), 2 s timeout.
+#[cfg(target_os = "macos")]
+fn mac_computer_name() -> Option<String> {
+    use std::process::{Command, Stdio};
+    let child = crate::proc::spawn_hidden(
+        Command::new("scutil")
+            .args(["--get", "ComputerName"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
+    let out = crate::proc::wait_with_timeout(child, std::time::Duration::from_secs(2), None).ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !s.is_empty()).then_some(s)
+}
+
 fn hostname() -> String {
-    ["COMPUTERNAME", "HOSTNAME", "HOST"]
-        .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+    #[cfg(windows)]
+    if let Some(n) = env_nonempty("COMPUTERNAME") {
+        return n;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(n) = mac_computer_name() {
+        return n;
+    }
+    env_nonempty("HOSTNAME")
+        .or_else(|| env_nonempty("COMPUTERNAME"))
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Reads `machine.json`, creating it (uuid + host name) on first use.
+/// Reads `machine.json` (a corrupt file is backed up first), creating it
+/// (uuid + computer name) when missing or unusable.
 pub fn load_or_create_machine(path: &Path) -> io::Result<Machine> {
-    if let Ok(text) = fs::read_to_string(path) {
-        if let Ok(m) = serde_json::from_str::<Machine>(&text) {
-            if !m.id.is_empty() {
-                return Ok(m);
-            }
-        }
+    match crate::fsutil::load_json_or_backup::<Machine>(path, 1, "machine.json") {
+        Ok(crate::fsutil::Loaded::Ok(m)) if !m.id.is_empty() => return Ok(m),
+        Ok(_) => {}
+        Err(e) => return Err(io::Error::other(e)),
     }
     let m = Machine { id: uuid::Uuid::new_v4().to_string(), name: hostname() };
     if let Some(parent) = path.parent() {
@@ -344,7 +406,7 @@ mod tests {
         {
             let d = tmp.path().join(format!("p{i}"));
             init_git(&d, Some(url));
-            assert_eq!(project_key(&d).as_deref(), Some("github.com/Foo/Bar"), "{url}");
+            assert_eq!(project_key(&d).as_deref(), Some("github.com/foo/bar"), "{url}");
         }
         let none = tmp.path().join("none");
         init_git(&none, None);
@@ -365,12 +427,78 @@ mod tests {
     }
 
     #[test]
+    fn project_key_follows_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        init_git(&main, Some("https://github.com/Foo/Bar.git"));
+        let wt_git = main.join(".git").join("worktrees").join("wt");
+        fs::create_dir_all(&wt_git).unwrap();
+        fs::write(wt_git.join("commondir"), "../..\n").unwrap();
+        let wt = tmp.path().join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", wt_git.display())).unwrap();
+        assert_eq!(project_key(&wt).as_deref(), Some("github.com/foo/bar"));
+    }
+
+    #[test]
+    fn dir_key_is_lowercase_nfc() {
+        assert_eq!(dir_key(Path::new("/x/MyProj")), "local/myproj");
+        assert_eq!(dir_key(Path::new("/x/Cafe\u{301}")), "local/caf\u{e9}");
+    }
+
+    #[test]
     fn safe_key_rejects_traversal() {
-        assert_eq!(safe_key("github.com/Foo/Bar").as_deref(), Some("github.com/Foo/Bar"));
+        assert_eq!(safe_key("github.com/foo/bar").as_deref(), Some("github.com/foo/bar"));
         assert_eq!(safe_key("local/my-proj_1").as_deref(), Some("local/my-proj_1"));
-        for bad in ["github.com/../x", "a//b", "a/b c", "", "/a", "a/", "a/./b"] {
-            assert_eq!(safe_key(bad), None, "{bad}");
+        assert_eq!(safe_key("local/测试项目").as_deref(), Some("local/测试项目"));
+        assert_eq!(safe_key("local/my proj").as_deref(), Some("local/my proj"));
+        assert_eq!(safe_key("local/.hidden").as_deref(), Some("local/.hidden"));
+        assert_eq!(safe_key("local/cafe\u{301}").as_deref(), Some("local/caf\u{e9}"));
+        for bad in [
+            "github.com/../x", "a//b", "", "/a", "a/", "a/./b", "a/b.", "a/CON", "a/con.txt",
+            "a/Nul", "a/lpt1", "a/x?y", "a/.git", "a/.GIT", "a/b\\c", "a/ b", "a/b ", "a/b:c",
+            "a/b\0c", "a/b\nc", "a/x*y", "a/x\"y", "a/x<y", "a/x>y", "a/x|y",
+        ] {
+            assert_eq!(safe_key(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn map_files_dedups_by_repo_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut index, _) = build_index(tmp.path(), true);
+        // a second clone of the same remote
+        let dir2 = tmp.path().join("work").join("second");
+        init_git(&dir2, Some("git@github.com:Foo/Bar.git"));
+        let p2 = proj(&dir2);
+        let f = mf(
+            &dir2.join("CLAUDE.md"),
+            MemoryKind::ClaudeInstructions,
+            Scope::Project { project_id: p2.id.clone() },
+            false,
+        );
+        index.projects.push(ProjectMemories { project: p2, files: vec![f] });
+        let m = map_files(&index, &[]);
+        let hits: Vec<_> = m.iter().filter(|f| f.repo_path == "projects/github.com/foo/bar/claude/CLAUDE.md").collect();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].local_path.to_string_lossy().contains("myproj"), "first wins");
+    }
+
+    #[test]
+    fn auto_memory_is_anchored_at_claude_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        // claude_home itself sits below a "projects/x/memory" path
+        let base = tmp.path().join("projects").join("zz").join("memory").join("h");
+        let (mut index, _) = build_index(&base, true);
+        let strays = [
+            // outside claude_home/projects/<enc>/memory
+            mf(&base.join("elsewhere").join("memory").join("x.md"), MemoryKind::ClaudeAuto, index.projects[0].files[0].scope.clone(), false),
+        ];
+        index.projects[0].files.extend(strays);
+        let m = map_files(&index, &[]);
+        assert!(m.iter().any(|f| f.repo_path.ends_with("/claude/memory/a.md")));
+        assert!(m.iter().any(|f| f.repo_path.ends_with("/claude/memory/sub/b.md")));
+        assert!(!m.iter().any(|f| f.repo_path.ends_with("memory/x.md")), "{m:?}");
     }
 
     fn mf(path: &Path, kind: MemoryKind, scope: Scope, symlink: bool) -> MemoryFile {
@@ -440,17 +568,17 @@ mod tests {
             vec![
                 "global/claude/CLAUDE.md",
                 "global/codex/AGENTS.md",
-                "projects/github.com/Foo/Bar/claude/CLAUDE.md",
-                "projects/github.com/Foo/Bar/claude/dot-claude/CLAUDE.md",
-                "projects/github.com/Foo/Bar/claude/CLAUDE.local.md",
-                "projects/github.com/Foo/Bar/claude/memory/a.md",
-                "projects/github.com/Foo/Bar/claude/memory/sub/b.md",
-                "projects/github.com/Foo/Bar/claude/memory/MEMORY.md",
-                "projects/github.com/Foo/Bar/codex/AGENTS.md",
+                "projects/github.com/foo/bar/claude/CLAUDE.md",
+                "projects/github.com/foo/bar/claude/dot-claude/CLAUDE.md",
+                "projects/github.com/foo/bar/claude/CLAUDE.local.md",
+                "projects/github.com/foo/bar/claude/memory/a.md",
+                "projects/github.com/foo/bar/claude/memory/sub/b.md",
+                "projects/github.com/foo/bar/claude/memory/MEMORY.md",
+                "projects/github.com/foo/bar/codex/AGENTS.md",
             ]
         );
         assert_eq!(m[0].project_key, None);
-        assert_eq!(m[2].project_key.as_deref(), Some("github.com/Foo/Bar"));
+        assert_eq!(m[2].project_key.as_deref(), Some("github.com/foo/bar"));
         assert_eq!(m[2].file_id, index.projects[0].files[0].id);
     }
 
@@ -475,7 +603,7 @@ mod tests {
         let paths = AgentPaths::from_home(&home);
         let dir = tmp.path().join("work").join("myproj");
         fs::create_dir_all(&dir).unwrap();
-        let projects = vec![("github.com/Foo/Bar".to_string(), dir.clone())];
+        let projects = vec![("github.com/foo/bar".to_string(), dir.clone())];
         assert_eq!(
             expected_local_path("global/claude/CLAUDE.md", &projects, &paths),
             Some(paths.claude_home.join("CLAUDE.md"))
@@ -484,7 +612,7 @@ mod tests {
             expected_local_path("global/codex/AGENTS.md", &projects, &paths),
             Some(paths.codex_home.join("AGENTS.md"))
         );
-        let k = "projects/github.com/Foo/Bar";
+        let k = "projects/github.com/foo/bar";
         assert_eq!(expected_local_path(&format!("{k}/claude/CLAUDE.md"), &projects, &paths), Some(dir.join("CLAUDE.md")));
         assert_eq!(
             expected_local_path(&format!("{k}/claude/dot-claude/CLAUDE.md"), &projects, &paths),
@@ -523,5 +651,16 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.id.len(), 36);
         assert!(!a.name.is_empty());
+    }
+
+    #[test]
+    fn corrupt_machine_file_is_backed_up_and_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("machine.json");
+        fs::write(&p, "{not json").unwrap();
+        let m = load_or_create_machine(&p).unwrap();
+        assert_eq!(m.id.len(), 36);
+        assert!(tmp.path().join("machine.json.bak").exists());
+        assert_eq!(load_or_create_machine(&p).unwrap(), m);
     }
 }

@@ -79,6 +79,7 @@ pub struct SecretHit {
 pub fn scan(text: &str) -> Vec<SecretHit> {
     let r = rules();
     let mut hits = Vec::new();
+    let anthropic = &r.tokens.iter().find(|(n, _)| *n == "anthropic_key").unwrap().1;
     for (i, line) in text.lines().enumerate() {
         let n = i + 1;
         let mut push = |rule: &'static str| {
@@ -102,8 +103,11 @@ pub fn scan(text: &str) -> Vec<SecretHit> {
         }
         for (name, re) in &r.tokens {
             let found = re.find_iter(line).any(|m| {
-                // `sk-ant-` keys are reported as anthropic_key only.
-                *name != "openai_key" || !m.as_str().starts_with("sk-ant-")
+                // A key the anthropic rule matched at the same spot is reported
+                // as anthropic_key only; short `sk-ant-` keys that only the
+                // generic `sk-` rule (and redact) catch are still reported.
+                *name != "openai_key"
+                    || !anthropic.find_iter(line).any(|a| a.start() == m.start())
             });
             if found {
                 push(name);
@@ -141,6 +145,19 @@ mod tests {
         }
         // an already-redacted value is not a finding
         assert!(scan("password: [REDACTED]").is_empty());
+    }
+
+    #[test]
+    fn scan_reports_short_anthropic_style_keys() {
+        // too short for the anthropic rule, but redact masks it as sk-...
+        let text = "key sk-ant-abc123def4567";
+        assert_ne!(redact(text), text);
+        let hits = scan(text);
+        assert!(!hits.is_empty(), "{hits:?}");
+        // a full-length key is still reported once, as anthropic_key
+        let hits = scan("sk-ant-api03-xxxxxxxxxxxxxxxxxxxx");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rule, "anthropic_key");
     }
 
     #[test]

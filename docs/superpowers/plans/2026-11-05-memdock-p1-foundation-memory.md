@@ -349,9 +349,10 @@ memdock/  (仓库根 = C:\codes\cc-memory)
 - Consumes: `searchMemories`、`listSnapshots`、`readSnapshot`、`writeMemoryFile`
 - Produces:
   - `<SearchPanel onOpen(fileId: string, line: number) => void>`：输入框 300ms 去抖调用 `searchMemories`；结果按文件分组，显示行号与预览，命中词高亮；点击打开文件并滚动到该行。
-  - `<HistoryDrawer path: string; currentText: string; onRestored(text: string) => void>`：列出快照（时间、大小）；选中显示与当前内容的行级 diff（`diff` npm 包 `diffLines`）；「恢复此版本」= `readSnapshot` 后以当前 hash 调 `writeMemoryFile`。
+  - `<HistoryDrawer path: string; currentText: string; onRestored(text: string) => void>`：列出快照（时间、大小）；选中显示与当前内容的 diff（用下面的 `DiffView`）；「恢复此版本」= `readSnapshot` 后以当前 hash 调 `writeMemoryFile`。
+  - 可复用组件 `src/components/diff/DiffView.tsx`：`<DiffView oldText: string; newText: string; oldLabel?: string; newLabel?: string; context?: number /*默认 1*/>`，按设计规范第 7 节「diff 展示」实现：默认左右分栏、可切换上下、偏好存 `localStorage` 键 `memdock.diffLayout`、容器宽度 < 760px 自动上下、行级（`diffLines`）+ 词级（`diffWordsWithSpace`）高亮、空行斜纹占位。计划 3 的待审核与计划 4 的冲突处理复用它。
 
-- [ ] **Step 1: 写失败测试**：`search debounces and groups by file`；`clicking hit calls onOpen with line`；`history lists snapshots newest first`；`restore writes snapshot content with current hash`。
+- [ ] **Step 1: 写失败测试**：`search debounces and groups by file`；`clicking hit calls onOpen with line`；`history lists snapshots newest first`；`restore writes snapshot content with current hash`；`DiffView defaults to split and remembers unified choice`；`DiffView falls back to unified when narrow`；`DiffView highlights changed words only`。
 - [ ] **Step 2:** `pnpm test src/pages/memory`，预期 FAIL。
 - [ ] **Step 3:** 实现。
 - [ ] **Step 4:** 预期 PASS；`pnpm test` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 全部 PASS；CI 在 macOS 与 Windows 上均绿。

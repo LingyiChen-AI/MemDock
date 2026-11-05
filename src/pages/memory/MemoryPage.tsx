@@ -3,11 +3,13 @@ import { FileText } from "lucide-react";
 import { listMemories, onMemoryChanged } from "@/api/memory";
 import type { MemoryFile, MemoryIndex, Project } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MemoryEditor } from "./MemoryEditor";
 import { MemoryTree } from "./MemoryTree";
-import { fileKey, findByKey } from "./paths";
+import { SearchPanel } from "./SearchPanel";
+import { allFiles, fileKey, findByKey } from "./paths";
 
 const WIDTH_KEY = "memdock.treeWidth";
 const MIN_W = 220;
@@ -26,18 +28,16 @@ function loadWidth(): number {
   return DEFAULT_W;
 }
 
-export interface MemoryPageProps {
-  /** Opens the history view of a file (plan task 12). */
-  onOpenHistory?: (file: MemoryFile) => void;
-}
-
-export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
+export function MemoryPage() {
   const { t } = useI18n();
   const m = t.memory;
   const [index, setIndex] = React.useState<MemoryIndex | null>(null);
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
   const [dirty, setDirty] = React.useState(false);
   const [pending, setPending] = React.useState<MemoryFile | null>(null);
+  const [search, setSearch] = React.useState<{ initial: string } | null>(null);
+  const [reveal, setReveal] = React.useState<{ key: string; line: number; nonce: number } | null>(null);
+  const revealNonce = React.useRef(0);
   const [width, setWidth] = React.useState(loadWidth);
   const widthRef = React.useRef(width);
   widthRef.current = width;
@@ -96,6 +96,17 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
     [selectedKey, dirty],
   );
 
+  // Search result -> open the file (global occurrence first) and jump to the line.
+  const openHit = (fileId: string, line: number) => {
+    if (!index) return;
+    const matches = allFiles(index).filter((f) => f.id === fileId);
+    const file = matches.find((f) => f.scope.type === "global") ?? matches[0];
+    if (!file) return;
+    select(file);
+    setReveal({ key: fileKey(file), line, nonce: ++revealNonce.current });
+  };
+  const openSearch = React.useCallback((initial: string) => setSearch((prev) => prev ?? { initial }), []);
+
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -146,7 +157,17 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
   return (
     <div className="flex h-full min-h-0 flex-1">
       <div className="relative shrink-0" style={{ width }}>
-        <MemoryTree index={index} selectedKey={selectedKey} onSelect={select} onIndexChange={setIndex} onRemoveRequest={requestRemove} />
+        <div className={cn("h-full", search && "hidden")}>
+          <MemoryTree
+            index={index}
+            selectedKey={selectedKey}
+            onSelect={select}
+            onIndexChange={setIndex}
+            onRemoveRequest={requestRemove}
+            onSearchOpen={openSearch}
+          />
+        </div>
+        {search ? <SearchPanel index={index} initialQuery={search.initial} onOpen={openHit} onClose={() => setSearch(null)} /> : null}
         <div
           role="separator"
           aria-orientation="vertical"
@@ -169,7 +190,7 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
             removed={removed}
             onOpenImport={select}
             onDirtyChange={setDirty}
-            onOpenHistory={onOpenHistory ? () => onOpenHistory(selected) : undefined}
+            reveal={reveal && reveal.key === fileKey(selected) ? reveal : undefined}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
@@ -212,7 +233,10 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
           }
           setPending(null);
         }}
-        onCancel={() => setPending(null)}
+        onCancel={() => {
+          setPending(null);
+          setReveal(null);
+        }}
       />
     </div>
   );

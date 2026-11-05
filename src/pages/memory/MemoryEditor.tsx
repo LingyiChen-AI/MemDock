@@ -1,6 +1,7 @@
 import * as React from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
+import { EditorView } from "@codemirror/view";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy, History, Info, Link2, Save, TriangleAlert } from "lucide-react";
@@ -10,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { memdockCmTheme } from "./cmTheme";
+import { HistoryDrawer } from "./HistoryDrawer";
 import { CodexDbView } from "./CodexDbView";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -53,7 +55,8 @@ export interface MemoryEditorProps {
   onOpenImport?: (file: MemoryFile) => void;
   /** Reports whether there are unsaved edits (the page confirms before switching files). */
   onDirtyChange?: (dirty: boolean) => void;
-  onOpenHistory?: () => void;
+  /** Scrolls to a 1-based line and puts the cursor there; a new `nonce` repeats the jump. */
+  reveal?: { line: number; nonce: number };
 }
 
 export function MemoryEditor(props: MemoryEditorProps) {
@@ -61,7 +64,7 @@ export function MemoryEditor(props: MemoryEditorProps) {
   return <TextEditor {...props} />;
 }
 
-function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenHistory }: MemoryEditorProps) {
+function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal }: MemoryEditorProps) {
   const { t } = useI18n();
   const m = t.memory;
 
@@ -74,6 +77,9 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenH
   const [saving, setSaving] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [mode, setModeState] = React.useState<EditorMode>(loadMode);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [view, setView] = React.useState<EditorView | null>(null);
+  const revealed = React.useRef(0);
 
   const dirty = base !== null && text !== base.text;
   // A not-yet-created file needs some text before it can be created.
@@ -182,6 +188,23 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenH
     }
   }, [base, saving, text, file.path, m]);
 
+  // Jump to the requested line (search results). Waits until the editor exists and has the text.
+  React.useEffect(() => {
+    if (!reveal || reveal.nonce === revealed.current || !base) return;
+    if (mode === "preview") {
+      setModeState("split");
+      return;
+    }
+    if (!view || !view.dom.isConnected) return;
+    revealed.current = reveal.nonce;
+    const line = view.state.doc.line(Math.min(Math.max(1, reveal.line), view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+    view.focus();
+  }, [reveal, base, view, mode]);
+
   const reload = () => {
     setConflict(false);
     void load();
@@ -276,9 +299,8 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenH
         <Button
           type="button"
           variant="outline"
-          disabled={!onOpenHistory}
-          title={onOpenHistory ? undefined : m.historySoon}
-          onClick={onOpenHistory}
+          disabled={!base || !file.exists}
+          onClick={() => setHistoryOpen(true)}
           className="h-7 shrink-0 cursor-pointer gap-1.5 bg-card px-3 text-xs hover:bg-muted"
         >
           <History className="size-4" aria-hidden="true" />
@@ -347,6 +369,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenH
               onChange={setText}
               extensions={extensions}
               theme="none"
+              onCreateEditor={setView}
               height="100%"
               style={{ height: "100%" }}
               basicSetup={{ foldGutter: false, highlightActiveLineGutter: true, searchKeymap: true }}
@@ -391,6 +414,18 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenH
             );
           })}
         </div>
+      ) : null}
+
+      {base && file.exists ? (
+        <HistoryDrawer
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          path={file.path}
+          currentText={text}
+          currentHash={base.hash}
+          dirty={dirty}
+          onRestored={(_restored, dto) => apply(dto)}
+        />
       ) : null}
 
       <ConfirmDialog

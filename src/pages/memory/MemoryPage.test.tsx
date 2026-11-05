@@ -12,6 +12,7 @@ vi.mock("@/api/memory", () => ({
   addManualProject: vi.fn(),
   removeManualProject: vi.fn(),
   onMemoryChanged: vi.fn(),
+  searchMemories: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@uiw/react-codemirror", () => ({
@@ -20,7 +21,7 @@ vi.mock("@uiw/react-codemirror", () => ({
   ),
 }));
 
-import { listMemories, onMemoryChanged, readCodexDb, readMemoryFile, removeManualProject } from "@/api/memory";
+import { listMemories, onMemoryChanged, readCodexDb, readMemoryFile, removeManualProject, searchMemories } from "@/api/memory";
 import type { MemoryIndex } from "@/api/types";
 import { renderApp, sampleIndex, globalClaude, projClaude, mkProject } from "@/test/fixtures";
 import { MemoryPage } from "./MemoryPage";
@@ -113,5 +114,19 @@ describe("MemoryPage", () => {
     expect(removeManualProject).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "放弃修改并移除" }));
     await waitFor(() => expect(removeManualProject).toHaveBeenCalledWith("/work/jev-rpa"));
+  });
+
+  it("Ctrl+K opens full-text search and a hit opens its file", async () => {
+    (searchMemories as Mock).mockResolvedValue([{ file_id: projClaude.id, line: 7, preview: "hit in project" }]);
+    renderApp(<MemoryPage />);
+    await screen.findByDisplayValue("text of /home/u/.claude/CLAUDE.md");
+    await userEvent.keyboard("{Control>}k{/Control}");
+    const box = await screen.findByRole("searchbox");
+    expect(box).toHaveFocus();
+    await userEvent.type(box, "hit");
+    await userEvent.click(await screen.findByRole("button", { name: /hit in project/ }));
+    expect(await screen.findByDisplayValue("text of /work/jev-rpa/CLAUDE.md")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
+    expect(screen.getByRole("tree")).toBeInTheDocument();
   });
 });

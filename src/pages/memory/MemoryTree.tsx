@@ -21,6 +21,11 @@ export interface MemoryTreeProps {
    * Call `remove()` to proceed; without this prop the project is removed immediately.
    */
   onRemoveRequest?: (project: Project, remove: () => Promise<void>) => void;
+  /**
+   * Full-text search hook. When given, typing in the search box (and Ctrl/Cmd+K) hands over to
+   * the page's search panel instead of filtering the tree by name.
+   */
+  onSearchOpen?: (initialQuery: string) => void;
 }
 
 type Row =
@@ -48,7 +53,7 @@ function loadShowEmpty(): boolean {
   }
 }
 
-export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest }: MemoryTreeProps) {
+export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest, onSearchOpen }: MemoryTreeProps) {
   const { t } = useI18n();
   const m = t.memory;
   const [query, setQuery] = React.useState("");
@@ -78,12 +83,13 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        searchRef.current?.focus();
+        if (onSearchOpen) onSearchOpen("");
+        else searchRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [onSearchOpen]);
 
   const q = query.trim().toLowerCase();
   const items = React.useMemo<Item[]>(() => {
@@ -235,8 +241,9 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
           <Search className="size-4 shrink-0" aria-hidden="true" />
           <input
             ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={onSearchOpen ? "" : query}
+            onFocus={() => onSearchOpen?.("")}
+            onChange={(e) => (onSearchOpen ? onSearchOpen(e.target.value) : setQuery(e.target.value))}
             placeholder={m.search}
             aria-label={m.search}
             className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"

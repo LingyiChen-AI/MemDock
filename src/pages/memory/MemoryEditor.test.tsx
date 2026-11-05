@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
@@ -10,16 +11,25 @@ vi.mock("@/api/memory", () => ({
   writeMemoryFile: vi.fn(),
   readCodexDb: vi.fn(),
   onMemoryChanged: vi.fn(),
+  listSnapshots: vi.fn(),
+  readSnapshot: vi.fn(),
+}));
+const fakeView = vi.hoisted(() => ({
+  dom: { isConnected: true },
+  state: { doc: { lines: 10, line: (n: number) => ({ from: n * 100 }) } },
+  dispatch: vi.fn(),
+  focus: vi.fn(),
 }));
 // CodeMirror needs real layout; swap it for a textarea in jsdom.
 vi.mock("@uiw/react-codemirror", () => ({
-  default: ({ value, onChange }: { value: string; onChange?: (v: string) => void }) => (
-    <textarea aria-label="editor" value={value} onChange={(e) => onChange?.(e.target.value)} />
-  ),
+  default: ({ value, onChange, onCreateEditor }: { value: string; onChange?: (v: string) => void; onCreateEditor?: (v: unknown) => void }) => {
+    useEffect(() => onCreateEditor?.(fakeView), [onCreateEditor]);
+    return <textarea aria-label="editor" value={value} onChange={(e) => onChange?.(e.target.value)} />;
+  },
   EditorView: { theme: () => [], lineWrapping: [] },
 }));
 
-import { onMemoryChanged, readCodexDb, readMemoryFile, writeMemoryFile } from "@/api/memory";
+import { listSnapshots, onMemoryChanged, readCodexDb, readMemoryFile, readSnapshot, writeMemoryFile } from "@/api/memory";
 import { renderApp, globalClaude, globalAgents, globalDb, sampleIndex } from "@/test/fixtures";
 import { MemoryEditor } from "./MemoryEditor";
 
@@ -178,5 +188,29 @@ describe("MemoryEditor", () => {
     setup(globalDb);
     expect(await screen.findByText("remember me")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
+  });
+
+  it("reveal moves the cursor to the requested line", async () => {
+    (readMemoryFile as Mock).mockResolvedValue(dto());
+    renderApp(<MemoryEditor file={globalClaude} index={sampleIndex} reveal={{ line: 3, nonce: 1 }} />);
+    await screen.findByLabelText("editor");
+    await waitFor(() =>
+      expect(fakeView.dispatch).toHaveBeenCalledWith(expect.objectContaining({ selection: { anchor: 300 } })),
+    );
+    expect(fakeView.focus).toHaveBeenCalled();
+  });
+
+  it("history button opens the drawer and restoring reloads the editor", async () => {
+    (readMemoryFile as Mock).mockResolvedValue(dto());
+    (listSnapshots as Mock).mockResolvedValue([{ id: "s1", created_at: 1_700_000_000_000, size_bytes: 10 }]);
+    (readSnapshot as Mock).mockResolvedValue("older");
+    (writeMemoryFile as Mock).mockResolvedValue(dto({ text: "older", hash: "h9" }));
+    setup();
+    await screen.findByLabelText("editor");
+    await userEvent.click(screen.getByRole("button", { name: "历史版本" }));
+    await userEvent.click(await screen.findByRole("button", { name: "恢复此版本" }));
+    await waitFor(() => expect(writeMemoryFile).toHaveBeenCalledWith(globalClaude.path, "older", "h1"));
+    await waitFor(() => expect(screen.getByLabelText("editor")).toHaveValue("older"));
+    expect(screen.queryByTitle("未保存")).not.toBeInTheDocument();
   });
 });

@@ -77,6 +77,32 @@
     "showEmpty": "Show empty projects ({n})",
     "removedBanner": "File was deleted or removed externally",
     "removeDiscardBody": "Removing the project closes the open file and discards its unsaved edits.",
-    "removeDiscardConfirm": "Discard and remove"
+    "removeDiscardConfirm": "Discard and remove",
+    "searchHint": "Type to search the contents of all memory files",
+    "searching": "Searching",
+    "searchFailed": "Search failed: {message}",
+    "searchClose": "Close search",
+    "searchResults": "Search results",
+    "searchCount": "{n} matches in {f} files",
+    "historyTitle": "History",
+    "historyDesc": "Pick a version to see how restoring it would change the current content.",
+    "historyEmpty": "No earlier versions yet",
+    "historyFailed": "Could not read history: {message}",
+    "snapshotList": "Versions",
+    "diffCurrent": "Current",
+    "diffRestored": "This version",
+    "restore": "Restore this version",
+    "restoring": "Restoring",
+    "restoreFailed": "Restore failed: {message}",
+    "restoreConflict": "The file changed on disk. Close this panel and reload before restoring.",
+    "restoreDiscardBody": "Restoring overwrites the unsaved edits in the editor with the older version.",
+    "restoreDiscardConfirm": "Discard edits and restore"
+  },
+  "diff": {
+    "layoutLabel": "Diff layout",
+    "split": "Side by side",
+    "unified": "Unified",
+    "identical": "No differences",
+    "folded": "{n} unchanged lines"
   }
 }

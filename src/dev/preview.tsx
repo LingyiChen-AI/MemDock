@@ -117,6 +117,25 @@ const content = (text: string, hash: string) => ({
   ],
 });
 
+// History fixtures: older variants of TEXT, so the diff shows word-level and whole-line changes.
+const NOW = Date.now();
+const snapshotTexts: Record<string, string> = {
+  s3: TEXT.replace("序号先看现有最大值再定", "序号随便定").replace("多次提醒", "提醒过").replace("| Redis | 6379 |\n", "| Redis | 6380 |\n"),
+  s2: TEXT.replace("## 8. 全局资源", "## 2. 资源").replace("一律用中文回复", "用中文回复"),
+  s1: TEXT.split("\n").slice(0, 8).join("\n") + "\n",
+};
+const snapshots = [
+  { id: "s3", created_at: NOW - 3 * 3600_000, size_bytes: 2150 },
+  { id: "s2", created_at: NOW - 26 * 3600_000, size_bytes: 1980 },
+  { id: "s1", created_at: NOW - 9 * 24 * 3600_000, size_bytes: 412 },
+];
+const searchHits = [
+  { file_id: "c:/users/admin/.claude/claude.md", line: 24, preview: "| MySQL | 3306 |" },
+  { file_id: "c:/users/admin/.claude/claude.md", line: 9, preview: "本机数据库清单见 @C:/devtools/database/README.md（MySQL 一主一从）" },
+  { file_id: "c:/work/jev-rpa/claude.md", line: 12, preview: "本地 mysql 从库延迟 1 秒，写后立读必须读主库" },
+  { file_id: "c:/work/jev-rpa/agents.md", line: 3, preview: "Run MySQL migrations before deploy" },
+];
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -131,6 +150,12 @@ mockIPC(
         return content(version === 0 ? TEXT : `${TEXT}\n- 外部新增的一行\n`, `h${version}`);
       case "write_memory_file":
         return content(String(a.text), `h${++version}`);
+      case "search_memories":
+        return String(a.query ?? "").trim() ? searchHits : [];
+      case "list_snapshots":
+        return snapshots;
+      case "read_snapshot":
+        return snapshotTexts[String(a.id)] ?? "";
       case "read_codex_db":
         return { status: "unavailable", reason: "preview" };
       case "get_settings":

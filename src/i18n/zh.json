@@ -77,6 +77,32 @@
     "showEmpty": "显示空项目（{n}）",
     "removedBanner": "文件已在外部删除或移除",
     "removeDiscardBody": "移除项目会关闭当前文件并丢弃未保存的修改。",
-    "removeDiscardConfirm": "放弃修改并移除"
+    "removeDiscardConfirm": "放弃修改并移除",
+    "searchHint": "输入关键词，搜索全部记忆文件的内容",
+    "searching": "搜索中",
+    "searchFailed": "搜索失败：{message}",
+    "searchClose": "关闭搜索",
+    "searchResults": "搜索结果",
+    "searchCount": "{n} 处匹配，{f} 个文件",
+    "historyTitle": "历史版本",
+    "historyDesc": "选择一个版本，查看恢复后与当前内容的差异。",
+    "historyEmpty": "还没有历史版本",
+    "historyFailed": "读取历史版本失败：{message}",
+    "snapshotList": "版本列表",
+    "diffCurrent": "当前",
+    "diffRestored": "此版本",
+    "restore": "恢复此版本",
+    "restoring": "恢复中",
+    "restoreFailed": "恢复失败：{message}",
+    "restoreConflict": "文件已在磁盘上被修改，请关闭后重新加载再恢复。",
+    "restoreDiscardBody": "恢复会用历史版本覆盖编辑器里未保存的修改。",
+    "restoreDiscardConfirm": "放弃修改并恢复"
+  },
+  "diff": {
+    "layoutLabel": "对比布局",
+    "split": "左右",
+    "unified": "上下",
+    "identical": "内容相同",
+    "folded": "{n} 行未改动"
   }
 }

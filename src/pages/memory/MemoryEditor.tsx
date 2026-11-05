@@ -4,13 +4,15 @@ import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, History, ImageOff, Info, Link2, Save, TriangleAlert } from "lucide-react";
+import { Check, Copy, History, ImageOff, Info, Link2, Save, TriangleAlert, Unlink2 } from "lucide-react";
 import { onMemoryChanged, readMemoryFile, writeMemoryFile } from "@/api/memory";
 import type { CommandError, FileContentDto, MemoryFile, MemoryIndex } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { memdockCmTheme } from "./cmTheme";
+import { rehypeSourceLine } from "./rehypeSourceLine";
+import { useScrollSync } from "./useScrollSync";
 import { HistoryDrawer } from "./HistoryDrawer";
 import { CodexDbView } from "./CodexDbView";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -36,6 +38,16 @@ function loadMode(): EditorMode {
     // storage unavailable: fall through
   }
   return "split";
+}
+
+const SYNC_KEY = "memdock.syncScroll";
+
+function loadSync(): boolean {
+  try {
+    return localStorage.getItem(SYNC_KEY) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 function asCommandError(e: unknown): CommandError | null {
@@ -81,6 +93,8 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
   const [mode, setModeState] = React.useState<EditorMode>(loadMode);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [view, setView] = React.useState<EditorView | null>(null);
+  const [syncOn, setSyncOn] = React.useState(loadSync);
+  const previewRef = React.useRef<HTMLDivElement>(null);
   const revealed = React.useRef(0);
 
   const dirty = base !== null && text !== base.text;
@@ -222,6 +236,18 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
     }
   };
 
+  const toggleSync = () => {
+    const next = !syncOn;
+    setSyncOn(next);
+    try {
+      localStorage.setItem(SYNC_KEY, next ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  };
+
+  useScrollSync({ enabled: mode === "split" && syncOn, view, previewRef });
+
   const copyPath = async () => {
     try {
       await navigator.clipboard.writeText(file.path);
@@ -278,6 +304,21 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
           </span>
         ) : null}
         <span className="flex-1" />
+        {mode === "split" ? (
+          <button
+            type="button"
+            aria-label={m.syncScroll}
+            aria-pressed={syncOn}
+            title={m.syncScroll}
+            onClick={toggleSync}
+            className={cn(
+              "grid size-7 shrink-0 cursor-pointer place-items-center rounded-md outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+              syncOn ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {syncOn ? <Link2 className="size-4" aria-hidden="true" /> : <Unlink2 className="size-4" aria-hidden="true" />}
+          </button>
+        ) : null}
         <div
           role="radiogroup"
           aria-label={m.modeLabel}
@@ -380,7 +421,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
           </div>
         ) : null}
         {base && mode !== "edit" ? (
-          <div className="min-h-0 min-w-0 flex-1 basis-0 overflow-auto px-6 py-5">
+          <div ref={previewRef} className="min-h-0 min-w-0 flex-1 basis-0 overflow-auto px-6 py-5">
             <Preview text={text} />
           </div>
         ) : null}
@@ -447,9 +488,10 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
 
 export function Preview({ text }: { text: string }) {
   return (
-    <div className="max-w-[72ch] text-base leading-6">
+    <div className="max-w-[72ch] font-content text-[14px] leading-[25px]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeSourceLine]}
         components={{
           h1: (p) => (
             <h1
@@ -468,7 +510,7 @@ export function Preview({ text }: { text: string }) {
           blockquote: (p) => (
             <blockquote className="my-3 border-l-[3px] border-border pl-3 text-muted-foreground" {...strip(p)} />
           ),
-          hr: () => <hr className="my-4 border-border" />,
+          hr: (p) => <hr className="my-4 border-border" {...strip(p)} />,
           // Links must never navigate the app webview.
           a: ({ children }) => (
             <span className="cursor-pointer text-accent-text hover:underline">{children}</span>

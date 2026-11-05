@@ -3,6 +3,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import type { Extension } from "@codemirror/state";
 
+const CONTENT = '"Inter Variable", "LXGW WenKai Screen", "PingFang SC", "Microsoft YaHei UI", sans-serif';
 const MONO = '"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace';
 
 /** Every colour is a semantic CSS variable, so light/dark follows the app theme without rebuilding. */
@@ -11,10 +12,10 @@ const chrome = EditorView.theme({
     height: "100%",
     color: "var(--foreground)",
     backgroundColor: "var(--card)",
-    fontSize: "13px",
+    fontSize: "13.5px",
   },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: MONO, lineHeight: "22px", overflow: "auto" },
+  ".cm-scroller": { fontFamily: CONTENT, lineHeight: "24px", overflow: "auto" },
   ".cm-content": { caretColor: "var(--primary)", padding: "16px 0" },
   ".cm-line": { padding: "0 16px 0 8px" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--primary)", borderLeftWidth: "2px" },
@@ -22,6 +23,8 @@ const chrome = EditorView.theme({
     backgroundColor: "var(--card)",
     color: "var(--muted-foreground)",
     border: "none",
+    fontFamily: MONO,
+    fontSize: "12.5px",
   },
   ".cm-lineNumbers .cm-gutterElement": { opacity: "0.7", padding: "0 8px 0 16px", minWidth: "44px" },
   ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--muted) 40%, transparent)" },
@@ -38,7 +41,8 @@ const highlight = syntaxHighlighting(
     { tag: t.strong, fontWeight: "600" },
     { tag: t.emphasis, fontStyle: "italic" },
     { tag: [t.link, t.url], color: "var(--accent-text)" },
-    { tag: t.monospace, color: "var(--tool-codex)" },
+    // Inline code and fenced code bodies keep the monospace font.
+    { tag: t.monospace, color: "var(--tool-codex)", fontFamily: MONO, fontSize: "12.5px" },
     // `#`, `*`, `**`, backticks, list bullets and quote markers stay quiet.
     { tag: [t.processingInstruction, t.contentSeparator, t.list], color: "var(--muted-foreground)" },
     { tag: t.quote, color: "var(--muted-foreground)" },

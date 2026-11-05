@@ -7,6 +7,7 @@
 @theme inline {
   --font-sans: "Inter Variable", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-heading: var(--font-sans);
+  --font-content: "Inter Variable", "LXGW WenKai Screen", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   --font-mono: "JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace;
 
   --color-background: var(--background);

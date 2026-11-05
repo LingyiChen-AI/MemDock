@@ -9,6 +9,7 @@ import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
 import "@fontsource-variable/jetbrains-mono";
+import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "../styles/globals.css";
 import App from "../App";
 import type { MemoryFile, MemoryIndex, Project } from "../api/types";
@@ -190,6 +191,17 @@ const page = params.get("page");
 if (page) {
   const timer = setInterval(() => {
     const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === page);
+    if (btn) {
+      clearInterval(timer);
+      btn.click();
+    }
+  }, 100);
+}
+
+// `?open=appearance` opens the sidebar appearance popover (headless screenshots cannot click).
+if (params.get("open") === "appearance") {
+  const timer = setInterval(() => {
+    const btn = document.querySelector<HTMLButtonElement>('button[aria-label="外观 / Appearance"], button[aria-label="Appearance"]');
     if (btn) {
       clearInterval(timer);
       btn.click();

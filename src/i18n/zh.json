@@ -13,9 +13,13 @@
     "expand": "展开侧栏"
   },
   "placeholder": {
-    "comingSoon": "即将推出",
+    "comingSoon": "即将推出"
+  },
+  "appearance": {
+    "button": "外观 / Appearance",
+    "title": "外观",
+    "mode": "模式",
     "language": "语言",
-    "theme": "主题",
     "accent": "主题色",
     "accents": { "green": "绿", "blue": "蓝", "violet": "紫", "orange": "橙", "teal": "青" },
     "system": "跟随系统",
@@ -23,6 +27,7 @@
     "light": "亮色"
   },
   "memory": {
+    "syncScroll": "同步滚动",
     "treeLabel": "记忆树",
     "search": "搜索全部记忆",
     "addProject": "添加项目目录",

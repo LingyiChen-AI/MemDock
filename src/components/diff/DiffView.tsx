@@ -215,8 +215,8 @@ function Segs({ segs, side }: { segs: Seg[]; side: "del" | "add" }) {
   );
 }
 
-const NO = "w-9 shrink-0 pr-2 text-right text-muted-foreground select-none";
-const TEXT = "min-w-0 flex-1 pr-2.5 break-all whitespace-pre-wrap";
+const NO = "w-9 shrink-0 pr-2 text-right font-mono text-[12.5px] text-muted-foreground select-none";
+const TEXT = "min-w-0 flex-1 pr-2.5 font-content text-[13.5px] break-all whitespace-pre-wrap";
 
 function SplitCell({ cell, side, ctxText, ctxNo }: { cell?: Cell; side: "del" | "add"; ctxText?: string; ctxNo?: number }) {
   if (ctxText !== undefined) {

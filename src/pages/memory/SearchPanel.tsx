@@ -219,7 +219,7 @@ export function SearchPanel({ onOpen, index, initialQuery = "", onClose }: Searc
                       className="flex w-full cursor-pointer items-baseline gap-2 py-1 pr-4 pl-4 text-left text-sm outline-none transition-colors duration-150 hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
                     >
                       <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">{h.line}</span>
-                      <span className="min-w-0 flex-1 break-words text-foreground">{highlight(h.preview, result.query)}</span>
+                      <span className="min-w-0 flex-1 font-content break-words text-foreground">{highlight(h.preview, result.query)}</span>
                     </button>
                   ))}
                 </div>

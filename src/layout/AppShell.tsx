@@ -5,6 +5,7 @@ import {
   Lightbulb,
   ListChecks,
   Package,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -24,6 +25,9 @@ import {
   SidebarProvider,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AppearanceControls } from "@/components/appearance/AppearanceControls";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Placeholder } from "@/pages/Placeholder";
@@ -67,6 +71,33 @@ function CollapseToggle() {
       <Icon aria-hidden="true" />
       <span>{label}</span>
     </SidebarMenuButton>
+  );
+}
+
+function AppearanceButton() {
+  const { t } = useI18n();
+  const label = t.appearance.button;
+  return (
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={label}
+              className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+            >
+              <Palette className="size-4" aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right">{label}</TooltipContent>
+      </Tooltip>
+      <PopoverContent side="right" align="end" className="w-80">
+        <p className="mb-3 text-sm font-semibold">{t.appearance.title}</p>
+        <AppearanceControls />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -119,7 +150,12 @@ export function AppShell({ current, onNavigate, badges, status, children }: AppS
         </SidebarContent>
         <SidebarFooter className="gap-1 border-t border-sidebar-border px-2 pt-2.5">
           {status ? <div data-slot="sidebar-status">{status}</div> : null}
-          <CollapseToggle />
+          <div className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col-reverse group-data-[collapsible=icon]:items-center">
+            <div className="min-w-0 flex-1 group-data-[collapsible=icon]:flex-none">
+              <CollapseToggle />
+            </div>
+            <AppearanceButton />
+          </div>
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className="min-w-0 overflow-auto">

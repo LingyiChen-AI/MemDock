@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { Settings } from "@/api/types";
@@ -16,11 +16,12 @@ const base: Settings = { language: null, theme: null, accent: null, manual_proje
 
 function mockSettings(s: Partial<Settings>) {
   (getSettings as Mock).mockResolvedValue({ ...base, ...s });
-  (updateUiPrefs as Mock).mockImplementation(async (language?: string, theme?: string) => ({
+  (updateUiPrefs as Mock).mockImplementation(async (language?: string, theme?: string, accent?: string) => ({
     ...base,
     ...s,
     language: language === undefined ? (s.language ?? null) : language === "system" ? null : language,
     theme: theme ?? s.theme ?? null,
+    accent: accent ?? s.accent ?? null,
   }));
 }
 
@@ -159,5 +160,44 @@ describe("ThemeProvider", () => {
     await user.click(await screen.findByRole("radio", { name: "亮色" }));
     expect(updateUiPrefs).toHaveBeenCalledWith(undefined, "light");
     await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(false));
+  });
+});
+
+describe("Appearance popover", () => {
+  it("opens from the sidebar footer on the memory page and shows the three controls", async () => {
+    mockSettings({ language: "zh", theme: "dark" });
+    const user = userEvent.setup();
+    setup("memory");
+    await user.click(await screen.findByRole("button", { name: "外观 / Appearance" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("radiogroup", { name: "模式" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radiogroup", { name: "主题色" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radiogroup", { name: "语言" })).toBeInTheDocument();
+  });
+
+  it("choosing light calls updateUiPrefs and updates html", async () => {
+    mockSettings({ language: "zh", theme: "dark" });
+    const user = userEvent.setup();
+    setup("memory");
+    await user.click(await screen.findByRole("button", { name: "外观 / Appearance" }));
+    await user.click(await screen.findByRole("radio", { name: "亮色" }));
+    expect(updateUiPrefs).toHaveBeenCalledWith(undefined, "light");
+    await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(false));
+  });
+
+  it("choosing an accent calls updateUiPrefs and sets data-accent", async () => {
+    mockSettings({ language: "zh", theme: "dark" });
+    const user = userEvent.setup();
+    setup("memory");
+    await user.click(await screen.findByRole("button", { name: "外观 / Appearance" }));
+    await user.click(await screen.findByRole("radio", { name: "紫" }));
+    expect(updateUiPrefs).toHaveBeenCalledWith(undefined, undefined, "violet");
+    await waitFor(() => expect(document.documentElement.dataset.accent).toBe("violet"));
+  });
+
+  it("is also reachable on other pages", async () => {
+    mockSettings({ language: "zh" });
+    setup("usage");
+    expect(await screen.findByRole("button", { name: "外观 / Appearance" })).toBeInTheDocument();
   });
 });

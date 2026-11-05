@@ -2,6 +2,7 @@ import { EditorView, Decoration, MatchDecorator, ViewPlugin, type DecorationSet,
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import type { Extension } from "@codemirror/state";
+import { lineResizeRemeasure } from "./cmLineResize";
 
 const CONTENT = '"Inter Variable", "LXGW WenKai Screen", "PingFang SC", "Microsoft YaHei UI", sans-serif';
 const MONO = '"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace';
@@ -67,4 +68,4 @@ const importMarks = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations },
 );
 
-export const memdockCmTheme: Extension[] = [chrome, highlight, importMarks, EditorView.lineWrapping];
+export const memdockCmTheme: Extension[] = [chrome, highlight, importMarks, EditorView.lineWrapping, lineResizeRemeasure];

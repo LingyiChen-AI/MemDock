@@ -559,7 +559,7 @@ fn execute(
         }
         if !cancelled && fatal.is_none() && !project_failed && done_chunks == MAX_CHUNKS && chunks.len() > MAX_CHUNKS {
             let n: usize = chunks[MAX_CHUNKS..].iter().map(Vec::len).sum();
-            rec.warnings.push(format!("{}: {n} older turns deferred to the next run", b.name));
+            rec.warnings.push(format!("{}: {n} newer turns deferred to the next run", b.name));
         }
         if cancelled || fatal.is_some() {
             break;
@@ -640,7 +640,7 @@ impl Scheduler {
         if !hit {
             return false;
         }
-        // Dedupe on the UTC minute, with a one-hour window, so a DST fall-back
+        // Dedupe on the UTC minute, with a 120-minute window, so a DST fall-back
         // (the same local time twice) cannot fire a slot twice.
         let utc_minute = now_ms.div_euclid(60_000);
         let mut last = lock(&self.last_slot);
@@ -656,11 +656,16 @@ impl Scheduler {
     /// One scheduler check at `now_ms`. Runs (blocking) when a slot is due
     /// and no run is in progress; returns the run record in that case.
     pub fn tick(&self, now_ms: i64) -> Option<RunRecord> {
-        if !self.due(now_ms) || self.ctx.is_running() {
+        if self.stop.load(Ordering::SeqCst) || !self.due(now_ms) || self.ctx.is_running() {
             return None;
         }
         // Shared flag: cancel_extraction / stop() can interrupt scheduled runs.
         self.ctx.cancel.store(false, Ordering::SeqCst);
+        // stop() may have raced in between: do not let the reset undo it.
+        if self.stop.load(Ordering::SeqCst) {
+            self.ctx.cancel.store(true, Ordering::SeqCst);
+            return None;
+        }
         start_run(&self.ctx, RunTrigger::Scheduled, &self.ctx.cancel, &|_| {}).ok()
     }
 
@@ -1210,7 +1215,7 @@ mod tests {
         let left = ts.len() - first.len();
         assert!(left > 0);
         assert!(
-            rec.warnings.iter().any(|w| w.contains(&format!("{left} older turns deferred"))),
+            rec.warnings.iter().any(|w| w.contains(&format!("{left} newer turns deferred"))),
             "{:?}",
             rec.warnings
         );
@@ -1313,5 +1318,16 @@ mod tests {
         assert!(s.tick(t0 + 30 * MIN).is_some());
         assert!(s.tick(t0 + 90 * MIN).is_none(), "repeated local hour");
         assert_eq!(lock(&e.ctx.store).runs().len(), 1);
+    }
+
+    #[test]
+    fn tick_after_stop_does_not_start_a_run() {
+        let e = two();
+        let s = sched(&e, Schedule::Daily { hh: 0, mm: 0 });
+        s.stop.store(true, Ordering::SeqCst);
+        e.ctx.cancel.store(true, Ordering::SeqCst);
+        assert!(s.tick(100 * DAY_MS).is_none());
+        assert!(lock(&e.ctx.store).runs().is_empty());
+        assert!(e.ctx.cancel.load(Ordering::SeqCst), "cancel not reset");
     }
 }

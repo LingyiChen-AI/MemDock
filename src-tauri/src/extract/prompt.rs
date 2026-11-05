@@ -159,7 +159,9 @@ pub fn chunk_turns<'a>(turns: &[&'a Turn], cap: usize) -> Vec<Vec<&'a Turn>> {
     let mut used = 0usize;
     for t in sorted {
         let n = turn_line(t).chars().count() + 1;
-        if !cur.is_empty() && used + n > cap {
+        // Never split turns with equal ts: the watermark is `ts`-based, so the
+        // next chunk would otherwise be skipped for the equal-ts remainder.
+        if cur.last().is_some_and(|l| l.ts != t.ts) && used + n > cap {
             chunks.push(std::mem::take(&mut cur));
             used = 0;
         }
@@ -188,8 +190,7 @@ fn excerpt(turns: &[&Turn]) -> String {
         lines.push(line);
     }
     lines.reverse();
-    lines.join("
-")
+    lines.join("\n")
 }
 
 fn instructions(project_name: &str, lang: &str) -> String {
@@ -631,6 +632,21 @@ mod tests {
             assert!(excerpt(c).chars().count() <= 2_000);
         }
         assert!(chunk_turns(&[], 100).is_empty());
+    }
+
+    #[test]
+    fn chunk_turns_keeps_equal_ts_together() {
+        let ts: Vec<Turn> = (0..6).map(|i| turn(&format!("s{i}"), if i < 3 { 10 } else { 20 }, Role::User, &"x".repeat(500))).collect();
+        let refs: Vec<&Turn> = ts.iter().collect();
+        // cap fits ~2 turns, but the three ts=10 turns must stay together
+        let chunks = chunk_turns(&refs, 1_200);
+        let first_ts10 = chunks.iter().position(|c| c.iter().any(|t| t.ts == 10)).unwrap();
+        assert_eq!(chunks[first_ts10].iter().filter(|t| t.ts == 10).count(), 3);
+        for c in &chunks {
+            let m = c.iter().map(|t| t.ts).max().unwrap();
+            let n = c.iter().filter(|t| t.ts == m).count();
+            assert_eq!(n, ts.iter().filter(|t| t.ts == m).count(), "equal-ts group split");
+        }
     }
 
     #[test]

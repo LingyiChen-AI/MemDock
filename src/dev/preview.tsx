@@ -268,6 +268,27 @@ const deletedSkills = [
   },
 ];
 
+// Extraction page fixtures: `?extract=running` starts with a run in progress.
+const extractRunning = params.get("extract") === "running";
+const hoursAgo = (h: number) => Date.now() - h * 3600_000;
+const extractRuns = [
+  ...(extractRunning
+    ? [{ id: "r5", started_at: Date.now() - 90_000, finished_at: null, trigger: "manual", tool: "claude", status: "running", sessions_read: 0, projects: 0, suggestions_new: 0, warnings: [], error: null }]
+    : []),
+  { id: "r4", started_at: hoursAgo(5), finished_at: hoursAgo(5) + 240_000, trigger: "scheduled", tool: "claude", status: "failed", sessions_read: 9, projects: 3, suggestions_new: 0, warnings: ["synergy: 会话文件过大，已跳过 2 个", "omin-kube: 模型输出无法解析，重试 1 次后放弃"], error: "claude 退出码 1：Error: rate limit exceeded, retry after 3600s" },
+  { id: "r3", started_at: hoursAgo(29), finished_at: hoursAgo(29) + 410_000, trigger: "scheduled", tool: "claude", status: "succeeded", sessions_read: 31, projects: 5, suggestions_new: 7, warnings: [], error: null },
+  { id: "r2", started_at: hoursAgo(53), finished_at: hoursAgo(53) + 20_000, trigger: "manual", tool: "codex", status: "cancelled", sessions_read: 2, projects: 1, suggestions_new: 0, warnings: [], error: null },
+  { id: "r1", started_at: hoursAgo(77), finished_at: hoursAgo(77) + 60_000, trigger: "manual", tool: "claude", status: "interrupted", sessions_read: 4, projects: 2, suggestions_new: 1, warnings: [], error: null },
+];
+let extractConfig: Record<string, unknown> = {
+  tool: "claude",
+  schedule: { kind: "weekly", weekday: 1, hh: 9, mm: 30 },
+  projects: { kind: "selected", ids: ["c:/work/jev-rpa", "c:/work/synergy"] },
+  include_global: true,
+  lookback_days: 14,
+  lang: null,
+};
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -338,6 +359,19 @@ mockIPC(
         return "C:\\Users\\Admin\\.claude\\skills\\pdf-notes";
       case "rollback_skill":
         return skillsList[0];
+      case "get_extract_config":
+        return extractConfig;
+      case "set_extract_config":
+        extractConfig = a.config as Record<string, unknown>;
+        return extractConfig;
+      case "extract_runners":
+        return [{ tool: "claude", available: true, program: "claude" }, { tool: "codex", available: false }];
+      case "list_extract_runs":
+        return extractRuns;
+      case "start_extraction":
+        return extractRuns[0];
+      case "cancel_extraction":
+        return null;
       case "plugin:dialog|open":
         return null;
       default:
@@ -472,4 +506,19 @@ if (flow) {
     if (flow === "delete") setTimeout(() => btn("删除")()?.click(), 400);
     if (flow === "backups") wait(() => document.querySelector<HTMLElement>('button[aria-label="备份与回滚"]'), (b) => b.click());
   });
+}
+
+// `?extract=running` emits a progress event once the page listens; `?expand=1` opens the first expandable run row.
+if (extractRunning) {
+  setTimeout(() => void emit("extract-progress", { project: "synergy", index: 2, total: 5 }), 1200);
+}
+if (params.get("expand")) {
+  let tries = 0;
+  const timer = setInterval(() => {
+    const b = document.querySelector<HTMLElement>('button[aria-expanded="false"][aria-label="展开详情"], button[aria-expanded="false"][aria-label="Show details"]');
+    if (b) {
+      clearInterval(timer);
+      b.click();
+    } else if (++tries > 100) clearInterval(timer);
+  }, 100);
 }

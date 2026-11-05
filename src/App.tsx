@@ -4,6 +4,7 @@ import { AppShell, type NavKey } from "@/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { MemoryPage } from "@/pages/memory/MemoryPage";
+import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 
 function Shell() {
@@ -25,7 +26,7 @@ function Shell() {
       <AppShell
         current={current}
         onNavigate={navigate}
-        pages={{ skills: <SkillsPage onDirtyChange={onDirty} /> }}
+        pages={{ extract: <ExtractPage onNavigate={navigate} />, skills: <SkillsPage onDirtyChange={onDirty} /> }}
       >
         <MemoryPage onDirtyChange={onDirty} />
       </AppShell>

@@ -8,8 +8,10 @@ pub mod model;
 pub mod paths;
 pub mod proc;
 pub mod projects;
+pub mod secrets;
 pub mod settings;
 pub mod skills;
+pub mod sync;
 pub mod watcher;
 pub mod window;
 

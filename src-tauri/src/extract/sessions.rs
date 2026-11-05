@@ -165,16 +165,18 @@ fn claude_files(paths: &AgentPaths) -> Vec<PathBuf> {
 
 fn claude_text(content: &Value) -> Option<String> {
     let text = match content {
+        Value::String(s) if is_noise(s) => String::new(),
         Value::String(s) => s.clone(),
         Value::Array(items) => items
             .iter()
             .filter(|i| i.get("type").and_then(Value::as_str) == Some("text"))
             .filter_map(|i| i.get("text").and_then(Value::as_str))
+            .filter(|t| !is_noise(t))
             .collect::<Vec<_>>()
             .join("\n"),
         _ => return None,
     };
-    if text.trim().is_empty() || is_noise(&text) {
+    if text.trim().is_empty() {
         None
     } else {
         Some(text)
@@ -192,13 +194,18 @@ fn read_claude_file(path: &Path, since_ms: i64, out: &mut Vec<Turn>) {
             Some("assistant") => Role::Assistant,
             _ => return,
         };
-        if v.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        if v.get("isMeta").and_then(Value::as_bool) == Some(true)
+            || v.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+        {
             return;
         }
         let Some(text) = v.get("message").and_then(|m| m.get("content")).and_then(claude_text)
         else {
             return;
         };
+        if role == Role::User && text.trim_start().starts_with("[Request interrupted by user") {
+            return;
+        }
         let Some(ts) = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts) else {
             return;
         };
@@ -279,10 +286,31 @@ fn is_injected_codex(text: &str) -> bool {
         || t.starts_with("<collaboration_mode")
         || t.starts_with("<world_state")
         || t.starts_with("<skills_instructions")
+        || t.starts_with("# AGENTS.md instructions for")
+}
+
+/// Session id from a rollout file name: the trailing uuid, else the last dash segment.
+fn codex_id_from_path(path: &Path) -> String {
+    let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = name
+        .trim_end_matches(".zst")
+        .trim_end_matches(".jsonl")
+        .to_string();
+    let is_uuid = |s: &str| {
+        let parts: Vec<&str> = s.split('-').collect();
+        parts.len() == 5
+            && parts.iter().zip([8usize, 4, 4, 4, 12]).all(|(p, n)| {
+                p.len() == n && p.chars().all(|c| c.is_ascii_hexdigit())
+            })
+    };
+    if stem.len() >= 36 && stem.is_char_boundary(stem.len() - 36) && is_uuid(&stem[stem.len() - 36..]) {
+        return stem[stem.len() - 36..].to_string();
+    }
+    stem.rsplit('-').next().unwrap_or("").to_string()
 }
 
 fn read_codex_file(path: &Path, since_ms: i64, out: &mut Vec<Turn>) {
-    let mut session_id = String::new();
+    let mut session_id = codex_id_from_path(path);
     let mut project_id: Option<String> = None;
     let mut seen_meta = false;
     for_each_json(path, |v| {
@@ -290,11 +318,13 @@ fn read_codex_file(path: &Path, since_ms: i64, out: &mut Vec<Turn>) {
         if kind == Some("session_meta") && !seen_meta {
             seen_meta = true;
             let p = v.get("payload");
-            session_id = p
+            if let Some(id) = p
                 .and_then(|p| p.get("id").or_else(|| p.get("session_id")))
                 .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+                .filter(|s| !s.is_empty())
+            {
+                session_id = id.to_string();
+            }
             project_id = p
                 .and_then(|p| p.get("cwd"))
                 .and_then(Value::as_str)
@@ -627,6 +657,48 @@ mod tests {
         let t = read_claude_turns(&paths, 0);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].text, "after big");
+    }
+
+    #[test]
+    fn claude_noise_filtered_per_block() {
+        let (_d, paths) = setup();
+        write_claude(
+            &paths,
+            "C--codes-x",
+            "s1",
+            &[
+                cl(
+                    "user",
+                    r#"[{"type":"text","text":"<system-reminder>r1</system-reminder>"},{"type":"text","text":"real text"},{"type":"text","text":"<system-reminder>r2</system-reminder>"}]"#,
+                    "2026-11-05T10:00:00.000Z",
+                    "",
+                ),
+                cl("user", r#""summary of the past""#, "2026-11-05T10:00:01.000Z", r#","isCompactSummary":true"#),
+                cl("user", r#""[Request interrupted by user for tool use]""#, "2026-11-05T10:00:02.000Z", ""),
+            ],
+        );
+        let t = read_claude_turns(&paths, 0);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].text, "real text");
+    }
+
+    #[test]
+    fn codex_skips_agents_md_and_derives_session_id_from_filename() {
+        let (_d, paths) = setup();
+        let uuid = "019a5b3c-1234-7abc-8def-0123456789ab";
+        write_codex(
+            &paths,
+            &format!("sessions/2026/11/05/rollout-2026-11-05T10-00-00-{uuid}.jsonl"),
+            &[
+                cx("user", "input_text", "# AGENTS.md instructions for C:\\\\x", "2026-11-05T10:00:01.000Z"),
+                cx("user", "input_text", "real q", "2026-11-05T10:00:02.000Z"),
+            ],
+            false,
+        );
+        let t = read_codex_turns(&paths, 0);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].text, "real q");
+        assert_eq!(t[0].session_id, uuid);
     }
 
     #[test]

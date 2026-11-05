@@ -4,6 +4,7 @@ pub mod extract;
 pub mod memory;
 pub mod model;
 pub mod paths;
+pub mod proc;
 pub mod projects;
 pub mod settings;
 pub mod skills;

@@ -26,6 +26,8 @@ export interface MemoryTreeProps {
    * the page's search panel instead of filtering the tree by name.
    */
   onSearchOpen?: (initialQuery: string) => void;
+  /** Pending review suggestions per project id (`__global__` for the global group). */
+  pendingByProject?: Record<string, number>;
 }
 
 type Row =
@@ -34,6 +36,23 @@ type Row =
   | { kind: "auto"; key: string; files: MemoryFile[]; expanded: boolean; parent: string };
 
 type Item = Row | { kind: "heading"; key: string; label: string; icon?: boolean };
+
+const GLOBAL_PENDING = "__global__";
+
+/** Small `--warning` dot: this project (or the global group) has suggestions waiting for review. */
+function PendingDot({ n, push }: { n: number; push?: boolean }) {
+  const { t } = useI18n();
+  if (n <= 0) return null;
+  const label = fmt(t.review.pendingTip, { n });
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={cn("size-2 shrink-0 rounded-full bg-warning", push && "ml-auto")}
+    />
+  );
+}
 
 const projKey = (id: string) => `proj:${id}`;
 const autoKey = (id: string) => `auto:${id}`;
@@ -53,7 +72,7 @@ function loadShowEmpty(): boolean {
   }
 }
 
-export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest, onSearchOpen }: MemoryTreeProps) {
+export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest, onSearchOpen, pendingByProject }: MemoryTreeProps) {
   const { t } = useI18n();
   const m = t.memory;
   const [query, setQuery] = React.useState("");
@@ -281,6 +300,7 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
               >
                 {item.icon ? <Globe className="size-3" aria-hidden="true" /> : null}
                 {item.label}
+                {item.key === "h:global" ? <PendingDot n={pendingByProject?.[GLOBAL_PENDING] ?? 0} /> : null}
               </div>
             );
           }
@@ -293,6 +313,7 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
               onActivate={() => activate(item)}
               onFocus={() => setFocusKey(item.key)}
               onRemove={removeProject}
+              pending={item.kind === "project" ? (pendingByProject?.[item.entry.project.id] ?? 0) : 0}
             />
           );
         })}
@@ -327,7 +348,9 @@ function TreeRow({
   onActivate,
   onFocus,
   onRemove,
+  pending,
 }: {
+  pending: number;
   row: Row;
   selected: boolean;
   tabbable: boolean;
@@ -364,6 +387,7 @@ function TreeRow({
         {!project.exists ? (
           <span className="ml-auto shrink-0 text-xs font-normal text-muted-foreground">{m.missingDir}</span>
         ) : null}
+        <PendingDot n={pending} push={project.exists} />
       </div>
     );
     if (!isManualOnly(row.entry)) return node;

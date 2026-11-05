@@ -1,9 +1,9 @@
 import * as React from "react";
-import { CircleCheck, CircleX, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, CircleX, Info, TriangleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 
-export type ToastKind = "success" | "warning" | "error";
+export type ToastKind = "success" | "info" | "warning" | "error";
 
 export interface Toast {
   id: number;
@@ -11,7 +11,7 @@ export interface Toast {
   message: string;
 }
 
-const LIFETIME: Record<ToastKind, number> = { success: 4500, warning: 9000, error: 9000 };
+const LIFETIME: Record<ToastKind, number> = { success: 4500, info: 4500, warning: 9000, error: 9000 };
 
 export function useToasts() {
   const [toasts, setToasts] = React.useState<Toast[]>([]);
@@ -44,8 +44,8 @@ export function useToasts() {
   return { toasts, push, dismiss };
 }
 
-const ICON = { success: CircleCheck, warning: TriangleAlert, error: CircleX } as const;
-const TONE = { success: "text-accent-text", warning: "text-warning", error: "text-destructive" } as const;
+const ICON = { success: CircleCheck, info: Info, warning: TriangleAlert, error: CircleX } as const;
+const TONE = { success: "text-accent-text", info: "text-accent-text", warning: "text-warning", error: "text-destructive" } as const;
 
 function ToastItem({ toast: x, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
   const { t } = useI18n();

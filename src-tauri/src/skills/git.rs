@@ -1,9 +1,9 @@
 use std::ffi::OsStr;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::proc::WaitError;
 
 use serde::Serialize;
 
@@ -112,39 +112,6 @@ pub fn redact(s: &str) -> String {
     masked.chars().take(2000).collect()
 }
 
-fn drain<R: Read + Send + 'static>(mut r: R) -> thread::JoinHandle<Vec<u8>> {
-    thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = r.read_to_end(&mut buf);
-        buf
-    })
-}
-
-/// Kills the child and its descendants (e.g. `git-remote-https`).
-fn kill_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x0800_0000)
-            .status();
-    }
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{pid}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 fn tmp_sibling(dest: &Path) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -182,45 +149,18 @@ impl SystemGit {
         if let Some(c) = cwd {
             cmd.current_dir(c);
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
-        let mut child = cmd.spawn().map_err(|e| {
+        let child = crate::proc::spawn_hidden(&mut cmd).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 GitError::NotInstalled
             } else {
                 failed(redact(&e.to_string()))
             }
         })?;
-        let out = child.stdout.take().map(drain);
-        let err = child.stderr.take().map(drain);
-        let start = Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(s)) => break s,
-                Ok(None) => {
-                    if start.elapsed() >= self.timeout {
-                        kill_tree(&mut child);
-                        return Err(GitError::Timeout);
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Err(e) => return Err(failed(e.to_string())),
-            }
-        };
-        let stdout = out
-            .map(|h| h.join().unwrap_or_default())
-            .unwrap_or_default();
-        let stderr = err
-            .map(|h| h.join().unwrap_or_default())
-            .unwrap_or_default();
+        let output = crate::proc::wait_with_timeout(child, self.timeout, None).map_err(|e| match e {
+            WaitError::Timeout | WaitError::Cancelled => GitError::Timeout,
+            WaitError::Io(m) => failed(m),
+        })?;
+        let (status, stdout, stderr) = (output.status, output.stdout, output.stderr);
         if status.success() {
             Ok(String::from_utf8_lossy(&stdout).trim().to_string())
         } else {
@@ -438,6 +378,7 @@ pub(crate) mod testutil {
 #[cfg(test)]
 mod tests {
     use super::testutil::*;
+    use std::time::Instant;
     use super::*;
 
     fn entries(dir: &Path) -> Vec<String> {

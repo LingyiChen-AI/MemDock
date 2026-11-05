@@ -1,0 +1,174 @@
+import * as React from "react";
+import { Check, Copy } from "lucide-react";
+import { suggestionContext } from "@/api/extract";
+import type { ContextTurn, Suggestion, SuggestionContext } from "@/api/types";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n/I18nProvider";
+import { formatSnapshotTime } from "@/pages/memory/HistoryDrawer";
+import { fmt } from "@/pages/memory/paths";
+import { ToolTag } from "@/pages/memory/ToolTag";
+import { errorMessage } from "@/pages/skills/skillUtils";
+
+export interface EvidenceDrawerProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  suggestion: Suggestion | null;
+}
+
+/** First occurrence of the quote in the turn text; whitespace runs match any whitespace run. */
+function locate(text: string, quote: string): [number, number] | null {
+  const words = quote.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"));
+  const m = re.exec(text);
+  return m ? [m.index, m.index + m[0].length] : null;
+}
+
+/** The turn the quote came from: a user turn first, then an assistant turn; -1 if none contains it. */
+function findHit(turns: ContextTurn[], quote: string): number {
+  for (const role of ["user", "assistant"] as const) {
+    const i = turns.findIndex((x) => x.role === role && locate(x.text, quote) !== null);
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+const shortId = (id: string) => (id.length > 10 ? `${id.slice(0, 8)}…` : id);
+
+function CopyId({ id }: { id: string }) {
+  const { t } = useI18n();
+  const r = t.review;
+  const [copied, setCopied] = React.useState(false);
+  const timer = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = () => {
+    void navigator.clipboard
+      ?.writeText(id)
+      .then(() => {
+        setCopied(true);
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  };
+  const Icon = copied ? Check : Copy;
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={id}
+      aria-label={copied ? r.copied : r.copySession}
+      className="inline-flex cursor-pointer items-center gap-1 rounded-sm font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span>{shortId(id)}</span>
+      <Icon className="size-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
+function Turn({ turn, quote, hit }: { turn: ContextTurn; quote: string; hit: boolean }) {
+  const { t } = useI18n();
+  const r = t.review;
+  const span = hit ? locate(turn.text, quote) : null;
+  return (
+    <li
+      data-hit={hit ? "true" : undefined}
+      className={cn("rounded-md border border-border px-3 py-2", hit ? "bg-muted shadow-[inset_2px_0_0_var(--warning)]" : "bg-card")}
+    >
+      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="font-semibold">{turn.role === "user" ? r.roleUser : r.roleAssistant}</span>
+        <span>{formatSnapshotTime(turn.ts)}</span>
+      </div>
+      <p className="font-content text-sm break-words whitespace-pre-wrap">
+        {span ? (
+          <>
+            {turn.text.slice(0, span[0])}
+            <mark className="rounded-xs bg-warning/35 px-px text-inherit">{turn.text.slice(span[0], span[1])}</mark>
+            {turn.text.slice(span[1])}
+          </>
+        ) : (
+          turn.text
+        )}
+      </p>
+    </li>
+  );
+}
+
+function Group({ ctx }: { ctx: SuggestionContext }) {
+  const { t } = useI18n();
+  const r = t.review;
+  const { evidence, turns } = ctx;
+  // The turn that contains the quote; if no turn does, nothing is highlighted.
+  const hitIndex = findHit(turns, evidence.quote);
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <ToolTag tool={evidence.tool} />
+        <CopyId id={evidence.session_id} />
+        <span>{formatSnapshotTime(evidence.ts)}</span>
+      </div>
+      {turns.length > 0 && hitIndex < 0 ? <p className="text-xs text-warning">{r.quoteNotFound}</p> : null}
+      {turns.length === 0 ? (
+        <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
+      ) : (
+        <ol className="space-y-1.5" aria-label={fmt(r.sessionId, { id: shortId(evidence.session_id) })}>
+          {turns.map((turn, i) => (
+            <Turn key={`${turn.ts}-${i}`} turn={turn} quote={evidence.quote} hit={i === hitIndex} />
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawerProps) {
+  const { t } = useI18n();
+  const r = t.review;
+  const id = suggestion?.id ?? null;
+  const [data, setData] = React.useState<SuggestionContext[] | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!open || !id) return;
+    let alive = true;
+    setData(null);
+    setError(null);
+    suggestionContext(id).then(
+      (d) => alive && setData(d),
+      (e) => alive && setError(errorMessage(e)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [open, id]);
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-[min(640px,92vw)] gap-0 data-[side=right]:w-[min(640px,92vw)] data-[side=right]:sm:max-w-none">
+        <SheetHeader className="border-b border-border px-5 py-4 pr-12">
+          <SheetTitle className="text-base font-semibold">{r.drawerTitle}</SheetTitle>
+          <SheetDescription className="text-xs">{r.drawerDesc}</SheetDescription>
+        </SheetHeader>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {fmt(r.drawerFailed, { message: error })}
+            </p>
+          ) : data === null ? (
+            <div aria-label={r.drawerLoading} className="space-y-2">
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+            </div>
+          ) : data.length === 0 ? (
+            <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
+          ) : (
+            data.map((ctx, i) => <Group key={`${ctx.evidence.session_id}-${ctx.evidence.ts}-${i}`} ctx={ctx} />)
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}

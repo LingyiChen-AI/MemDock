@@ -28,7 +28,13 @@ function loadWidth(): number {
   return DEFAULT_W;
 }
 
-export function MemoryPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void } = {}) {
+export interface MemoryPageProps {
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Pending review suggestions per project id, shown as dots in the tree. */
+  pendingByProject?: Record<string, number>;
+}
+
+export function MemoryPage({ onDirtyChange, pendingByProject }: MemoryPageProps = {}) {
   const { t } = useI18n();
   const m = t.memory;
   const [index, setIndex] = React.useState<MemoryIndex | null>(null);
@@ -170,6 +176,7 @@ export function MemoryPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
             onIndexChange={setIndex}
             onRemoveRequest={requestRemove}
             onSearchOpen={openSearch}
+            pendingByProject={pendingByProject}
           />
         </div>
         {search ? <SearchPanel index={index} initialQuery={search.initial} onOpen={openHit} onClose={() => setSearch(null)} /> : null}

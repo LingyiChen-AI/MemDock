@@ -15,6 +15,7 @@ pub struct SnapshotInfo {
     pub size_bytes: u64,
 }
 
+#[derive(Clone)]
 pub struct SnapshotStore {
     root: PathBuf,
 }

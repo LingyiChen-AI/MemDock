@@ -8,6 +8,25 @@ pub enum Tool {
     Codex,
 }
 
+/// Where a project was discovered from.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSource {
+    ClaudeSessions,
+    CodexSessions,
+    Manual,
+}
+
+/// A project directory known to Memdock.
+#[derive(Serialize, Clone, Debug)]
+pub struct Project {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub exists: bool,
+    pub sources: Vec<ProjectSource>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1762,6 +1762,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]

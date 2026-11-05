@@ -30,22 +30,24 @@
 | `--muted` | `#272F42` | `#F1F5F9` | 次级底色、hover 行 |
 | `--muted-foreground` | `#94A3B8` | `#475569` | 次要文字（亮色用 #475569 保证 4.5:1） |
 | `--border` | `#334155` | `#E2E8F0` | 分隔线、卡片边框 |
-| `--primary` | `#22C55E` | `#16A34A` | 主按钮底色、选中态、焦点环 |
+| `--primary` | `#22C55E` | `#15803D` | 主按钮底色、选中态、焦点环 |
 | `--primary-foreground` | `#0F172A` | `#FFFFFF` | 主按钮文字 |
 | `--accent-text` | `#4ADE80` | `#15803D` | 绿色文字/链接（满足 4.5:1） |
 | `--destructive` | `#EF4444` | `#DC2626` | 删除、驳回、错误 |
 | `--warning` | `#F59E0B` | `#B45309` | 外部修改、未知价格、待同步 |
-| `--ring` | `#4ADE80` | `#16A34A` | 键盘焦点环 |
+| `--ring` | `#4ADE80` | `#15803D` | 键盘焦点环 |
 
 **主题色（可切换，用户 2026-11-05 要求）**：只替换 `--primary`、`--primary-foreground`、`--accent-text`、`--ring` 四个变量，其余不变。默认「绿」。
 
 | 主题色 | 暗色 primary / accent-text | 亮色 primary / accent-text | primary-foreground（暗 / 亮） |
 |---|---|---|---|
-| 绿 green（默认） | `#22C55E` / `#4ADE80` | `#16A34A` / `#15803D` | `#0F172A` / `#FFFFFF` |
-| 蓝 blue | `#3B82F6` / `#60A5FA` | `#2563EB` / `#1D4ED8` | `#FFFFFF` / `#FFFFFF` |
-| 紫 violet | `#8B5CF6` / `#A78BFA` | `#7C3AED` / `#6D28D9` | `#FFFFFF` / `#FFFFFF` |
-| 橙 orange | `#F97316` / `#FB923C` | `#EA580C` / `#C2410C` | `#0F172A` / `#FFFFFF` |
-| 青 teal | `#14B8A6` / `#2DD4BF` | `#0D9488` / `#0F766E` | `#0F172A` / `#FFFFFF` |
+| 绿 green（默认） | `#22C55E` / `#4ADE80` | `#15803D` / `#15803D` | `#0F172A` / `#FFFFFF` |
+| 蓝 blue | `#3B82F6` / `#60A5FA` | `#2563EB` / `#1D4ED8` | `#0F172A` / `#FFFFFF` |
+| 紫 violet | `#A78BFA` / `#C4B5FD` | `#7C3AED` / `#6D28D9` | `#0F172A` / `#FFFFFF` |
+| 橙 orange | `#F97316` / `#FB923C` | `#C2410C` / `#C2410C` | `#0F172A` / `#FFFFFF` |
+| 青 teal | `#14B8A6` / `#2DD4BF` | `#0F766E` / `#0F766E` | `#0F172A` / `#FFFFFF` |
+
+> 2026-11-05 修订：按主按钮文字对比度 ≥ 4.5:1 校正（实测：暗色 blue 4.85、violet 6.56；亮色 green 5.02、orange 5.18、teal 5.47，其余均 ≥ 5）。亮色默认绿也随之由 `#16A34A` 改为 `#15803D`，第 3 节主表中亮色 `--primary` / `--ring` 同此值。
 
 `--ring` 暗色取 accent-text、亮色取 primary。实现方式：`<html data-accent="blue">` + CSS 属性选择器覆盖。
 

@@ -12,6 +12,7 @@ import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { AccountSlot } from "@/components/account/AccountSlot";
 import { LoginDialog } from "@/components/account/LoginDialog";
 import { useSyncStatus } from "@/components/account/useSyncStatus";
+import { SyncPage } from "@/pages/sync/SyncPage";
 
 function Shell() {
   const { t } = useI18n();
@@ -42,6 +43,9 @@ function Shell() {
           review: <ReviewPage onNavigate={navigate} />,
           extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
           skills: <SkillsPage onDirtyChange={onDirty} />,
+          sync: (
+            <SyncPage status={syncStatus} onStatus={setSyncStatus} onOpenLogin={() => setLoginOpen(true)} onDirtyChange={onDirty} />
+          ),
         }}
       >
         <MemoryPage onDirtyChange={onDirty} pendingByProject={pending?.by_project} />

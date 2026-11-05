@@ -47,6 +47,8 @@ function errorMessage(e: unknown): string {
 export interface MemoryEditorProps {
   file: MemoryFile;
   index: MemoryIndex;
+  /** The file is no longer in the index (deleted externally or its project was removed). */
+  removed?: boolean;
   /** Opens an imported file that exists in the index. */
   onOpenImport?: (file: MemoryFile) => void;
   /** Reports whether there are unsaved edits (the page confirms before switching files). */
@@ -59,7 +61,7 @@ export function MemoryEditor(props: MemoryEditorProps) {
   return <TextEditor {...props} />;
 }
 
-function TextEditor({ file, index, onOpenImport, onDirtyChange, onOpenHistory }: MemoryEditorProps) {
+function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, onOpenHistory }: MemoryEditorProps) {
   const { t } = useI18n();
   const m = t.memory;
 
@@ -74,6 +76,8 @@ function TextEditor({ file, index, onOpenImport, onDirtyChange, onOpenHistory }:
   const [mode, setModeState] = React.useState<EditorMode>(loadMode);
 
   const dirty = base !== null && text !== base.text;
+  // A not-yet-created file needs some text before it can be created.
+  const canSave = dirty || (!file.exists && text !== "");
 
   // Latest values for async callbacks and the watcher subscription.
   const live = React.useRef({ path: file.path, dirty, hash: base?.hash ?? "", windows: false, exists: file.exists });
@@ -205,7 +209,7 @@ function TextEditor({ file, index, onOpenImport, onDirtyChange, onOpenHistory }:
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
-      if (dirty || !file.exists) void save();
+      if (canSave) void save();
     }
   };
 
@@ -282,7 +286,7 @@ function TextEditor({ file, index, onOpenImport, onDirtyChange, onOpenHistory }:
         </Button>
         <Button
           type="button"
-          disabled={!base || saving || (!dirty && file.exists)}
+          disabled={!base || saving || !canSave}
           onClick={() => void save()}
           className="h-7 shrink-0 cursor-pointer gap-1.5 px-3 text-xs font-semibold"
         >
@@ -291,8 +295,14 @@ function TextEditor({ file, index, onOpenImport, onDirtyChange, onOpenHistory }:
         </Button>
       </div>
 
-      {external || saveError || loadError || (!file.exists && base) ? (
+      {removed || external || saveError || loadError || (!file.exists && base) ? (
         <div className="flex shrink-0 flex-col gap-2 px-4 py-3">
+        {removed ? (
+          <div className="flex items-center gap-2.5 rounded-md bg-warning/15 px-3 py-2 text-warning">
+            <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
+            <span className="text-foreground">{m.removedBanner}</span>
+          </div>
+        ) : null}
         {external ? (
           <div className="flex items-center gap-2.5 rounded-md bg-warning/15 px-3 py-2 text-warning">
             <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
@@ -409,7 +419,7 @@ function Preview({ text }: { text: string }) {
               {...strip(p)}
             />
           ),
-          h2: (p) => <h2 className="mt-5 mb-2 text-base leading-6 font-semibold" {...strip(p)} />,
+          h2: (p) => <h2 className="mt-5 mb-2 text-[16px] leading-6 font-semibold" {...strip(p)} />,
           h3: (p) => <h3 className="mt-4 mb-1.5 text-base leading-6 font-semibold" {...strip(p)} />,
           h4: (p) => <h4 className="mt-4 mb-1.5 text-base leading-6 font-semibold" {...strip(p)} />,
           p: (p) => <p className="my-2.5" {...strip(p)} />,

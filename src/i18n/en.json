@@ -74,6 +74,9 @@
     "treeEmpty": "No projects found yet",
     "toolClaude": "Claude Code",
     "toolCodex": "Codex",
-    "showEmpty": "Show empty projects ({n})"
+    "showEmpty": "Show empty projects ({n})",
+    "removedBanner": "File was deleted or removed externally",
+    "removeDiscardBody": "Removing the project closes the open file and discards its unsaved edits.",
+    "removeDiscardConfirm": "Discard and remove"
   }
 }

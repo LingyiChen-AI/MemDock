@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronRight, Globe, Plus, Search } from "lucide-re
 import { ContextMenu } from "radix-ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { addManualProject, removeManualProject } from "@/api/memory";
-import type { MemoryFile, MemoryIndex, ProjectMemories } from "@/api/types";
+import type { MemoryFile, MemoryIndex, Project, ProjectMemories } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ToolTag } from "./ToolTag";
@@ -16,6 +16,11 @@ export interface MemoryTreeProps {
   onSelect: (file: MemoryFile) => void;
   /** Called with the fresh index after adding / removing a manual project. */
   onIndexChange?: (index: MemoryIndex) => void;
+  /**
+   * Lets the page veto/confirm a project removal (e.g. unsaved edits in one of its files).
+   * Call `remove()` to proceed; without this prop the project is removed immediately.
+   */
+  onRemoveRequest?: (project: Project, remove: () => Promise<void>) => void;
 }
 
 type Row =
@@ -43,7 +48,7 @@ function loadShowEmpty(): boolean {
   }
 }
 
-export function MemoryTree({ index, selectedKey, onSelect, onIndexChange }: MemoryTreeProps) {
+export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest }: MemoryTreeProps) {
   const { t } = useI18n();
   const m = t.memory;
   const [query, setQuery] = React.useState("");
@@ -211,12 +216,16 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange }: Memo
     }
   };
 
-  const removeProject = async (path: string) => {
-    try {
-      onIndexChange?.(await removeManualProject(path));
-    } catch (err) {
-      console.error("remove project failed", err);
-    }
+  const removeProject = (project: Project) => {
+    const remove = async () => {
+      try {
+        onIndexChange?.(await removeManualProject(project.path));
+      } catch (err) {
+        console.error("remove project failed", err);
+      }
+    };
+    if (onRemoveRequest) onRemoveRequest(project, remove);
+    else void remove();
   };
 
   return (
@@ -317,7 +326,7 @@ function TreeRow({
   tabbable: boolean;
   onActivate: () => void;
   onFocus: () => void;
-  onRemove: (path: string) => void;
+  onRemove: (project: Project) => void;
 }) {
   const { t } = useI18n();
   const m = t.memory;
@@ -357,7 +366,7 @@ function TreeRow({
         <ContextMenu.Portal>
           <ContextMenu.Content className="z-50 min-w-36 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md">
             <ContextMenu.Item
-              onSelect={() => onRemove(project.path)}
+              onSelect={() => onRemove(project)}
               className="flex h-7 cursor-pointer items-center rounded-sm px-2 text-destructive outline-none data-[highlighted]:bg-muted"
             >
               {m.removeProject}

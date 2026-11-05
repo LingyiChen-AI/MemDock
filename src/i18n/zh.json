@@ -74,6 +74,9 @@
     "treeEmpty": "还没有发现任何项目",
     "toolClaude": "Claude Code",
     "toolCodex": "Codex",
-    "showEmpty": "显示空项目（{n}）"
+    "showEmpty": "显示空项目（{n}）",
+    "removedBanner": "文件已在外部删除或移除",
+    "removeDiscardBody": "移除项目会关闭当前文件并丢弃未保存的修改。",
+    "removeDiscardConfirm": "放弃修改并移除"
   }
 }

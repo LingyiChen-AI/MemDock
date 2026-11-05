@@ -76,7 +76,7 @@ describe("AppShell", () => {
       "用量统计",
       "环境与设置",
     ]);
-    expect(document.documentElement.lang).toBe("zh-CN");
+    await waitFor(() => expect(document.documentElement.lang).toBe("zh-CN"));
   });
 
   it("switches language to en", async () => {
@@ -88,7 +88,7 @@ describe("AppShell", () => {
     expect(updateUiPrefs).toHaveBeenCalledWith("en", undefined);
     expect(await screen.findByText("Memories")).toBeInTheDocument();
     expect(screen.getByText("Coming soon")).toBeInTheDocument();
-    expect(document.documentElement.lang).toBe("en");
+    await waitFor(() => expect(document.documentElement.lang).toBe("en"));
   });
 
   it("clicking nav calls onNavigate", async () => {

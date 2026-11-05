@@ -136,6 +136,7 @@ describe("MemoryEditor", () => {
     setup(globalAgents);
     expect(await screen.findByText("未创建，保存后创建")).toBeInTheDocument();
     expect(readMemoryFile).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
     await userEvent.type(screen.getByLabelText("editor"), "new");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(writeMemoryFile).toHaveBeenCalledWith(globalAgents.path, "new", ""));

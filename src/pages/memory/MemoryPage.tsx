@@ -1,7 +1,7 @@
 import * as React from "react";
 import { FileText } from "lucide-react";
 import { listMemories, onMemoryChanged } from "@/api/memory";
-import type { MemoryFile, MemoryIndex } from "@/api/types";
+import type { MemoryFile, MemoryIndex, Project } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -72,7 +72,20 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
     if (first) setSelectedKey(fileKey(first));
   }, [index]);
 
-  const selected = index ? findByKey(index, selectedKey) : undefined;
+  // An open file can vanish from the index (deleted externally, project removed). With unsaved
+  // edits the editor must stay so the text is not lost; otherwise fall back to the empty state.
+  const lastSelected = React.useRef<{ key: string; file: MemoryFile } | null>(null);
+  const found = index ? findByKey(index, selectedKey) : undefined;
+  if (found && selectedKey) lastSelected.current = { key: selectedKey, file: found };
+  const kept = !found && dirty && selectedKey && lastSelected.current?.key === selectedKey ? lastSelected.current.file : undefined;
+  const selected = found ?? kept;
+  const removed = !found && kept !== undefined;
+  const [pendingRemove, setPendingRemove] = React.useState<(() => Promise<void>) | null>(null);
+  const requestRemove = (project: Project, remove: () => Promise<void>) => {
+    const open = selected && selected.scope.type === "project" && selected.scope.project_id === project.id;
+    if (dirty && open) setPendingRemove(() => remove);
+    else void remove();
+  };
 
   const select = React.useCallback(
     (file: MemoryFile) => {
@@ -133,7 +146,7 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
   return (
     <div className="flex h-full min-h-0 flex-1">
       <div className="relative shrink-0" style={{ width }}>
-        <MemoryTree index={index} selectedKey={selectedKey} onSelect={select} onIndexChange={setIndex} />
+        <MemoryTree index={index} selectedKey={selectedKey} onSelect={select} onIndexChange={setIndex} onRemoveRequest={requestRemove} />
         <div
           role="separator"
           aria-orientation="vertical"
@@ -153,6 +166,7 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
             key={fileKey(selected)}
             file={selected}
             index={index}
+            removed={removed}
             onOpenImport={select}
             onDirtyChange={setDirty}
             onOpenHistory={onOpenHistory ? () => onOpenHistory(selected) : undefined}
@@ -167,6 +181,23 @@ export function MemoryPage({ onOpenHistory }: MemoryPageProps) {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        title={m.discardTitle}
+        body={m.removeDiscardBody}
+        confirmLabel={m.removeDiscardConfirm}
+        cancelLabel={m.keepEditing}
+        destructive
+        onConfirm={() => {
+          const go = pendingRemove;
+          setPendingRemove(null);
+          if (go) {
+            setDirty(false);
+            void go();
+          }
+        }}
+        onCancel={() => setPendingRemove(null)}
+      />
       <ConfirmDialog
         open={pending !== null}
         title={m.discardTitle}

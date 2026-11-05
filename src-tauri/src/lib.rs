@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod commands_extract;
 pub mod commands_skills;
+pub mod commands_sync;
 pub mod extract;
 pub mod fsutil;
 pub mod memory;
@@ -8,8 +9,10 @@ pub mod model;
 pub mod paths;
 pub mod proc;
 pub mod projects;
+pub mod secrets;
 pub mod settings;
 pub mod skills;
+pub mod sync;
 pub mod watcher;
 pub mod window;
 
@@ -41,6 +44,7 @@ fn apply_initial_size(win: &WebviewWindow) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         // VISIBLE is excluded: the window starts hidden and setup shows it once it is sized.
         .plugin(
             tauri_plugin_window_state::Builder::new()
@@ -72,6 +76,10 @@ pub fn run() {
             ));
             let cleanup_state = state.clone();
             std::thread::spawn(move || commands_skills::startup_cleanup(&cleanup_state));
+            state.sync.attach(app.handle().clone());
+            commands_sync::start_status_watch(&state);
+            // Keychain read happens once, off the UI thread.
+            commands_sync::warm_token_cache(&state);
             let handle = watcher::start(app.handle().clone(), state.clone());
             let extract = Arc::new(commands_extract::ExtractState::new(state.clone()));
             extract.attach(app.handle().clone());
@@ -125,6 +133,21 @@ pub fn run() {
             commands_skills::read_skill_file,
             commands_skills::read_skill_backup_file,
             commands_skills::write_skill_file,
+            commands_sync::sync_status,
+            commands_sync::login_start,
+            commands_sync::login_cancel,
+            commands_sync::logout,
+            commands_sync::set_repo_name,
+            commands_sync::ack_public_repo,
+            commands_sync::open_verification_url,
+            commands_sync::sync_start,
+            commands_sync::sync_finish,
+            commands_sync::sync_discard,
+            commands_sync::set_included_local,
+            commands_sync::sync_projects,
+            commands_sync::sync_history,
+            commands_sync::sync_file_at,
+            commands_sync::restore_from_history,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

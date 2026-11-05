@@ -345,6 +345,61 @@ const contextFor = (id: string) => {
   }));
 };
 
+// Sync fixtures: `?sync=out` starts logged out; `?sync=resolve` makes 同步记忆 return a plan with conflicts.
+const syncMode = params.get("sync") ?? "in";
+const syncStatusNow = () =>
+  syncMode === "out"
+    ? { logged_in: false, login: null, repo: null, last_sync_at: null, pending: 0, needs: null }
+    : {
+        logged_in: true,
+        login: "chenhao",
+        repo: { owner: "chenhao", name: "MemDockHub", url: "https://github.com/chenhao/MemDockHub", private: true },
+        last_sync_at: Date.now() - 3 * 3600_000,
+        pending: 3,
+        needs: null,
+      };
+const syncPlan = {
+  id: "plan-1",
+  counts: { pull: 2, push: 1, merged: 1, conflicts: 2, remote_deleted: 1, local_all_deleted: 1, skipped: 1 },
+  conflicts: [
+    {
+      repo_path: "global/claude/CLAUDE.md",
+      local_path: "C:\\Users\\Admin\\.claude\\CLAUDE.md",
+      local: "# 全局规则\n\n## 数据库\n从库延迟设为 1 秒，写后立读走主库。\n",
+      remote: "# 全局规则\n\n## 数据库\n从库延迟设为 2 秒，写后立读必须走主库。\n",
+      base: "# 全局规则\n\n## 数据库\n从库延迟设为 2 秒。\n",
+      merged:
+        "# 全局规则\n\n## 数据库\n<<<<<<< local\n从库延迟设为 1 秒，写后立读走主库。\n||||||| base\n从库延迟设为 2 秒。\n=======\n从库延迟设为 2 秒，写后立读必须走主库。\n>>>>>>> remote\n",
+      conflicts: 1,
+    },
+    {
+      repo_path: "projects/jev-rpa/claude/memory/feedback_1.md",
+      local_path: "C:\\Users\\Admin\\.claude\\projects\\jev\\memory\\feedback_1.md",
+      local: null,
+      remote: "每个应用都走同一套主流程。\n",
+      base: "每个应用走同一套流程。\n",
+      merged: "",
+      conflicts: 1,
+    },
+  ],
+  remote_deleted: [{ repo_path: "global/codex/AGENTS.md", local_path: "C:\\Users\\Admin\\.codex\\AGENTS.md" }],
+  local_all_deleted: [{ project_key: "github.com/chenhao/old-tool", files: [{ repo_path: "projects/old-tool/claude/CLAUDE.md", local_path: null }] }],
+  skipped: [{ repo_path: "global/claude/notes-gbk.md", reason: "not_utf8_local" }],
+  secret_hits: [],
+  missing_skills: [],
+  removed_elsewhere: [],
+};
+const syncProjectsList = [
+  { project_id: "c:/work/jev-rpa", name: "jev-rpa", key: "github.com/chenhao/jev-rpa", dir_key: "jev-rpa", included: true },
+  { project_id: "c:/work/synergy", name: "synergy", key: "github.com/freecall/synergy", dir_key: "synergy", included: true },
+  { project_id: "c:/work/scratch", name: "scratch", key: null, dir_key: "scratch", included: false },
+];
+const syncCommits = [
+  { id: "c3", message: "sync from DESKTOP-OFFICE", time: Date.now() - 3 * 3600_000, files: ["global/claude/CLAUDE.md", "projects/jev-rpa/claude/CLAUDE.md"] },
+  { id: "c2", message: "sync from LAPTOP-HOME", time: Date.now() - 26 * 3600_000, files: ["global/codex/AGENTS.md"] },
+];
+const syncSummary = { commit: "c4", committed: true, pulled: 2, pushed: 1, merged: 1 };
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -449,6 +504,40 @@ mockIPC(
         });
       case "suggestion_context":
         return contextFor(String(a.id));
+      case "sync_status":
+      case "set_repo_name":
+      case "ack_public_repo":
+        return syncStatusNow();
+      case "logout":
+        return { ...syncStatusNow(), logged_in: false, login: null, repo: null };
+      case "login_start":
+        return { user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900 };
+      case "login_cancel":
+      case "open_verification_url":
+      case "sync_discard":
+      case "restore_from_history":
+        return null;
+      case "sync_start":
+        return new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve(
+                syncMode === "resolve"
+                  ? { kind: "needs_resolution", plan: syncPlan }
+                  : { kind: "done", summary: syncSummary, skipped: syncPlan.skipped, missing_skills: [], removed_elsewhere: [] },
+              ),
+            600,
+          ),
+        );
+      case "sync_finish":
+        return syncSummary;
+      case "sync_projects":
+      case "set_included_local":
+        return syncProjectsList;
+      case "sync_history":
+        return syncCommits;
+      case "sync_file_at":
+        return TEXT;
       case "plugin:dialog|open":
         return null;
       default:
@@ -630,3 +719,19 @@ if (reviewState === "edit" || reviewState === "evidence" || reviewState === "sta
     if (reviewState === "stale") btn(cards[cards.length - 1], "通过")?.click();
   }, 100);
 }
+
+// `?login=code` opens the login dialog and requests a code; `?sync=resolve&page=同步` clicks 同步记忆.
+const clickWhen = (label: string, then?: () => void) => {
+  let tries = 0;
+  const timer = setInterval(() => {
+    const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === label);
+    if (btn && !btn.disabled) {
+      clearInterval(timer);
+      btn.click();
+      then?.();
+    } else if (++tries > 100) clearInterval(timer);
+  }, 100);
+};
+if (params.get("login") === "code") clickWhen("登录 GitHub", () => clickWhen("开始登录"));
+else if (params.get("login") === "intro") clickWhen("登录 GitHub");
+if (syncMode === "resolve") clickWhen("同步记忆");

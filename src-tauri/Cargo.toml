@@ -28,12 +28,18 @@ zstd = "0.13"
 sha2 = "0.10"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+unicode-normalization = "0.1"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 notify = "8"
 tauri-plugin-dialog = "2.8.4"
 tauri-plugin-window-state = "2"
+tauri-plugin-opener = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
+base64 = "0.23"
+sha1 = "0.10"
+ureq = { version = "3", features = ["json", "socks-proxy"] }
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -46,3 +52,6 @@ strip = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

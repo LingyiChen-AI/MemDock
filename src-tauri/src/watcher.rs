@@ -297,6 +297,7 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
                                 paths: changed.into_iter().collect(),
                             },
                         );
+                        state.sync.memory_changed();
                     }
                     if !skills_changed.is_empty() {
                         // New or removed skill directories need their own watches;

@@ -176,8 +176,40 @@ pub fn installed_lock_entries(
 ) -> Vec<(String, SkillSource)> {
     let base = home.join(".agents").join("skills");
     lock.into_iter()
-        .filter(|(key, _)| !key.is_empty() && base.join(key).exists())
+        .filter(|(key, _)| valid_key(key) && base.join(key).exists())
         .collect()
+}
+
+/// A lock key must be a single plain directory name.
+fn valid_key(key: &str) -> bool {
+    if key.is_empty() || key == "." || key == ".." || key.contains('/') || key.contains('\\') {
+        return false;
+    }
+    let mut comps = Path::new(key).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
+}
+
+/// Skill-lock entries for a sync. Missing lock file -> Ok(empty); unreadable or
+/// unparseable -> Err (caller must skip the manifest merge for this sync, since
+/// "empty" would be read as "nothing installed here").
+pub fn lock_entries_for_sync(home: &Path) -> Result<Vec<(String, SkillSource)>, String> {
+    let file = home.join(".agents").join(".skill-lock.json");
+    if !file.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("skill-lock: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("skill-lock: {e}"))?;
+    if !v.get("skills").is_some_and(|s| s.is_object()) {
+        return Err("skill-lock: missing skills object".to_string());
+    }
+    Ok(installed_lock_entries(
+        home,
+        crate::skills::source::read_skill_lock(home),
+    ))
 }
 
 pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> Manifest {
@@ -505,5 +537,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "here");
+    }
+
+    #[test]
+    fn installed_lock_entries_rejects_unsafe_keys() {
+        let root = std::env::temp_dir().join(format!("md-lock2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join(".agents").join("skills").join("a").join("b")).unwrap();
+        std::fs::create_dir_all(home.join(".agents").join("x")).unwrap();
+        let abs = root.to_string_lossy().into_owned();
+        let s = src("https://github.com/o/h", "");
+        let lock = vec![
+            ("../x".to_string(), s.clone()),
+            (abs, s.clone()),
+            ("a/b".to_string(), s.clone()),
+            ("..".to_string(), s),
+        ];
+        let got = installed_lock_entries(&home, lock);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn lock_entries_for_sync_three_cases() {
+        let home = std::env::temp_dir().join(format!("md-lock3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".agents").join("skills").join("k")).unwrap();
+        assert_eq!(lock_entries_for_sync(&home).unwrap().len(), 0);
+        let lock = home.join(".agents").join(".skill-lock.json");
+        std::fs::write(&lock, "{corrupt").unwrap();
+        assert!(lock_entries_for_sync(&home).is_err());
+        std::fs::write(
+            &lock,
+            r#"{"version":3,"skills":{"k":{"sourceUrl":"https://github.com/o/k","skillPath":"k/SKILL.md"},"gone":{"sourceUrl":"https://github.com/o/g"}}}"#,
+        )
+        .unwrap();
+        let got = lock_entries_for_sync(&home).unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "k");
     }
 }

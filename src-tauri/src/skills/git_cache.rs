@@ -6,6 +6,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::skills::frontmatter::parse_frontmatter;
+use crate::skills::git::COMPLETE_MARKER;
 use crate::skills::source::{normalize_url, parse_url};
 
 /// Cache entries older than this are removed after install / update.
@@ -14,6 +15,7 @@ pub const CACHE_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ParsedSource {
     pub url: String,
+    pub clone_url: String,
     pub git_ref: Option<String>,
     pub skill_path: Option<String>,
 }
@@ -31,16 +33,54 @@ fn is_name_part(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
+/// Git ref names that are safe to hand to git as a positional argument.
+fn valid_ref(r: &str) -> bool {
+    !r.is_empty()
+        && !r.starts_with('-')
+        && !r.contains("..")
+        && !r.contains("@{")
+        && !r
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c))
+}
+
+fn valid_subpath(p: &str) -> bool {
+    !p.chars().any(|c| c.is_control() || c == '\\') && p.split('/').all(|s| s != "..")
+}
+
+/// Drops credentials from a URL but keeps the user's scheme. http(s): the whole
+/// userinfo goes; `ssh://`: the password goes, the user stays; scp-style is kept.
+fn clone_url_of(s: &str) -> String {
+    let s = s.trim().trim_end_matches('/');
+    let Some((scheme, rest)) = s.split_once("://") else {
+        return s.to_string();
+    };
+    let (auth, path) = match rest.split_once('/') {
+        Some((a, p)) => (a, format!("/{p}")),
+        None => (rest, String::new()),
+    };
+    let auth = match auth.rsplit_once('@') {
+        None => auth.to_string(),
+        Some((user, host)) if scheme.eq_ignore_ascii_case("ssh") => {
+            format!("{}@{host}", user.split(':').next().unwrap_or(""))
+        }
+        Some((_, host)) => host.to_string(),
+    };
+    format!("{scheme}://{auth}{path}")
+}
+
 /// Accepts `owner/repo`, GitHub repo / `tree/<ref>/<path>` URLs, scp-style ssh
-/// addresses and other `https://` git URLs.
+/// addresses and other `https://` git URLs. `url` is the normalized identity,
+/// `clone_url` keeps the user's scheme (credentials stripped) for network calls.
 pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
     let s = input.trim();
     let err = || format!("无法识别的来源: {input}");
-    if s.is_empty() || s.contains(char::is_whitespace) {
+    if s.is_empty() || s.contains(char::is_whitespace) || s.starts_with('-') {
         return Err(err());
     }
-    let plain = |url: String| ParsedSource {
+    let plain = |url: String, clone_url: String| ParsedSource {
         url,
+        clone_url,
         git_ref: None,
         skill_path: None,
     };
@@ -49,7 +89,8 @@ pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
         let parts: Vec<&str> = s.trim_matches('/').split('/').collect();
         if parts.len() == 2 && parts.iter().all(|p| is_name_part(p)) {
             let repo = parts[1].strip_suffix(".git").unwrap_or(parts[1]);
-            return Ok(plain(format!("https://github.com/{}/{repo}", parts[0])));
+            let url = format!("https://github.com/{}/{repo}", parts[0]);
+            return Ok(plain(url.clone(), url));
         }
         return Err(err());
     }
@@ -63,8 +104,13 @@ pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
         let segs: Vec<&str> = path.split('/').collect();
         if segs.len() >= 4 && segs[2] == "tree" {
             let skill_path = segs[4..].join("/");
+            if !valid_ref(segs[3]) || !valid_subpath(&skill_path) {
+                return Err(err());
+            }
+            let url = format!("https://{host}/{}/{}", segs[0], segs[1]);
             return Ok(ParsedSource {
-                url: format!("https://{host}/{}/{}", segs[0], segs[1]),
+                clone_url: url.clone(),
+                url,
                 git_ref: Some(segs[3].to_string()),
                 skill_path: Some(skill_path).filter(|p| !p.is_empty()),
             });
@@ -73,7 +119,12 @@ pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
             return Err(err());
         }
     }
-    Ok(plain(normalize_url(s)))
+    Ok(plain(normalize_url(s), clone_url_of(s)))
+}
+
+/// A cache directory counts only when a clone finished into it.
+pub fn is_complete_cache(dir: &Path) -> bool {
+    dir.join(COMPLETE_MARKER).is_file()
 }
 
 /// Finds every `SKILL.md` in a cloned repo (skipping `.git` / `node_modules`),
@@ -196,6 +247,49 @@ mod tests {
             p("ssh://git@github.com/o/r.git").url,
             "https://github.com/o/r"
         );
+    }
+
+    #[test]
+    fn clone_url_keeps_scheme_and_strips_credentials() {
+        let s = p("git@github.com:o/r.git");
+        assert_eq!(s.url, "https://github.com/o/r");
+        assert_eq!(s.clone_url, "git@github.com:o/r.git");
+        let s = p("ssh://git@github.com:22/o/r.git");
+        assert_eq!(s.url, "https://github.com/o/r");
+        assert_eq!(s.clone_url, "ssh://git@github.com:22/o/r.git");
+        let s = p("ssh://git:secret@github.com/o/r.git");
+        assert_eq!(s.clone_url, "ssh://git@github.com/o/r.git");
+        let s = p("https://user:tok@github.com/o/r.git");
+        assert_eq!(s.url, "https://github.com/o/r");
+        assert_eq!(s.clone_url, "https://github.com/o/r.git");
+        let s = p("https://github.com/o/r/tree/main/x");
+        assert_eq!(s.clone_url, "https://github.com/o/r");
+        assert_eq!(p("o/r").clone_url, "https://github.com/o/r");
+        assert_eq!(
+            p("https://gitlab.com/g/r.git").clone_url,
+            "https://gitlab.com/g/r.git"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_injected_refs_and_paths() {
+        for bad in [
+            "https://github.com/o/r/tree/--upload-pack=x/skills",
+            "https://github.com/o/r/tree/a~b/skills",
+            "https://github.com/o/r/tree/main/../etc",
+            "--upload-pack=x",
+            "-o/r",
+        ] {
+            assert!(parse_github_input(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn incomplete_cache_dir_is_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!is_complete_cache(tmp.path()));
+        fs::write(tmp.path().join(COMPLETE_MARKER), "x").unwrap();
+        assert!(is_complete_cache(tmp.path()));
     }
 
     #[test]

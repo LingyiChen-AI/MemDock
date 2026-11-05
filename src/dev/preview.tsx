@@ -15,6 +15,7 @@ import type { MemoryFile, MemoryIndex, Project } from "../api/types";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") ?? "dark";
+let previewAccent: string | null = params.get("accent");
 
 const file = (over: Partial<MemoryFile> & { id: string; path: string }): MemoryFile => ({
   tool: "claude",
@@ -159,9 +160,10 @@ mockIPC(
       case "read_codex_db":
         return { status: "unavailable", reason: "preview" };
       case "get_settings":
-        return { language: params.get("lang") ?? "zh", theme, manual_projects: [] };
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
       case "update_ui_prefs":
-        return { language: params.get("lang") ?? "zh", theme, manual_projects: [] };
+        if (a.accent) previewAccent = String(a.accent);
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
       case "plugin:dialog|open":
         return null;
       default:
@@ -182,3 +184,15 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
+// `?page=环境与设置` opens that nav item once the shell is rendered (screenshots of non-memory pages).
+const page = params.get("page");
+if (page) {
+  const timer = setInterval(() => {
+    const btn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === page);
+    if (btn) {
+      clearInterval(timer);
+      btn.click();
+    }
+  }, 100);
+}

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 
 vi.mock("@/api/memory", () => ({
-  getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, manual_projects: [] }),
+  getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, accent: null, manual_projects: [] }),
   updateUiPrefs: vi.fn(),
   addManualProject: vi.fn(),
   removeManualProject: vi.fn(),

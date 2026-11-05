@@ -42,7 +42,7 @@ describe("memory api", () => {
     await refreshMemories();
     expect(invoke).toHaveBeenLastCalledWith("refresh_memories");
     await updateUiPrefs("en", undefined);
-    expect(invoke).toHaveBeenLastCalledWith("update_ui_prefs", { language: "en", theme: null });
+    expect(invoke).toHaveBeenLastCalledWith("update_ui_prefs", { language: "en", theme: null, accent: null });
   });
 
   it("onMemoryChanged unwraps the payload", async () => {

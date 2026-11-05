@@ -16,6 +16,8 @@
     "comingSoon": "Coming soon",
     "language": "Language",
     "theme": "Theme",
+    "accent": "Accent color",
+    "accents": { "green": "Green", "blue": "Blue", "violet": "Violet", "orange": "Orange", "teal": "Teal" },
     "system": "System",
     "dark": "Dark",
     "light": "Light"

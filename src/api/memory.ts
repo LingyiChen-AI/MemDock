@@ -61,10 +61,15 @@ export function getSettings(): Promise<Settings> {
 }
 
 /** Omitted (or undefined) fields are left unchanged. */
-export function updateUiPrefs(language?: string, theme?: string): Promise<Settings> {
+export function updateUiPrefs(
+  language?: string,
+  theme?: string,
+  accent?: string,
+): Promise<Settings> {
   return invoke<Settings>("update_ui_prefs", {
     language: language ?? null,
     theme: theme ?? null,
+    accent: accent ?? null,
   });
 }
 

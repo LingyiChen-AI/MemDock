@@ -7,8 +7,11 @@ interface Prefs {
   language: string | null;
   /** Raw stored value: null = default (dark). */
   theme: string | null;
+  /** Raw stored value: null = default (green). */
+  accent: string | null;
   setLanguage: (language: string) => void;
   setTheme: (theme: string) => void;
+  setAccent: (accent: string) => void;
 }
 
 const PrefsContext = React.createContext<Prefs | null>(null);
@@ -20,12 +23,14 @@ const PrefsContext = React.createContext<Prefs | null>(null);
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = React.useState<string | null>(null);
   const [theme, setThemeState] = React.useState<string | null>(null);
+  const [accent, setAccentState] = React.useState<string | null>(null);
   // Once the user changes something, a late getSettings result must not overwrite it.
   const touched = React.useRef(false);
 
   const adopt = React.useCallback((s: Settings) => {
     setLanguageState(s.language);
     setThemeState(s.theme);
+    setAccentState(s.accent ?? null);
   }, []);
 
   React.useEffect(() => {
@@ -45,10 +50,13 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   // Per-field sequence counters: only the latest change of a field may adopt or roll back.
   const langSeq = React.useRef(0);
   const themeSeq = React.useRef(0);
+  const accentSeq = React.useRef(0);
   const langRef = React.useRef<string | null>(null);
   const themeRef = React.useRef<string | null>(null);
   langRef.current = language;
   themeRef.current = theme;
+  const accentRef = React.useRef<string | null>(null);
+  accentRef.current = accent;
 
   const setLanguage = React.useCallback((next: string) => {
     touched.current = true;
@@ -82,9 +90,25 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  const setAccent = React.useCallback((next: string) => {
+    touched.current = true;
+    const prev = accentRef.current;
+    const seq = ++accentSeq.current;
+    setAccentState(next);
+    updateUiPrefs(undefined, undefined, next).then(
+      (s) => {
+        if (seq === accentSeq.current) setAccentState(s.accent ?? null);
+      },
+      (err) => {
+        console.error("failed to save accent preference", err);
+        if (seq === accentSeq.current) setAccentState(prev);
+      },
+    );
+  }, []);
+
   const value = React.useMemo(
-    () => ({ language, theme, setLanguage, setTheme }),
-    [language, theme, setLanguage, setTheme],
+    () => ({ language, theme, accent, setLanguage, setTheme, setAccent }),
+    [language, theme, accent, setLanguage, setTheme, setAccent],
   );
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>;
 }

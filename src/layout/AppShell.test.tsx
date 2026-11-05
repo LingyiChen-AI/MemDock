@@ -12,7 +12,7 @@ import { getSettings, updateUiPrefs } from "@/api/memory";
 import { AppProviders } from "@/providers";
 import { AppShell, type NavKey } from "./AppShell";
 
-const base: Settings = { language: null, theme: null, manual_projects: [] };
+const base: Settings = { language: null, theme: null, accent: null, manual_projects: [] };
 
 function mockSettings(s: Partial<Settings>) {
   (getSettings as Mock).mockResolvedValue({ ...base, ...s });

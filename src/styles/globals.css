@@ -71,12 +71,12 @@
   --popover-foreground: #0f172a;
   --sidebar: #f1f5f9;
   --sidebar-foreground: #0f172a;
-  --sidebar-primary: #16a34a;
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: #e2e8f0;
   --sidebar-accent-foreground: #0f172a;
   --sidebar-border: #e2e8f0;
-  --sidebar-ring: #16a34a;
+  --sidebar-ring: var(--ring);
   --muted: #f1f5f9;
   --muted-foreground: #475569;
   --secondary: #f1f5f9;
@@ -105,12 +105,12 @@
   --popover-foreground: #f8fafc;
   --sidebar: #0b1222;
   --sidebar-foreground: #f8fafc;
-  --sidebar-primary: #22c55e;
-  --sidebar-primary-foreground: #0f172a;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: #272f42;
   --sidebar-accent-foreground: #f8fafc;
   --sidebar-border: #334155;
-  --sidebar-ring: #4ade80;
+  --sidebar-ring: var(--ring);
   --muted: #272f42;
   --muted-foreground: #94a3b8;
   --secondary: #272f42;
@@ -127,6 +127,57 @@
   --ring: #4ade80;
   --tool-claude: #f59e0b;
   --tool-codex: #38bdf8;
+}
+
+/* Accent colors (design system section 3). Green is the default in :root / .dark above.
+   Only --primary, --primary-foreground, --accent-text and --ring change; --ring = accent-text in dark, primary in light. */
+html[data-accent="blue"] {
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --accent-text: #1d4ed8;
+  --ring: #2563eb;
+}
+html.dark[data-accent="blue"] {
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --accent-text: #60a5fa;
+  --ring: #60a5fa;
+}
+html[data-accent="violet"] {
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --accent-text: #6d28d9;
+  --ring: #7c3aed;
+}
+html.dark[data-accent="violet"] {
+  --primary: #8b5cf6;
+  --primary-foreground: #ffffff;
+  --accent-text: #a78bfa;
+  --ring: #a78bfa;
+}
+html[data-accent="orange"] {
+  --primary: #ea580c;
+  --primary-foreground: #ffffff;
+  --accent-text: #c2410c;
+  --ring: #ea580c;
+}
+html.dark[data-accent="orange"] {
+  --primary: #f97316;
+  --primary-foreground: #0f172a;
+  --accent-text: #fb923c;
+  --ring: #fb923c;
+}
+html[data-accent="teal"] {
+  --primary: #0d9488;
+  --primary-foreground: #ffffff;
+  --accent-text: #0f766e;
+  --ring: #0d9488;
+}
+html.dark[data-accent="teal"] {
+  --primary: #14b8a6;
+  --primary-foreground: #0f172a;
+  --accent-text: #2dd4bf;
+  --ring: #2dd4bf;
 }
 
 @layer base {

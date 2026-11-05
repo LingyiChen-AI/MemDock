@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 
 vi.mock("@/api/memory", () => ({
-  getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, manual_projects: [] }),
+  getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, accent: null, manual_projects: [] }),
   updateUiPrefs: vi.fn(),
   listMemories: vi.fn().mockResolvedValue({ global: [], projects: [] }),
   onMemoryChanged: vi.fn().mockResolvedValue(() => {}),

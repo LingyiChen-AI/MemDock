@@ -16,6 +16,8 @@
     "comingSoon": "即将推出",
     "language": "语言",
     "theme": "主题",
+    "accent": "主题色",
+    "accents": { "green": "绿", "blue": "蓝", "violet": "紫", "orange": "橙", "teal": "青" },
     "system": "跟随系统",
     "dark": "暗色",
     "light": "亮色"

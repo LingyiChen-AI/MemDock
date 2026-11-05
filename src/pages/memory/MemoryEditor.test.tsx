@@ -5,7 +5,7 @@ import { vi, type Mock } from "vitest";
 import type { FileContentDto, MemoryChangedPayload } from "@/api/types";
 
 vi.mock("@/api/memory", () => ({
-  getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, manual_projects: [] }),
+  getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, accent: null, manual_projects: [] }),
   updateUiPrefs: vi.fn(),
   readMemoryFile: vi.fn(),
   writeMemoryFile: vi.fn(),

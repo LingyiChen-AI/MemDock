@@ -11,6 +11,8 @@ pub struct Settings {
     pub language: Option<String>,
     /// "dark" | "light" | "system"; empty means "dark".
     pub theme: Option<String>,
+    /// "green" | "blue" | "violet" | "orange" | "teal"; empty means "green".
+    pub accent: Option<String>,
     pub manual_projects: Vec<String>,
 }
 
@@ -63,6 +65,7 @@ mod tests {
         let s = Settings {
             language: Some("zh-CN".to_string()),
             theme: Some("dark".to_string()),
+            accent: Some("blue".to_string()),
             manual_projects: vec!["/a".to_string()],
         };
         save_settings(&path, &s).unwrap();

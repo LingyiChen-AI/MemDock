@@ -92,11 +92,15 @@ export type CodexDbResult =
   | { status: "ok"; entries: CodexMemoryEntry[] }
   | { status: "unavailable"; reason: string };
 
+export type Accent = "green" | "blue" | "violet" | "orange" | "teal";
+
 export type Theme = "dark" | "light" | "system";
 
 export interface Settings {
   language: string | null;
   theme: string | null;
+  /** "green" | "blue" | "violet" | "orange" | "teal"; null = green. */
+  accent: string | null;
   manual_projects: string[];
 }
 

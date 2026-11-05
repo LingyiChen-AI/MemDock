@@ -274,7 +274,13 @@ pub fn update_ui_prefs_impl(
     state: &AppState,
     language: Option<String>,
     theme: Option<String>,
+    accent: Option<String>,
 ) -> Result<Settings, CommandError> {
+    if let Some(a) = &accent {
+        if !matches!(a.as_str(), "green" | "blue" | "violet" | "orange" | "teal") {
+            return Err(CommandError::new("invalid", format!("invalid accent: {a}")));
+        }
+    }
     if let Some(t) = &theme {
         if !matches!(t.as_str(), "dark" | "light" | "system") {
             return Err(CommandError::new("invalid", format!("invalid theme: {t}")));
@@ -289,6 +295,9 @@ pub fn update_ui_prefs_impl(
         }
         if theme.is_some() {
             s.theme = theme;
+        }
+        if accent.is_some() {
+            s.accent = accent;
         }
     })
 }
@@ -372,8 +381,9 @@ pub fn update_ui_prefs(
     state: St,
     language: Option<String>,
     theme: Option<String>,
+    accent: Option<String>,
 ) -> Result<Settings, CommandError> {
-    update_ui_prefs_impl(&state, language, theme)
+    update_ui_prefs_impl(&state, language, theme, accent)
 }
 
 #[cfg(test)]
@@ -530,21 +540,46 @@ mod tests {
     fn language_system_clears_but_theme_system_is_stored() {
         let tmp = tempfile::tempdir().unwrap();
         let st = state(tmp.path());
-        update_ui_prefs_impl(&st, Some("en".into()), Some("system".into())).unwrap();
-        let s = update_ui_prefs_impl(&st, Some("system".into()), None).unwrap();
+        update_ui_prefs_impl(&st, Some("en".into()), Some("system".into()), None).unwrap();
+        let s = update_ui_prefs_impl(&st, Some("system".into()), None, None).unwrap();
         assert_eq!(s.language, None);
         assert_eq!(s.theme.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn update_ui_prefs_accent_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        for a in ["green", "blue", "violet", "orange", "teal"] {
+            let s = update_ui_prefs_impl(&st, None, None, Some(a.into())).unwrap();
+            assert_eq!(s.accent.as_deref(), Some(a));
+            assert_eq!(get_settings_impl(&st).accent.as_deref(), Some(a));
+        }
+        // Other fields are untouched by an accent-only update.
+        update_ui_prefs_impl(&st, Some("en".into()), Some("light".into()), None).unwrap();
+        let s = get_settings_impl(&st);
+        assert_eq!(s.accent.as_deref(), Some("teal"));
+    }
+
+    #[test]
+    fn update_ui_prefs_rejects_unknown_accent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        update_ui_prefs_impl(&st, None, None, Some("blue".into())).unwrap();
+        let err = update_ui_prefs_impl(&st, None, None, Some("pink".into())).unwrap_err();
+        assert_eq!(err.code, "invalid");
+        assert_eq!(get_settings_impl(&st).accent.as_deref(), Some("blue"));
     }
 
     #[test]
     fn ui_prefs_validate_and_persist() {
         let tmp = tempfile::tempdir().unwrap();
         let st = state(tmp.path());
-        let s = update_ui_prefs_impl(&st, Some("zh-CN".into()), Some("light".into())).unwrap();
+        let s = update_ui_prefs_impl(&st, Some("zh-CN".into()), Some("light".into()), None).unwrap();
         assert_eq!(s.theme.as_deref(), Some("light"));
-        let s = update_ui_prefs_impl(&st, None, Some("system".into())).unwrap();
+        let s = update_ui_prefs_impl(&st, None, Some("system".into()), None).unwrap();
         assert_eq!(s.language.as_deref(), Some("zh-CN"));
-        let err = update_ui_prefs_impl(&st, None, Some("neon".into())).unwrap_err();
+        let err = update_ui_prefs_impl(&st, None, Some("neon".into()), None).unwrap_err();
         assert_eq!(err.code, "invalid");
         assert_eq!(get_settings_impl(&st).theme.as_deref(), Some("system"));
     }

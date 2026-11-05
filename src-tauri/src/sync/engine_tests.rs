@@ -6,6 +6,7 @@ use crate::memory::scan::scan_all;
 use crate::model::{Project, ProjectSource};
 use crate::skills::git::testutil::git;
 use crate::sync::layout::map_files;
+use crate::sync::repo::TreeBlob;
 use tempfile::TempDir;
 
 const P_KEY: &str = "github.com/me/p";
@@ -54,6 +55,27 @@ impl World {
             .map(|b| String::from_utf8(b).unwrap())
     }
 
+    /// Commits changes directly on top of `main`, as another machine would.
+    fn push_raw(&self, changes: &[(&str, Option<&str>)]) {
+        let g = SyncGit::new();
+        let seed = self.t.path().join("seed");
+        let head = g.fetch(&seed, &None).unwrap().unwrap();
+        let mut tree: BTreeMap<String, TreeBlob> = g
+            .tree_entries(&seed, &head)
+            .unwrap()
+            .into_iter()
+            .map(|(p, s)| (p, TreeBlob::Sha(s)))
+            .collect();
+        for (p, c) in changes {
+            match c {
+                Some(c) => tree.insert(p.to_string(), TreeBlob::Data(c.as_bytes().to_vec())),
+                None => tree.remove(*p),
+            };
+        }
+        let c = g.commit_tree_blobs(&seed, Some(&head), &tree, "raw", SYNC_AUTHOR).unwrap();
+        g.push(&seed, &c, "main", &None).unwrap();
+    }
+
     /// A new machine: temporary home plus its own clone.
     fn machine(&self, name: &str) -> Pc {
         let root = self.t.path().join(name);
@@ -90,7 +112,7 @@ struct Pc {
     machine: Machine,
     projects: Vec<Project>,
     base: Option<String>,
-    synced: Vec<String>,
+    synced: Vec<SyncedProject>,
     lock: Mutex<()>,
     git: SyncGit,
 }
@@ -98,7 +120,12 @@ struct Pc {
 impl Pc {
     /// Adds project `p` (origin github.com/me/p) and returns its directory.
     fn add_project(&mut self) -> PathBuf {
-        let dir = self.root.join("work").join("p");
+        self.add_project_at("p")
+    }
+
+    /// Adds a clone of github.com/me/p in directory `work/<name>`.
+    fn add_project_at(&mut self, name: &str) -> PathBuf {
+        let dir = self.root.join("work").join(name);
         fs::create_dir_all(dir.join(".git")).unwrap();
         fs::write(
             dir.join(".git").join("config"),
@@ -153,9 +180,18 @@ impl Pc {
         res: &BTreeMap<String, Resolution>,
     ) -> Result<SyncSummary, SyncError> {
         let r = finish(&self.ctx(), plan, res);
-        if let Ok(s) = &r {
-            self.base = s.commit.clone();
-            self.synced = s.synced_projects.clone();
+        match &r {
+            Ok(s) => {
+                self.base = s.commit.clone();
+                self.synced = s.synced_projects.clone();
+            }
+            // what the real caller does on failure after local writes
+            Err(e) => {
+                if let Some(b) = e.base_to_persist() {
+                    self.base = b.commit.clone();
+                    self.synced = b.synced_projects.clone();
+                }
+            }
         }
         r
     }
@@ -178,6 +214,10 @@ fn read(p: &Path) -> String {
     fs::read_to_string(p).unwrap().replace("\r\n", "\n")
 }
 
+fn keys(v: &[SyncedProject]) -> Vec<String> {
+    v.iter().map(|p| p.key.clone()).collect()
+}
+
 fn text_res(path: &str, text: &str) -> BTreeMap<String, Resolution> {
     BTreeMap::from([(path.to_string(), Resolution::Text(text.to_string()))])
 }
@@ -197,7 +237,7 @@ fn first_sync_pushes_everything() {
     let s = a.sync();
     assert!(s.committed);
     assert_eq!(s.pushed, 3);
-    assert_eq!(s.synced_projects, vec![P_KEY.to_string()]);
+    assert_eq!(keys(&s.synced_projects), vec![P_KEY.to_string()]);
     assert_eq!(s.commit.as_deref(), Some(w.head().as_str()));
     assert_eq!(w.file(GLOBAL).as_deref(), Some("global rules\n"));
     assert_eq!(w.file(CODEX).as_deref(), Some("codex rules\n"));
@@ -330,6 +370,7 @@ fn remote_deletion_prompts_default_keep() {
     let mut a = w.machine("A");
     let pa = a.add_project();
     write(&pa.join("CLAUDE.md"), "keep me\n");
+    write(&pa.join("AGENTS.md"), "stays\n");
     a.sync();
     let mut b = w.machine("B");
     let pb = b.add_project();
@@ -385,7 +426,10 @@ fn secret_blocks_everything() {
     let hit = &plan.secret_hits[0];
     assert_eq!((hit.repo_path.as_str(), hit.line, hit.rule.as_str()), (GLOBAL, 2, "github_token"));
     match b.finish(&plan, &BTreeMap::new()) {
-        Err(SyncError::Secrets(h)) => assert_eq!(h.len(), 1),
+        Err(SyncError::Secrets { hits, base }) => {
+            assert_eq!(hits.len(), 1);
+            assert_eq!(base, None);
+        }
         other => panic!("expected Secrets, got {other:?}"),
     }
     assert_eq!(w.head(), head);
@@ -398,7 +442,7 @@ fn secret_blocks_everything() {
     let plan = b.prepare();
     assert_eq!(plan.conflicts.len(), 1);
     let r = b.finish(&plan, &text_res(GLOBAL, &format!("x {token}\n")));
-    assert!(matches!(r, Err(SyncError::Secrets(_))));
+    assert!(matches!(r, Err(SyncError::Secrets { .. })));
     assert_eq!(read(&b.global()), "clean\n");
 }
 
@@ -469,7 +513,8 @@ fn push_race_with_new_conflict_is_remote_moved() {
     write(&b.global(), "B1\nl2\nl3\nl4\nl5\n");
     b.sync();
     let head = w.head();
-    assert_eq!(a.finish(&plan, &BTreeMap::new()), Err(SyncError::RemoteMoved));
+    let r = a.finish(&plan, &BTreeMap::new());
+    assert!(matches!(r, Err(SyncError::RemoteMoved { .. })), "{r:?}");
     assert_eq!(w.head(), head);
 }
 
@@ -567,7 +612,7 @@ fn project_appearing_later_pulls_not_deletes() {
     assert_eq!(pulled, vec![p_path("claude/CLAUDE.md"), p_path("codex/AGENTS.md")]);
     assert!(plan.push_local.is_empty() && plan.remote_deleted.is_empty());
     let s = b.finish(&plan, &BTreeMap::new()).unwrap();
-    assert_eq!(s.synced_projects, vec![P_KEY.to_string()]);
+    assert_eq!(keys(&s.synced_projects), vec![P_KEY.to_string()]);
     assert_eq!(read(&pb.join("CLAUDE.md")), "project memory\n");
     assert_eq!(read(&pb.join("AGENTS.md")), "agents\n");
     assert_eq!(w.file(&p_path("claude/CLAUDE.md")).as_deref(), Some("project memory\n"));
@@ -697,4 +742,329 @@ fn manifest_merges_local_skills() {
     let s = finish(&ctx, &plan, &BTreeMap::new()).unwrap();
     assert!(!s.committed);
     assert_eq!(w.head(), head);
+}
+
+// ------------------------------------------------------ fix round 1 tests
+
+/// Fakes a Claude session so the project at `dir` has an auto-memory folder;
+/// returns that `memory` directory.
+fn fake_session(pc: &Pc, dir: &Path) -> PathBuf {
+    let enc = pc.paths.claude_home.join("projects").join("enc");
+    fs::create_dir_all(enc.join("memory")).unwrap();
+    let cwd = dir.to_string_lossy().replace('\\', "\\\\");
+    fs::write(
+        enc.join("s.jsonl"),
+        format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n"),
+    )
+    .unwrap();
+    enc.join("memory")
+}
+
+#[test]
+fn race_after_keep_local_retries_without_prompt() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&pa.join("CLAUDE.md"), "keep me\n");
+    write(&pa.join("AGENTS.md"), "stays\n");
+    a.sync();
+    let mut b = w.machine("B");
+    let pb = b.add_project();
+    b.sync();
+    fs::remove_file(pb.join("CLAUDE.md")).unwrap();
+    b.sync();
+
+    let path = p_path("claude/CLAUDE.md");
+    let plan = a.prepare();
+    assert_eq!(plan.remote_deleted, vec![path.clone()]);
+    w.push_raw(&[(CODEX, Some("raced\n"))]);
+    let res = BTreeMap::from([(path.clone(), Resolution::KeepLocal)]);
+    let s = a.finish(&plan, &res).unwrap();
+    assert!(s.committed);
+    assert_eq!(w.file(&path).as_deref(), Some("keep me\n"));
+    assert_eq!(w.file(CODEX).as_deref(), Some("raced\n"));
+    assert_eq!(read(&a.codex()), "raced\n");
+    // nothing left over for the next sync
+    let next = a.prepare();
+    assert!(next.remote_deleted.is_empty() && next.push_local.is_empty());
+}
+
+#[test]
+fn race_on_pulled_file_has_no_false_conflict() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), FIVE);
+    a.sync();
+    w.push_raw(&[(GLOBAL, Some("R1\nl2\nl3\nl4\nl5\n"))]);
+    write(&a.codex(), "codex of A\n");
+    let plan = a.prepare();
+    assert_eq!(plan.take_remote, vec![GLOBAL.to_string()]);
+    assert_eq!(plan.push_local, vec![CODEX.to_string()]);
+    // the same line changes again remotely before A pushes
+    w.push_raw(&[(GLOBAL, Some("R2\nl2\nl3\nl4\nl5\n"))]);
+    let s = a.finish(&plan, &BTreeMap::new()).unwrap();
+    assert!(s.committed);
+    assert_eq!(read(&a.global()), "R2\nl2\nl3\nl4\nl5\n");
+    assert_eq!(w.file(GLOBAL).as_deref(), Some("R2\nl2\nl3\nl4\nl5\n"));
+    assert_eq!(w.file(CODEX).as_deref(), Some("codex of A\n"));
+    assert_eq!(s.pulled, 1, "a file pulled twice counts once");
+}
+
+#[test]
+fn race_counts_merged_once() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), FIVE);
+    a.sync();
+    w.push_raw(&[(GLOBAL, Some("l1\nl2\nl3\nl4\nR5\n"))]);
+    write(&a.global(), "A1\nl2\nl3\nl4\nl5\n");
+    let plan = a.prepare();
+    assert_eq!(plan.merged, vec![GLOBAL.to_string()]);
+    w.push_raw(&[(CODEX, Some("x\n"))]);
+    let s = a.finish(&plan, &BTreeMap::new()).unwrap();
+    assert_eq!(s.merged, 1);
+    assert_eq!(w.file(GLOBAL).as_deref(), Some("A1\nl2\nl3\nl4\nR5\n"));
+}
+
+#[test]
+fn race_with_secret_returns_secrets_and_base() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), FIVE);
+    a.sync();
+    write(&a.global(), "A1\nl2\nl3\nl4\nl5\n");
+    let plan = a.prepare();
+    let r1 = plan.remote_commit.clone();
+    let token = format!("ghp_{}", "a1B2c3D4e5".repeat(4));
+    w.push_raw(&[(GLOBAL, Some(&format!("l1\nl2\nl3\nl4\nkey {token}\n")))]);
+    let head = w.head();
+    match a.finish(&plan, &BTreeMap::new()) {
+        Err(SyncError::Secrets { hits, base }) => {
+            assert_eq!(hits[0].repo_path, GLOBAL);
+            assert_eq!(base.unwrap().commit, r1);
+        }
+        other => panic!("expected Secrets, got {other:?}"),
+    }
+    assert_eq!(w.head(), head);
+}
+
+#[test]
+fn push_failure_persists_base_and_next_sync_is_clean() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), FIVE);
+    a.sync();
+    w.push_raw(&[(GLOBAL, Some("R1\nl2\nl3\nl4\nl5\n"))]);
+    write(&a.global(), "A1\nl2\nl3\nl4\nl5\n");
+    let plan = a.prepare();
+    assert_eq!(plan.conflicts.len(), 1);
+    let r1 = plan.remote_commit.clone();
+
+    // the remote becomes unreachable between prepare and push
+    let moved = w.bare.with_extension("away");
+    fs::rename(&w.bare, &moved).unwrap();
+    let resolved = "A1 R1\nl2\nl3\nl4\nl5\n";
+    let r = a.finish(&plan, &text_res(GLOBAL, resolved));
+    fs::rename(&moved, &w.bare).unwrap();
+    match &r {
+        Err(SyncError::PushFailed { base, .. }) => assert_eq!(base.commit, r1),
+        other => panic!("expected PushFailed, got {other:?}"),
+    }
+    assert_eq!(read(&a.global()), resolved);
+    assert_eq!(a.base, r1, "caller persisted the new base");
+
+    // next sync: no replayed conflict, the resolution is pushed
+    let plan = a.prepare();
+    assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+    assert_eq!(plan.push_local, vec![GLOBAL.to_string()]);
+    a.finish(&plan, &BTreeMap::new()).unwrap();
+    assert_eq!(w.file(GLOBAL).as_deref(), Some(resolved));
+}
+
+#[test]
+fn moved_project_dir_pulls_not_deletes() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&pa.join("CLAUDE.md"), "project memory\n");
+    a.sync();
+    let mut b = w.machine("B");
+    let old = b.add_project();
+    b.sync();
+    assert_eq!(read(&old.join("CLAUDE.md")), "project memory\n");
+
+    // the project is re-cloned somewhere else on B, without memory files
+    fs::remove_dir_all(&old).unwrap();
+    b.projects.clear();
+    let new = b.add_project_at("p-moved");
+    let plan = b.prepare();
+    assert!(plan.push_local.is_empty() && plan.local_all_deleted.is_empty());
+    assert_eq!(plan.take_remote, vec![p_path("claude/CLAUDE.md")]);
+    let s = b.finish(&plan, &BTreeMap::new()).unwrap();
+    assert_eq!(read(&new.join("CLAUDE.md")), "project memory\n");
+    assert_eq!(w.file(&p_path("claude/CLAUDE.md")).as_deref(), Some("project memory\n"));
+    assert_eq!(s.synced_projects[0].dir, normalize_path(&new.to_string_lossy()));
+}
+
+#[test]
+fn all_files_deleted_in_place_is_held() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&pa.join("CLAUDE.md"), "c\n");
+    write(&pa.join("AGENTS.md"), "g\n");
+    a.sync();
+    let mut b = w.machine("B");
+    let pb = b.add_project();
+    b.sync();
+    fs::remove_file(pb.join("CLAUDE.md")).unwrap();
+    fs::remove_file(pb.join("AGENTS.md")).unwrap();
+    let head = w.head();
+
+    let (claude, agents) = (p_path("claude/CLAUDE.md"), p_path("codex/AGENTS.md"));
+    let plan = b.prepare();
+    let mut held = plan.local_all_deleted.clone();
+    held.sort();
+    assert_eq!(held, vec![claude.clone(), agents.clone()]);
+    assert!(plan.push_local.is_empty() && plan.take_remote.is_empty());
+    // default: nothing happens on either side
+    let s = b.finish(&plan, &BTreeMap::new()).unwrap();
+    assert!(!s.committed);
+    assert_eq!(w.head(), head);
+    assert!(!pb.join("CLAUDE.md").exists());
+
+    let plan = b.prepare();
+    assert_eq!(plan.local_all_deleted.len(), 2);
+    let res = BTreeMap::from([
+        (claude.clone(), Resolution::KeepRemote),
+        (agents.clone(), Resolution::DeleteRemote),
+    ]);
+    b.finish(&plan, &res).unwrap();
+    assert_eq!(read(&pb.join("CLAUDE.md")), "c\n");
+    assert_eq!(w.file(&claude).as_deref(), Some("c\n"));
+    assert_eq!(w.file(&agents), None);
+    assert!(!pb.join("AGENTS.md").exists());
+}
+
+#[test]
+fn conflict_with_deleted_side_accepts_delete_local() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&pa.join("CLAUDE.md"), "v1\n");
+    write(&pa.join("AGENTS.md"), "keep project synced\n");
+    a.sync();
+    // remote modified, local deleted
+    w.push_raw(&[(&p_path("claude/CLAUDE.md"), Some("v2\n"))]);
+    fs::remove_file(pa.join("CLAUDE.md")).unwrap();
+    let plan = a.prepare();
+    assert_eq!(plan.conflicts.len(), 1);
+    assert_eq!(plan.conflicts[0].local, None);
+    let res = BTreeMap::from([(p_path("claude/CLAUDE.md"), Resolution::DeleteLocal)]);
+    a.finish(&plan, &res).unwrap();
+    assert_eq!(w.file(&p_path("claude/CLAUDE.md")), None);
+    assert!(!pa.join("CLAUDE.md").exists());
+
+    // remote deleted, local modified
+    w.push_raw(&[(&p_path("codex/AGENTS.md"), None)]);
+    write(&pa.join("AGENTS.md"), "changed here\n");
+    let plan = a.prepare();
+    assert_eq!(plan.conflicts.len(), 1);
+    assert_eq!(plan.conflicts[0].remote, None);
+    let res = BTreeMap::from([(p_path("codex/AGENTS.md"), Resolution::DeleteLocal)]);
+    a.finish(&plan, &res).unwrap();
+    assert!(!pa.join("AGENTS.md").exists());
+    assert_eq!(a.snaps.list(&pa.join("AGENTS.md")).unwrap().len(), 1);
+    assert_eq!(w.file(&p_path("codex/AGENTS.md")), None);
+}
+
+#[test]
+fn case_collision_is_skipped() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    let mem = fake_session(&a, &pa);
+    write(&a.global(), "g\n");
+    a.sync();
+    let (up, low) = (p_path("claude/memory/Note.md"), p_path("claude/memory/note.md"));
+    w.push_raw(&[(&up, Some("1\n")), (&low, Some("2\n"))]);
+    let plan = a.prepare();
+    let mut skipped: Vec<(String, String)> = plan
+        .skipped
+        .iter()
+        .map(|s| (s.repo_path.clone(), s.reason.clone()))
+        .collect();
+    skipped.sort();
+    assert_eq!(
+        skipped,
+        vec![(up.clone(), "case_collision".into()), (low.clone(), "case_collision".into())]
+    );
+    a.finish(&plan, &BTreeMap::new()).unwrap();
+    assert!(fs::read_dir(&mem).unwrap().next().is_none());
+    assert!(w.file(&up).is_some() && w.file(&low).is_some());
+}
+
+#[test]
+fn skills_json_is_scanned() {
+    use crate::model::Tool;
+    use crate::sync::manifest::ManifestScope;
+    let w = World::new();
+    let a = w.machine("A");
+    let token = format!("ghp_{}", "a1B2c3D4e5".repeat(4));
+    let skill = ManifestSkill {
+        name: token,
+        url: "https://github.com/x/skills".into(),
+        git_ref: None,
+        commit: None,
+        skill_path: "s".into(),
+        tool: Tool::Claude,
+        scope: ManifestScope::Global,
+        installed_on: Default::default(),
+        removed_on: Default::default(),
+    };
+    let ctx = SyncCtx {
+        local_skills: Some(vec![skill]),
+        ..a.ctx()
+    };
+    let head = w.head();
+    let plan = prepare(&ctx).unwrap();
+    assert!(plan.secret_hits.iter().any(|h| h.repo_path == SKILLS_JSON));
+    assert!(matches!(
+        finish(&ctx, &plan, &BTreeMap::new()),
+        Err(SyncError::Secrets { .. })
+    ));
+    assert_eq!(w.head(), head);
+}
+
+#[test]
+fn many_files_use_few_git_processes() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    let mem = fake_session(&a, &pa);
+    for i in 0..200 {
+        write(&mem.join(format!("m{i:03}.md")), &format!("memory {i}\n"));
+    }
+    let t0 = std::time::Instant::now();
+    let before = a.git.spawn_count();
+    let s = a.sync();
+    let used = a.git.spawn_count() - before;
+    assert_eq!(s.pushed, 200);
+    assert!(used <= 20, "first sync of 200 files used {used} git processes");
+
+    let mut b = w.machine("B");
+    let pb = b.add_project();
+    let mem_b = fake_session(&b, &pb);
+    let before = b.git.spawn_count();
+    let s = b.sync();
+    let used = b.git.spawn_count() - before;
+    assert_eq!(s.pulled, 200);
+    assert!(used <= 20, "pull of 200 files used {used} git processes");
+    assert_eq!(read(&mem_b.join("m199.md")), "memory 199\n");
+
+    // nothing changed: still bounded
+    let before = a.git.spawn_count();
+    a.sync();
+    assert!(a.git.spawn_count() - before <= 12);
+    eprintln!("many_files_use_few_git_processes: {:?}", t0.elapsed());
 }

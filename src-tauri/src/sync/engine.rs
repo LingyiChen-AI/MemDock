@@ -6,10 +6,14 @@
 //! resolutions, writes local files (under `write_lock`), builds one commit on
 //! top of the remote head and pushes it, retrying once when the remote moved.
 //!
-//! The engine does not persist sync state: `SyncSummary` carries what the
-//! caller must store (`last_sync_commit`, `synced_projects`).
+//! The engine does not persist sync state: `SyncSummary` (and, after local
+//! files were written, `SyncError::base_to_persist`) carries what the caller
+//! must store (`last_sync_commit`, `synced_projects`).
+//!
+//! Files are compared by git blob id (of the normalized text); blob contents
+//! are only read when a file is pulled, merged or shown as a conflict.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -28,7 +32,8 @@ use crate::sync::layout::{
     dir_key, expected_local_path, normalize_text, project_key, safe_key, Machine, SyncFile,
 };
 use crate::sync::manifest::{self, Manifest, ManifestSkill};
-use crate::sync::repo::{Auth, CommitInfo, SyncGit, SyncGitError};
+use crate::sync::repo::{blob_id, Auth, CommitInfo, SyncGit, SyncGitError, TreeBlob};
+use crate::sync::state::SyncedProject;
 
 /// Author and committer of every sync commit.
 pub const SYNC_AUTHOR: (&str, &str) = ("MemDock", "memdock@users.noreply.github.com");
@@ -49,8 +54,9 @@ pub struct SyncCtx<'a> {
     pub files: Vec<SyncFile>,
     /// Projects taking part on this machine (`sync_projects`).
     pub projects: Vec<(String, PathBuf)>,
-    /// `SyncState.synced_projects`: the base is only valid for these projects.
-    pub synced_projects: Vec<String>,
+    /// `SyncState.synced_projects`: the base is only valid for these projects
+    /// while their directory is unchanged.
+    pub synced_projects: Vec<SyncedProject>,
     pub paths: &'a AgentPaths,
     pub machine: &'a Machine,
     /// `manifest::local_entries(..)` of this machine; `None` when the skill
@@ -85,7 +91,27 @@ pub fn sync_projects(index: &MemoryIndex, included_local: &[String]) -> Vec<(Str
     out
 }
 
+/// `synced_projects` describing the projects of `ctx` right now.
+fn current_synced(ctx: &SyncCtx) -> Vec<SyncedProject> {
+    ctx.projects
+        .iter()
+        .map(|(k, d)| SyncedProject {
+            key: k.clone(),
+            dir: normalize_path(&d.to_string_lossy()),
+        })
+        .collect()
+}
+
 // ------------------------------------------------------------------ types
+
+/// What the caller must store as sync state.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SyncBase {
+    /// New `last_sync_commit`.
+    pub commit: Option<String>,
+    /// New `synced_projects`.
+    pub synced_projects: Vec<SyncedProject>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncError {
@@ -93,14 +119,33 @@ pub enum SyncError {
     Io(String),
     /// `skills.json` in the repository could not be read: abort.
     Manifest(String),
-    /// Conflicts without a valid `Text` resolution (or invalid resolutions).
+    /// Conflicts without a valid resolution (or invalid resolutions).
     Unresolved { paths: Vec<String> },
-    /// Content about to be pushed contains secrets; nothing was written.
-    Secrets(Vec<FileSecretHit>),
+    /// Content about to be pushed contains secrets; nothing was pushed.
+    /// `base` is set when an earlier attempt already wrote local files.
+    Secrets {
+        hits: Vec<FileSecretHit>,
+        base: Option<SyncBase>,
+    },
     /// Local files changed after `prepare`; nothing was written.
     LocalChanged { paths: Vec<String> },
-    /// The remote moved again (or the retry needs user input); nothing pushed.
-    RemoteMoved,
+    /// The remote moved again (or the retry needs user input); nothing was
+    /// pushed, but local files were written: persist `base`.
+    RemoteMoved { base: SyncBase },
+    /// Local files were written, then committing / pushing failed: persist
+    /// `base` so the next sync does not replay this one as conflicts.
+    PushFailed { message: String, base: SyncBase },
+}
+
+impl SyncError {
+    /// Sync state the caller must persist even though the sync failed.
+    pub fn base_to_persist(&self) -> Option<&SyncBase> {
+        match self {
+            SyncError::Secrets { base, .. } => base.as_ref(),
+            SyncError::RemoteMoved { base } | SyncError::PushFailed { base, .. } => Some(base),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for SyncError {
@@ -110,11 +155,12 @@ impl fmt::Display for SyncError {
             SyncError::Io(m) => write!(f, "{m}"),
             SyncError::Manifest(m) => write!(f, "skills.json: {m}"),
             SyncError::Unresolved { paths } => write!(f, "unresolved: {}", paths.join(", ")),
-            SyncError::Secrets(h) => write!(f, "{} secret(s) found", h.len()),
+            SyncError::Secrets { hits, .. } => write!(f, "{} secret(s) found", hits.len()),
             SyncError::LocalChanged { paths } => {
                 write!(f, "changed during sync: {}", paths.join(", "))
             }
-            SyncError::RemoteMoved => write!(f, "the remote changed during sync"),
+            SyncError::RemoteMoved { .. } => write!(f, "the remote changed during sync"),
+            SyncError::PushFailed { message, .. } => write!(f, "push failed: {message}"),
         }
     }
 }
@@ -154,6 +200,7 @@ pub struct ConflictFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkippedFile {
     pub repo_path: String,
+    /// `not_utf8_local` / `not_utf8_remote` / `not_utf8_base` / `case_collision`.
     pub reason: String,
 }
 
@@ -164,6 +211,8 @@ enum Action {
     Merged(String),
     Conflict,
     RemoteDeleted,
+    /// Every memory file of a synced project is gone locally.
+    LocalAllDeleted,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +222,10 @@ struct Entry {
     /// sha256 of the raw local bytes at prepare time, "" when missing.
     local_hash: String,
     local: Option<String>,
+    /// Blob ids of the normalized local text and of the remote file.
+    l_sha: Option<String>,
+    r_sha: Option<String>,
+    /// Remote text, read only when needed (pull / merge / conflict).
     remote: Option<String>,
     action: Action,
 }
@@ -186,14 +239,18 @@ pub struct SyncPlan {
     pub merged: Vec<String>,
     pub conflicts: Vec<ConflictFile>,
     pub remote_deleted: Vec<String>,
+    /// Files of synced projects whose local memory files are all gone. By
+    /// default nothing happens to them; `DeleteRemote` / `KeepRemote` decide.
+    pub local_all_deleted: Vec<String>,
     pub secret_hits: Vec<FileSecretHit>,
     pub missing_skills: Vec<ManifestSkill>,
     pub removed_elsewhere: Vec<ManifestSkill>,
     pub skipped: Vec<SkippedFile>,
     #[serde(skip)]
     entries: Vec<Entry>,
+    /// `path -> blob id` of the remote head.
     #[serde(skip)]
-    remote_tree: BTreeMap<String, Vec<u8>>,
+    remote_tree: BTreeMap<String, String>,
     /// New `skills.json` text; `None` keeps the remote file unchanged.
     #[serde(skip)]
     manifest_json: Option<String>,
@@ -201,9 +258,17 @@ pub struct SyncPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Resolution {
+    /// Conflict: the resolved text.
     Text(String),
+    /// Remote deleted: delete the local file too. Conflict with one side
+    /// deleted: accept the deletion everywhere.
     DeleteLocal,
+    /// Remote deleted: keep the local file and push it back (default).
     KeepLocal,
+    /// Local all deleted: delete the file from the repository.
+    DeleteRemote,
+    /// Local all deleted: restore the remote file locally.
+    KeepRemote,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -217,7 +282,7 @@ pub struct SyncSummary {
     pub pushed: usize,
     pub merged: usize,
     /// Store as `SyncState.synced_projects`.
-    pub synced_projects: Vec<String>,
+    pub synced_projects: Vec<SyncedProject>,
 }
 
 // ---------------------------------------------------------------- helpers
@@ -260,247 +325,10 @@ fn scan_into(repo_path: &str, text: &str, out: &mut Vec<FileSecretHit>) {
     }
 }
 
-/// Project key of a `projects/<key>/...` path among the projects present here
-/// (longest match, as `expected_local_path`).
-fn project_of<'p>(repo_path: &str, projects: &'p [(String, PathBuf)]) -> Option<&'p str> {
-    let rest = repo_path.strip_prefix("projects/")?;
-    projects
-        .iter()
-        .filter(|(k, _)| rest.strip_prefix(k.as_str()).is_some_and(|t| t.starts_with('/')))
-        .max_by_key(|(k, _)| k.len())
-        .map(|(k, _)| k.as_str())
-}
-
-/// Whether the base commit is meaningful for `repo_path` on this machine.
-fn base_valid(ctx: &SyncCtx, repo_path: &str, key: Option<&str>) -> bool {
-    if GLOBAL_PATHS.contains(&repo_path) {
-        return true;
-    }
-    let key = key.or_else(|| project_of(repo_path, &ctx.projects));
-    key.is_some_and(|k| ctx.synced_projects.iter().any(|s| s == k))
-}
-
-/// Paths of the base commit, `None` without a usable base (no previous sync,
-/// or the commit is unknown to this clone).
-fn base_paths(ctx: &SyncCtx) -> Option<(String, Vec<String>)> {
-    let b = ctx.base_commit.as_ref()?;
-    ctx.git.list_at(ctx.repo_dir, b).ok().map(|l| (b.clone(), l))
-}
-
-/// One repo path to compare and the local file it maps to.
-struct Candidate {
-    repo_path: String,
-    local_path: PathBuf,
-    key: Option<String>,
-}
-
-/// `union(local files, base paths, remote paths)` restricted to files that map
-/// to this machine. Repo files of projects absent here are not included.
-fn candidates(ctx: &SyncCtx, base: &[String], remote: &[String]) -> Vec<Candidate> {
-    let mut out: Vec<Candidate> = Vec::new();
-    let mut seen_repo: HashSet<String> = HashSet::new();
-    let mut seen_local: HashSet<String> = HashSet::new();
-    for f in &ctx.files {
-        if seen_repo.insert(f.repo_path.clone()) {
-            seen_local.insert(normalize_path(&f.local_path.to_string_lossy()).to_lowercase());
-            out.push(Candidate {
-                repo_path: f.repo_path.clone(),
-                local_path: f.local_path.clone(),
-                key: f.project_key.clone(),
-            });
-        }
-    }
-    for p in base.iter().chain(remote.iter()) {
-        if seen_repo.contains(p) {
-            continue;
-        }
-        let Some(local) = expected_local_path(p, &ctx.projects, ctx.paths) else {
-            continue;
-        };
-        seen_repo.insert(p.clone());
-        // Two repo paths must never write the same local file.
-        if !seen_local.insert(normalize_path(&local.to_string_lossy()).to_lowercase()) {
-            continue;
-        }
-        out.push(Candidate {
-            repo_path: p.clone(),
-            local_path: local,
-            key: project_of(p, &ctx.projects).map(String::from),
-        });
-    }
-    out
-}
-
-// ---------------------------------------------------------------- prepare
-
-/// Fetches and builds the plan. Writes nothing locally or to the repository.
-pub fn prepare(ctx: &SyncCtx) -> Result<SyncPlan, SyncError> {
-    let remote = ctx.git.fetch(ctx.repo_dir, &ctx.auth)?;
-    build_plan(ctx, remote)
-}
-
-fn build_plan(ctx: &SyncCtx, remote: Option<String>) -> Result<SyncPlan, SyncError> {
-    let git = ctx.git;
-    let repo = ctx.repo_dir;
-
-    let mut remote_tree: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    if let Some(r) = &remote {
-        for p in git.list_at(repo, r)? {
-            if let Some(bytes) = git.read_at(repo, r, &p)? {
-                remote_tree.insert(p, bytes);
-            }
-        }
-    }
-    let remote_paths: Vec<String> = remote_tree.keys().cloned().collect();
-    let base = base_paths(ctx);
-    let base_list: Vec<String> = match &base {
-        Some((_, l)) => l
-            .iter()
-            .filter(|p| base_valid(ctx, p, None))
-            .cloned()
-            .collect(),
-        None => Vec::new(),
-    };
-
-    let mut plan = SyncPlan {
-        id: uuid::Uuid::new_v4().to_string(),
-        remote_commit: remote.clone(),
-        take_remote: Vec::new(),
-        push_local: Vec::new(),
-        merged: Vec::new(),
-        conflicts: Vec::new(),
-        remote_deleted: Vec::new(),
-        secret_hits: Vec::new(),
-        missing_skills: Vec::new(),
-        removed_elsewhere: Vec::new(),
-        skipped: Vec::new(),
-        entries: Vec::new(),
-        remote_tree: BTreeMap::new(),
-        manifest_json: None,
-    };
-
-    for c in candidates(ctx, &base_list, &remote_paths) {
-        let skip = |plan: &mut SyncPlan, reason: &str| {
-            plan.skipped.push(SkippedFile {
-                repo_path: c.repo_path.clone(),
-                reason: reason.to_string(),
-            })
-        };
-        let lbytes = read_opt(&c.local_path)?;
-        let local_hash = lbytes.as_deref().map(sha256_hex).unwrap_or_default();
-        let l = match &lbytes {
-            None => None,
-            Some(b) => match decode_text(b) {
-                Some(t) => Some(t),
-                None => {
-                    skip(&mut plan, "local file is not UTF-8 text");
-                    continue;
-                }
-            },
-        };
-        let r = match remote_tree.get(&c.repo_path) {
-            None => None,
-            Some(b) => match decode_text(b) {
-                Some(t) => Some(t),
-                None => {
-                    skip(&mut plan, "remote file is not UTF-8 text");
-                    continue;
-                }
-            },
-        };
-        let b = match &base {
-            Some((bc, _)) if base_valid(ctx, &c.repo_path, c.key.as_deref()) => {
-                match git.read_at(repo, bc, &c.repo_path)? {
-                    None => None,
-                    Some(bytes) => match decode_text(&bytes) {
-                        Some(t) => Some(t),
-                        None => {
-                            skip(&mut plan, "base file is not UTF-8 text");
-                            continue;
-                        }
-                    },
-                }
-            }
-            _ => None,
-        };
-
-        if l == r {
-            continue;
-        }
-        let rp = c.repo_path.clone();
-        let action = if l == b {
-            if r.is_none() {
-                plan.remote_deleted.push(rp.clone());
-                if let Some(t) = &l {
-                    scan_into(&rp, t, &mut plan.secret_hits);
-                }
-                Action::RemoteDeleted
-            } else {
-                plan.take_remote.push(rp.clone());
-                Action::TakeRemote
-            }
-        } else if r == b {
-            plan.push_local.push(rp.clone());
-            if let Some(t) = &l {
-                scan_into(&rp, t, &mut plan.secret_hits);
-            }
-            Action::PushLocal
-        } else {
-            let m = git.merge3(
-                b.as_deref().unwrap_or(""),
-                l.as_deref().unwrap_or(""),
-                r.as_deref().unwrap_or(""),
-            )?;
-            let clean = b.is_some() && l.is_some() && r.is_some() && m.conflicts == 0;
-            if clean {
-                plan.merged.push(rp.clone());
-                scan_into(&rp, &m.text, &mut plan.secret_hits);
-                Action::Merged(m.text)
-            } else {
-                plan.conflicts.push(ConflictFile {
-                    repo_path: rp.clone(),
-                    local_path: c.local_path.to_string_lossy().into_owned(),
-                    local: l.clone(),
-                    remote: r.clone(),
-                    base: b.clone(),
-                    merged: m.text,
-                    conflicts: m.conflicts.max(1),
-                });
-                Action::Conflict
-            }
-        };
-        plan.entries.push(Entry {
-            repo_path: rp,
-            local_path: c.local_path,
-            local_hash,
-            local: l,
-            remote: r,
-            action,
-        });
-    }
-
-    if let Some(local) = &ctx.local_skills {
-        let remote_m = match remote_tree.get(SKILLS_JSON) {
-            None => Manifest::default(),
-            Some(bytes) => {
-                let text = decode_text(bytes)
-                    .ok_or_else(|| SyncError::Manifest("not UTF-8 text".into()))?;
-                Manifest::from_json(&text).map_err(SyncError::Manifest)?
-            }
-        };
-        let id = ctx.machine.id.as_str();
-        let merged = manifest::merge(&remote_m, local, id);
-        plan.missing_skills = manifest::missing_here(&merged, local, id);
-        plan.removed_elsewhere = manifest::removed_elsewhere(&merged, local, id);
-        plan.manifest_json = Some(
-            merged
-                .to_json()
-                .map_err(|e| SyncError::Manifest(e.to_string()))?,
-        );
-    }
-    plan.remote_tree = remote_tree;
-    Ok(plan)
-}
+#[path = "engine_plan.rs"]
+mod plan;
+pub use plan::prepare;
+use plan::{base_tree, base_valid, build_plan, candidates, project_of, trusted_keys};
 
 // ----------------------------------------------------------------- finish
 
@@ -512,12 +340,12 @@ struct Outcome<'p> {
     repo: Option<Option<String>>,
 }
 
-fn outcome_for_text<'p>(entry: &'p Entry, text: &str) -> Outcome<'p> {
-    let t = Some(text.to_string());
+fn outcome_final<'p>(entry: &'p Entry, fin: Option<String>) -> Outcome<'p> {
+    let f_sha = fin.as_deref().map(|t| blob_id(t.as_bytes()));
     Outcome {
         entry,
-        local: (entry.local != t).then(|| t.clone()),
-        repo: (entry.remote != t).then_some(t),
+        local: (entry.l_sha != f_sha).then(|| fin.clone()),
+        repo: (entry.r_sha != f_sha).then_some(fin),
     }
 }
 
@@ -529,38 +357,54 @@ fn outcomes<'p>(
     let mut unresolved = Vec::new();
     for e in &plan.entries {
         let res = resolutions.get(&e.repo_path);
-        match &e.action {
-            Action::TakeRemote => out.push(Outcome {
+        let o = match (&e.action, res) {
+            (Action::TakeRemote, _) => Outcome {
                 entry: e,
                 local: Some(e.remote.clone()),
                 repo: None,
-            }),
-            Action::PushLocal => out.push(Outcome {
+            },
+            (Action::PushLocal, _) => Outcome {
                 entry: e,
                 local: None,
                 repo: Some(e.local.clone()),
-            }),
-            Action::Merged(t) => out.push(outcome_for_text(e, t)),
-            Action::Conflict => match res {
-                Some(Resolution::Text(t)) if !has_markers(t) => {
-                    out.push(outcome_for_text(e, &t.replace("\r\n", "\n")))
-                }
-                _ => unresolved.push(e.repo_path.clone()),
             },
-            Action::RemoteDeleted => match res {
-                None | Some(Resolution::KeepLocal) => out.push(Outcome {
-                    entry: e,
-                    local: None,
-                    repo: Some(e.local.clone()),
-                }),
-                Some(Resolution::DeleteLocal) => out.push(Outcome {
-                    entry: e,
-                    local: Some(None),
-                    repo: None,
-                }),
-                Some(Resolution::Text(_)) => unresolved.push(e.repo_path.clone()),
+            (Action::Merged(t), _) => outcome_final(e, Some(t.clone())),
+            (Action::Conflict, Some(Resolution::Text(t))) if !has_markers(t) => {
+                outcome_final(e, Some(t.replace("\r\n", "\n")))
+            }
+            // One side deleted: accept the deletion everywhere.
+            (Action::Conflict, Some(Resolution::DeleteLocal))
+                if e.local.is_none() || e.r_sha.is_none() =>
+            {
+                outcome_final(e, None)
+            }
+            (Action::RemoteDeleted, None | Some(Resolution::KeepLocal)) => Outcome {
+                entry: e,
+                local: None,
+                repo: Some(e.local.clone()),
             },
-        }
+            (Action::RemoteDeleted, Some(Resolution::DeleteLocal)) => Outcome {
+                entry: e,
+                local: Some(None),
+                repo: None,
+            },
+            (Action::LocalAllDeleted, None) => continue,
+            (Action::LocalAllDeleted, Some(Resolution::DeleteRemote)) => Outcome {
+                entry: e,
+                local: None,
+                repo: Some(None),
+            },
+            (Action::LocalAllDeleted, Some(Resolution::KeepRemote)) => Outcome {
+                entry: e,
+                local: Some(e.remote.clone()),
+                repo: None,
+            },
+            _ => {
+                unresolved.push(e.repo_path.clone());
+                continue;
+            }
+        };
+        out.push(o);
     }
     if !unresolved.is_empty() {
         return Err(SyncError::Unresolved { paths: unresolved });
@@ -623,6 +467,30 @@ fn apply_local(ctx: &SyncCtx, outs: &[Outcome]) -> Result<(), SyncError> {
     Ok(())
 }
 
+/// Attaches the base to persist to an error raised after local writes.
+fn after_writes(e: SyncError, base: Option<SyncBase>) -> SyncError {
+    let Some(base) = base else { return e };
+    match e {
+        SyncError::Secrets { hits, .. } => SyncError::Secrets {
+            hits,
+            base: Some(base),
+        },
+        SyncError::RemoteMoved { base } => SyncError::RemoteMoved { base },
+        SyncError::PushFailed { message, base } => SyncError::PushFailed { message, base },
+        other => SyncError::PushFailed {
+            message: other.to_string(),
+            base,
+        },
+    }
+}
+
+/// Repo paths pulled / merged so far (a retry does not count a file twice).
+#[derive(Default, Clone)]
+struct Counts {
+    pulled: BTreeSet<String>,
+    merged: BTreeSet<String>,
+}
+
 /// Validates resolutions, writes local files, commits and pushes. Retries once
 /// when the push is rejected because the remote moved.
 pub fn finish(
@@ -630,17 +498,19 @@ pub fn finish(
     plan: &SyncPlan,
     resolutions: &BTreeMap<String, Resolution>,
 ) -> Result<SyncSummary, SyncError> {
-    finish_inner(ctx, plan, resolutions, true)
+    run(ctx, plan, resolutions, true, None, Counts::default())
 }
 
-fn finish_inner(
+fn run(
     ctx: &SyncCtx,
     plan: &SyncPlan,
     resolutions: &BTreeMap<String, Resolution>,
     may_retry: bool,
+    written: Option<SyncBase>,
+    mut counts: Counts,
 ) -> Result<SyncSummary, SyncError> {
     // 1. resolutions
-    let outs = outcomes(plan, resolutions)?;
+    let outs = outcomes(plan, resolutions).map_err(|e| after_writes(e, written.clone()))?;
 
     // 2. secrets in everything that will be pushed
     let mut hits = Vec::new();
@@ -649,24 +519,56 @@ fn finish_inner(
             scan_into(&o.entry.repo_path, t, &mut hits);
         }
     }
+    if let Some(json) = &plan.manifest_json {
+        if Some(blob_id(json.as_bytes())) != plan.remote_tree.get(SKILLS_JSON).cloned() {
+            scan_into(SKILLS_JSON, json, &mut hits);
+        }
+    }
     if !hits.is_empty() {
-        return Err(SyncError::Secrets(hits));
+        return Err(SyncError::Secrets {
+            hits,
+            base: written,
+        });
     }
 
     // 3. local writes, under the write lock only
     {
         let _guard = ctx.write_lock.lock().unwrap_or_else(|p| p.into_inner());
-        apply_local(ctx, &outs)?;
+        apply_local(ctx, &outs).map_err(|e| after_writes(e, written.clone()))?;
+    }
+    // From here on local files equal the remote head plus this sync's changes:
+    // the remote head is the base for every current project.
+    let synced_projects = current_synced(ctx);
+    let written = Some(SyncBase {
+        commit: plan.remote_commit.clone(),
+        synced_projects: synced_projects.clone(),
+    });
+    for o in &outs {
+        match o.entry.action {
+            Action::TakeRemote | Action::RemoteDeleted | Action::LocalAllDeleted
+                if o.local.is_some() =>
+            {
+                counts.pulled.insert(o.entry.repo_path.clone());
+            }
+            Action::Merged(_) | Action::Conflict => {
+                counts.merged.insert(o.entry.repo_path.clone());
+            }
+            _ => {}
+        }
     }
 
     // 4. full tree = remote tree + this machine's changes
-    let mut tree = plan.remote_tree.clone();
+    let mut tree: BTreeMap<String, TreeBlob> = plan
+        .remote_tree
+        .iter()
+        .map(|(p, s)| (p.clone(), TreeBlob::Sha(s.clone())))
+        .collect();
     let mut pushed = 0;
     for o in &outs {
         match &o.repo {
             None => {}
             Some(Some(t)) => {
-                tree.insert(o.entry.repo_path.clone(), t.clone().into_bytes());
+                tree.insert(o.entry.repo_path.clone(), TreeBlob::Data(t.clone().into_bytes()));
                 pushed += 1;
             }
             Some(None) => {
@@ -676,67 +578,66 @@ fn finish_inner(
             }
         }
     }
+    let mut manifest_changed = false;
     if let Some(json) = &plan.manifest_json {
-        tree.insert(SKILLS_JSON.to_string(), json.clone().into_bytes());
+        manifest_changed =
+            Some(blob_id(json.as_bytes())) != plan.remote_tree.get(SKILLS_JSON).cloned();
+        if manifest_changed {
+            tree.insert(SKILLS_JSON.to_string(), TreeBlob::Data(json.clone().into_bytes()));
+        }
     }
-    let pulled = outs
-        .iter()
-        .filter(|o| matches!(o.entry.action, Action::TakeRemote | Action::RemoteDeleted))
-        .filter(|o| o.local.is_some())
-        .count();
-    let merged = outs
-        .iter()
-        .filter(|o| matches!(o.entry.action, Action::Merged(_) | Action::Conflict))
-        .count();
-    let synced_projects: Vec<String> = ctx.projects.iter().map(|(k, _)| k.clone()).collect();
-
-    let unchanged = tree == plan.remote_tree && (plan.remote_commit.is_some() || tree.is_empty());
-    if unchanged {
-        return Ok(SyncSummary {
-            commit: plan.remote_commit.clone(),
-            committed: false,
-            pulled,
-            pushed: 0,
-            merged,
-            synced_projects,
-        });
+    let summary = |commit: Option<String>, committed: bool, pushed: usize| SyncSummary {
+        commit,
+        committed,
+        pulled: counts.pulled.len(),
+        pushed,
+        merged: counts.merged.len(),
+        synced_projects: synced_projects.clone(),
+    };
+    if pushed == 0 && !manifest_changed {
+        return Ok(summary(plan.remote_commit.clone(), false, 0));
     }
 
     let message = format!("sync from {}", ctx.machine.name);
-    let commit = ctx.git.commit_tree(
-        ctx.repo_dir,
-        plan.remote_commit.as_deref(),
-        &tree,
-        &message,
-        SYNC_AUTHOR,
-    )?;
+    let commit = ctx
+        .git
+        .commit_tree_blobs(
+            ctx.repo_dir,
+            plan.remote_commit.as_deref(),
+            &tree,
+            &message,
+            SYNC_AUTHOR,
+        )
+        .map_err(|e| after_writes(e.into(), written.clone()))?;
 
-    // 5. push; on a race re-plan once
+    // 5. push; on a race re-plan once against the head this sync was built on
     match ctx.git.push(ctx.repo_dir, &commit, &ctx.branch, &ctx.auth) {
-        Ok(()) => Ok(SyncSummary {
-            commit: Some(commit),
-            committed: true,
-            pulled,
-            pushed,
-            merged,
-            synced_projects,
-        }),
+        Ok(()) => Ok(summary(Some(commit), true, pushed)),
         Err(SyncGitError::Rejected) if may_retry => {
-            let remote = ctx.git.fetch(ctx.repo_dir, &ctx.auth)?;
-            let again = build_plan(ctx, remote)?;
-            if !again.conflicts.is_empty()
-                || !again.remote_deleted.is_empty()
-                || !again.secret_hits.is_empty()
-            {
-                return Err(SyncError::RemoteMoved);
+            let base = written.clone().expect("set after local writes");
+            let again = ctx
+                .git
+                .fetch(ctx.repo_dir, &ctx.auth)
+                .map_err(SyncError::from)
+                .and_then(|r| {
+                    build_plan(ctx, r, plan.remote_commit.as_deref(), &base.synced_projects)
+                })
+                .map_err(|e| after_writes(e, written.clone()))?;
+            if !again.secret_hits.is_empty() {
+                return Err(SyncError::Secrets {
+                    hits: again.secret_hits,
+                    base: written,
+                });
             }
-            let mut s = finish_inner(ctx, &again, &BTreeMap::new(), false)?;
-            s.pulled += pulled;
-            s.merged += merged;
-            Ok(s)
+            if !again.conflicts.is_empty() || !again.remote_deleted.is_empty() {
+                return Err(SyncError::RemoteMoved { base });
+            }
+            run(ctx, &again, &BTreeMap::new(), false, written, counts)
         }
-        Err(SyncGitError::Rejected) => Err(SyncError::RemoteMoved),
-        Err(e) => Err(e.into()),
+        Err(SyncGitError::Rejected) => Err(SyncError::RemoteMoved {
+            base: written.expect("set after local writes"),
+        }),
+        Err(e) => Err(after_writes(e.into(), written)),
     }
 }
 
@@ -745,7 +646,7 @@ fn finish_inner(
 /// Number of files that differ between this machine and the base commit
 /// (no fetch). Never synced: number of existing local files.
 pub fn pending_local(ctx: &SyncCtx) -> Result<usize, SyncError> {
-    let Some((bc, list)) = base_paths(ctx) else {
+    let Some(tree) = base_tree(ctx, ctx.base_commit.as_deref())? else {
         let mut n = 0;
         for f in &ctx.files {
             if read_opt(&f.local_path)?.is_some() {
@@ -754,17 +655,16 @@ pub fn pending_local(ctx: &SyncCtx) -> Result<usize, SyncError> {
         }
         return Ok(n);
     };
-    let base_list: Vec<String> = list
-        .into_iter()
-        .filter(|p| base_valid(ctx, p, None))
+    let trusted = trusted_keys(ctx, &ctx.synced_projects);
+    let base_paths: Vec<&String> = tree
+        .keys()
+        .filter(|p| base_valid(p, project_of(p, &ctx.projects), &trusted))
         .collect();
     let mut n = 0;
-    for c in candidates(ctx, &base_list, &[]) {
-        let l = read_opt(&c.local_path)?.map(|b| normalize_text(&b));
-        let b = if base_valid(ctx, &c.repo_path, c.key.as_deref()) {
-            ctx.git
-                .read_at(ctx.repo_dir, &bc, &c.repo_path)?
-                .map(|b| normalize_text(&b))
+    for c in candidates(ctx, base_paths.into_iter(), std::iter::empty()).0 {
+        let l = read_opt(&c.local_path)?.map(|b| blob_id(normalize_text(&b).as_bytes()));
+        let b = if base_valid(&c.repo_path, c.key.as_deref(), &trusted) {
+            tree.get(&c.repo_path).cloned()
         } else {
             None
         };

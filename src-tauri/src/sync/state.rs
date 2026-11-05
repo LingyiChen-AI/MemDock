@@ -11,6 +11,15 @@ fn default_repo_name() -> String {
     "MemDockHub".to_string()
 }
 
+/// A project that took part in the last successful sync, with the local
+/// directory it had then (`projects::normalize_path`). The base commit is only
+/// trusted for a project whose key and directory both still match.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct SyncedProject {
+    pub key: String,
+    pub dir: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct SyncState {
     #[serde(default)]
@@ -30,7 +39,7 @@ pub struct SyncState {
     #[serde(default)]
     pub included_local: Vec<String>,
     #[serde(default)]
-    pub synced_projects: Vec<String>,
+    pub synced_projects: Vec<SyncedProject>,
 }
 
 impl Default for SyncState {
@@ -80,7 +89,10 @@ mod tests {
             last_sync_at: Some(123),
             public_ack: true,
             included_local: vec!["C:/x".into()],
-            synced_projects: vec!["k1".into()],
+            synced_projects: vec![SyncedProject {
+                key: "k1".into(),
+                dir: "c:/w/p".into(),
+            }],
             ..SyncState::default()
         };
         save_state(&p, &s).unwrap();

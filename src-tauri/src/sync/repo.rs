@@ -3,11 +3,12 @@
 //!
 //! The access token is only ever passed through environment variables
 //! (`GIT_CONFIG_*`), never on the command line or in `.git/config`.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -150,6 +151,24 @@ pub struct SyncGit {
     pub timeout: Duration,
     /// Proxy / TLS settings read once from the user's real global git config.
     forwarded: OnceLock<Vec<String>>,
+    /// Number of git processes started through `exec` (diagnostics / tests).
+    spawned: AtomicUsize,
+}
+
+/// One file of a tree to commit: an existing blob or new content.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TreeBlob {
+    Sha(String),
+    Data(Vec<u8>),
+}
+
+/// Git blob id of `data`, as `hash-object` would compute it.
+pub fn blob_id(data: &[u8]) -> String {
+    blob_sha(data)
+}
+
+fn is_hex_id(s: &str) -> bool {
+    (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Git blob id of `data` (SHA-1 of `blob <len>\0` + bytes).
@@ -176,7 +195,14 @@ impl SyncGit {
             program,
             timeout: Duration::from_secs(60),
             forwarded: OnceLock::new(),
+            spawned: AtomicUsize::new(0),
         }
+    }
+
+    /// Git processes started so far by this instance (excluding the one-off
+    /// global config probe).
+    pub fn spawn_count(&self) -> usize {
+        self.spawned.load(Ordering::Relaxed)
     }
 
     /// `-c key=value` args for the user's proxy / TLS settings (cached).
@@ -277,6 +303,7 @@ impl SyncGit {
         if let Some(c) = cwd {
             cmd.current_dir(c);
         }
+        self.spawned.fetch_add(1, Ordering::Relaxed);
         let mut child = crate::proc::spawn_hidden(&mut cmd).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 SyncGitError::NotInstalled
@@ -426,6 +453,91 @@ impl SyncGit {
             .collect())
     }
 
+    /// Whether `commit` names a commit object in this clone. Other git
+    /// failures are errors.
+    pub fn has_commit(&self, repo: &Path, commit: &str) -> Result<bool, SyncGitError> {
+        check_arg(commit)?;
+        let spec = format!("{commit}^{{commit}}");
+        let out = self.probe(repo, &["rev-parse", "--verify", "-q", &spec])?;
+        if out.status.success() {
+            return Ok(true);
+        }
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.trim().is_empty() {
+            Ok(false)
+        } else {
+            Err(classify(&err))
+        }
+    }
+
+    /// `path -> blob id` of every file at `commit` (one `ls-tree`).
+    pub fn tree_entries(
+        &self,
+        repo: &Path,
+        commit: &str,
+    ) -> Result<BTreeMap<String, String>, SyncGitError> {
+        check_arg(commit)?;
+        let out = self.run_bytes(Some(repo), &["ls-tree", "-r", "-z", commit, "--"], &None, &[], None)?;
+        let mut map = BTreeMap::new();
+        for rec in out.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+            let rec = String::from_utf8_lossy(rec);
+            if let Some((meta, path)) = rec.split_once('\t') {
+                let mut it = meta.split(' ');
+                if let (Some(_mode), Some("blob"), Some(sha)) = (it.next(), it.next(), it.next()) {
+                    map.insert(path.to_string(), sha.to_string());
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    /// Contents of the given blobs through one `git cat-file --batch` process.
+    pub fn read_blobs(
+        &self,
+        repo: &Path,
+        shas: &[String],
+    ) -> Result<HashMap<String, Vec<u8>>, SyncGitError> {
+        let mut want: Vec<&str> = Vec::new();
+        for s in shas {
+            if !is_hex_id(s) {
+                return Err(failed(format!("invalid object id: {s}")));
+            }
+            if !want.contains(&s.as_str()) {
+                want.push(s);
+            }
+        }
+        let mut map = HashMap::new();
+        if want.is_empty() {
+            return Ok(map);
+        }
+        let mut input = want.join("\n").into_bytes();
+        input.push(b'\n');
+        let out = self.run_bytes(Some(repo), &["cat-file", "--batch"], &None, &[], Some(input))?;
+        let mut i = 0;
+        for _ in 0..want.len() {
+            let nl = out[i..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .ok_or_else(|| failed("truncated cat-file output"))?;
+            let header = String::from_utf8_lossy(&out[i..i + nl]).into_owned();
+            i += nl + 1;
+            let mut it = header.split(' ');
+            let (Some(sha), Some(kind), Some(size)) = (it.next(), it.next(), it.next()) else {
+                return Err(failed(format!("object not found: {header}")));
+            };
+            if kind != "blob" {
+                return Err(failed(format!("not a blob: {header}")));
+            }
+            let size: usize = size.trim().parse().map_err(|_| failed("bad cat-file size"))?;
+            if out.len() < i + size + 1 {
+                return Err(failed("truncated cat-file output"));
+            }
+            map.insert(sha.to_string(), out[i..i + size].to_vec());
+            i += size + 1;
+        }
+        Ok(map)
+    }
+
     /// Builds a commit whose tree is exactly `files`, without touching the
     /// work tree or any ref. Returns the new commit id.
     pub fn commit_tree(
@@ -436,11 +548,33 @@ impl SyncGit {
         message: &str,
         author: (&str, &str),
     ) -> Result<String, SyncGitError> {
+        let blobs: BTreeMap<String, TreeBlob> = files
+            .iter()
+            .map(|(k, v)| (k.clone(), TreeBlob::Data(v.clone())))
+            .collect();
+        self.commit_tree_blobs(repo, parent, &blobs, message, author)
+    }
+
+    /// `commit_tree` where files may name existing blobs. New contents are
+    /// written with one `hash-object --stdin-paths` call.
+    pub fn commit_tree_blobs(
+        &self,
+        repo: &Path,
+        parent: Option<&str>,
+        files: &BTreeMap<String, TreeBlob>,
+        message: &str,
+        author: (&str, &str),
+    ) -> Result<String, SyncGitError> {
         if let Some(p) = parent {
             check_arg(p)?;
         }
-        for p in files.keys() {
+        for (p, b) in files {
             check_repo_path(p)?;
+            if let TreeBlob::Sha(s) = b {
+                if !is_hex_id(s) {
+                    return Err(failed(format!("invalid object id: {s}")));
+                }
+            }
         }
         let tmp_dir = std::env::temp_dir().join(format!("memdock-idx-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp_dir).map_err(|e| failed(e.to_string()))?;
@@ -454,7 +588,7 @@ impl SyncGit {
         &self,
         repo: &Path,
         parent: Option<&str>,
-        files: &BTreeMap<String, Vec<u8>>,
+        files: &BTreeMap<String, TreeBlob>,
         message: &str,
         author: (&str, &str),
         index: &Path,
@@ -474,21 +608,57 @@ impl SyncGit {
                 }
             }
         }
+        // Resolve every entry to a blob id; new contents are written to temp
+        // files and hashed into the object store in one process.
+        let tmp_dir = index.parent().unwrap_or(index);
+        let mut shas: BTreeMap<&str, String> = BTreeMap::new();
+        let mut pending: Vec<(&str, String)> = Vec::new();
+        let mut stdin_paths: Vec<u8> = Vec::new();
+        for (n, (path, blob)) in files.iter().enumerate() {
+            match blob {
+                TreeBlob::Sha(s) => {
+                    shas.insert(path, s.clone());
+                }
+                TreeBlob::Data(content) => {
+                    let want = blob_sha(content);
+                    if known.get(path) == Some(&want) {
+                        shas.insert(path, want);
+                    } else {
+                        let f = tmp_dir.join(format!("blob-{n}"));
+                        std::fs::write(&f, content).map_err(|e| failed(e.to_string()))?;
+                        let fs_path = f.to_string_lossy().into_owned();
+                        if fs_path.contains(['\n', '\r']) {
+                            return Err(failed("invalid temp path"));
+                        }
+                        stdin_paths.extend_from_slice(fs_path.as_bytes());
+                        stdin_paths.push(b'\n');
+                        pending.push((path, want));
+                    }
+                }
+            }
+        }
+        if !pending.is_empty() {
+            let out = self.run_bytes(
+                Some(repo),
+                &["hash-object", "-w", "--no-filters", "--stdin-paths"],
+                &None,
+                &[],
+                Some(stdin_paths),
+            )?;
+            let text = String::from_utf8_lossy(&out);
+            let got: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            if got.len() != pending.len() {
+                return Err(failed("hash-object returned an unexpected number of ids"));
+            }
+            for ((path, want), sha) in pending.into_iter().zip(got) {
+                if sha != want {
+                    return Err(failed("hash-object id mismatch"));
+                }
+                shas.insert(path, sha.to_string());
+            }
+        }
         let mut info: Vec<u8> = Vec::new();
-        for (path, content) in files {
-            let want = blob_sha(content);
-            let sha = if known.get(path) == Some(&want) {
-                want
-            } else {
-                let sha = self.run_bytes(
-                    Some(repo),
-                    &["hash-object", "-w", "--no-filters", "--stdin"],
-                    &None,
-                    &[],
-                    Some(content.clone()),
-                )?;
-                String::from_utf8_lossy(&sha).trim().to_string()
-            };
+        for (path, sha) in &shas {
             info.extend_from_slice(format!("100644 {sha}\t{path}").as_bytes());
             info.push(0);
         }
@@ -777,6 +947,43 @@ mod tests {
         assert!(g.commit_tree(&a, Some("--x"), &files(&[]), "m", AUTHOR).is_err());
         assert!(g.read_at(&a, "-x", "a").is_err());
         assert!(g.push(&a, &c1, "--force", &None).is_err());
+    }
+
+    #[test]
+    fn tree_entries_read_blobs_and_commit_by_sha() {
+        let t = tempfile::tempdir().unwrap();
+        let url = empty_bare(t.path());
+        let g = SyncGit::new();
+        let a = t.path().join("a");
+        g.clone(&url, &a, &None).unwrap();
+        let bin = vec![0u8, b'\n', 13, 10, 255, b'\n'];
+        let mut m = files(&[("a.md", "A\n"), ("dir/b.md", "")]);
+        m.insert("c.bin".into(), bin.clone());
+        let c = g.commit_tree(&a, None, &m, "one", AUTHOR).unwrap();
+        assert!(g.has_commit(&a, &c).unwrap());
+        assert!(!g.has_commit(&a, &"0".repeat(40)).unwrap());
+        let e = g.tree_entries(&a, &c).unwrap();
+        assert_eq!(e.len(), 3);
+        assert_eq!(e["a.md"], blob_id(b"A\n"));
+        let before = g.spawn_count();
+        let shas: Vec<String> = e.values().cloned().collect();
+        let blobs = g.read_blobs(&a, &shas).unwrap();
+        assert_eq!(g.spawn_count(), before + 1);
+        assert_eq!(blobs[&e["c.bin"]], bin);
+        assert_eq!(blobs[&e["dir/b.md"]], b"");
+        assert_eq!(blobs[&e["a.md"]], b"A\n");
+        assert!(g.read_blobs(&a, &["zz".to_string()]).is_err());
+        assert!(g.read_blobs(&a, &["1".repeat(40)]).is_err());
+        // existing blob by id + new content
+        let mut tb: BTreeMap<String, TreeBlob> = BTreeMap::new();
+        tb.insert("kept.bin".into(), TreeBlob::Sha(e["c.bin"].clone()));
+        tb.insert("n1.md".into(), TreeBlob::Data(b"n1".to_vec()));
+        tb.insert("n2.md".into(), TreeBlob::Data(b"n2".to_vec()));
+        let c2 = g.commit_tree_blobs(&a, Some(&c), &tb, "two", AUTHOR).unwrap();
+        let e2 = g.tree_entries(&a, &c2).unwrap();
+        assert_eq!(e2.keys().collect::<Vec<_>>(), vec!["kept.bin", "n1.md", "n2.md"]);
+        assert_eq!(g.read_at(&a, &c2, "n2.md").unwrap().unwrap(), b"n2");
+        assert_eq!(g.read_at(&a, &c2, "kept.bin").unwrap().unwrap(), bin);
     }
 
     #[test]

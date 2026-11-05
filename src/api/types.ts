@@ -79,7 +79,24 @@ export type CommandErrorCode =
   | "not_found"
   | "not_pending"
   /** The extraction data files could not be loaded; `reset_extract_data` recovers. */
-  | "store_unavailable";
+  | "store_unavailable"
+  // GitHub sync
+  | "unauthorized"
+  | "network"
+  | "github_error"
+  | "git_missing"
+  | "git_error"
+  | "keychain"
+  | "sync_busy"
+  | "unresolved"
+  | "secrets"
+  | "local_changed"
+  | "remote_moved"
+  | "push_failed"
+  | "manifest"
+  | "repo_not_ours"
+  | "public_not_acked"
+  | "plan_not_found";
 
 /** Error thrown by failing commands. `current_hash` is set for `disk_changed`. */
 export interface CommandError {
@@ -92,6 +109,10 @@ export interface CommandError {
   dirs?: string[];
   /** Set for skill `local_changes`: no baseline exists, local edits cannot be ruled out. */
   unknown?: boolean;
+  /** Set for sync `unresolved` / `local_changed`: the files involved. */
+  paths?: string[];
+  /** Set for sync `secrets`: where secrets were found (never the matched text). */
+  secret_hits?: FileSecretHit[];
 }
 
 export interface SearchHit {
@@ -383,4 +404,160 @@ export interface ContextTurn {
 export interface SuggestionContext {
   evidence: SuggestionEvidence;
   turns: ContextTurn[];
+}
+
+// ------------------------------------------------------------- GitHub sync
+
+export type SyncNeeds = "public_ack" | "not_ours" | "relogin";
+
+export interface SyncRepo {
+  owner: string;
+  name: string;
+  url: string;
+  private: boolean;
+}
+
+export interface SyncStatus {
+  logged_in: boolean;
+  login: string | null;
+  repo: SyncRepo | null;
+  /** Milliseconds since the epoch. */
+  last_sync_at: number | null;
+  /** Local memory files that differ from the last sync. */
+  pending: number;
+  needs: SyncNeeds | null;
+}
+
+export interface DeviceCodeInfo {
+  user_code: string;
+  verification_uri: string;
+  /** Seconds. */
+  expires_in: number;
+}
+
+export type LoginStatus = "ok" | "expired" | "denied" | "cancelled" | "error" | "relogin";
+
+/** Payload of `sync://login`. */
+export interface LoginEvent {
+  status: LoginStatus;
+  needs?: SyncNeeds;
+  message?: string;
+}
+
+export interface FileSecretHit {
+  repo_path: string;
+  line: number;
+  rule: string;
+}
+
+export interface SyncConflict {
+  repo_path: string;
+  local_path: string;
+  /** `null`: the file does not exist on that side. */
+  local: string | null;
+  remote: string | null;
+  base: string | null;
+  /** diff3 text with conflict markers. */
+  merged: string;
+  conflicts: number;
+}
+
+export interface SyncDeletedFile {
+  repo_path: string;
+  local_path: string | null;
+}
+
+export interface SyncHeldProject {
+  project_key: string;
+  files: SyncDeletedFile[];
+}
+
+export type SkippedReason =
+  | "not_utf8_local"
+  | "not_utf8_remote"
+  | "not_utf8_base"
+  | "case_collision"
+  | "duplicate_local"
+  | "not_regular_file";
+
+export interface SyncSkipped {
+  repo_path: string;
+  reason: SkippedReason;
+}
+
+export type ManifestScope = { type: "global" } | { type: "project"; key: string };
+
+export interface ManifestSkill {
+  name: string;
+  url: string;
+  git_ref: string | null;
+  commit: string | null;
+  skill_path: string;
+  tool: Tool;
+  scope: ManifestScope;
+  installed_on: string[];
+  removed_on: string[];
+}
+
+export interface SyncPlanCounts {
+  pull: number;
+  push: number;
+  merged: number;
+  conflicts: number;
+  remote_deleted: number;
+  local_all_deleted: number;
+  skipped: number;
+}
+
+export interface SyncPlan {
+  id: string;
+  counts: SyncPlanCounts;
+  conflicts: SyncConflict[];
+  /** Deleted on another machine, unchanged here: keep (default) or delete locally. */
+  remote_deleted: SyncDeletedFile[];
+  /** Every memory file of these projects is gone here: keep remote or delete remote. */
+  local_all_deleted: SyncHeldProject[];
+  skipped: SyncSkipped[];
+  secret_hits: FileSecretHit[];
+  missing_skills: ManifestSkill[];
+  removed_elsewhere: ManifestSkill[];
+}
+
+export interface SyncSummary {
+  commit: string | null;
+  committed: boolean;
+  pulled: number;
+  pushed: number;
+  merged: number;
+}
+
+export type SyncStartResult =
+  | { kind: "done"; summary: SyncSummary }
+  | { kind: "needs_resolution"; plan: SyncPlan }
+  | { kind: "blocked"; secret_hits: FileSecretHit[] };
+
+/** Choice for one file of a plan, keyed by `repo_path`. */
+export type SyncResolution =
+  | { kind: "text"; text: string }
+  | { kind: "delete_local" }
+  | { kind: "keep_local" }
+  | { kind: "delete_remote" }
+  | { kind: "keep_remote" };
+
+export interface SyncProject {
+  project_id: string;
+  name: string;
+  /** From the project's git remote; `null` without one. */
+  key: string | null;
+  dir_key: string;
+  /** Projects with a remote always take part; others only when included. */
+  included: boolean;
+}
+
+export interface SyncCommit {
+  id: string;
+  message: string;
+  /** Milliseconds since the epoch. */
+  time: number;
+  files: string[];
 }

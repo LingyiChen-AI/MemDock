@@ -1,0 +1,1328 @@
+//! Tauri commands for GitHub sync: login (device flow), repository binding,
+//! sync start / finish, history and restore. Logic lives in `*_impl`
+//! functions; the `#[tauri::command]` wrappers only delegate.
+//!
+//! Events: `sync://login` (`LoginEvent`) and `sync://status-changed`
+//! (`SyncStatusDto`). The access token never appears in an event, error or log.
+//!
+//! Locks: `sync.lock` serializes every command that syncs or changes the
+//! login / repository state (`try_lock` -> `sync_busy`). Order:
+//! `sync.lock -> write_lock -> index` (the engine takes `write_lock` itself).
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError, Weak};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, State};
+
+use crate::commands::{lock, AppState, CommandError};
+use crate::memory::io::{read_memory, write_memory, WriteError};
+use crate::projects::normalize_path;
+use crate::sync::engine::{
+    self, finish, prepare, ConflictFile, FileSecretHit, Resolution, SkippedFile,
+    SyncCtx, SyncError, SyncPlan, SyncSummary,
+};
+use crate::sync::github::{
+    device_login, ensure_repo_with, ApiError, DeviceCode, GhRepo, GhUser, GitHubApi, HttpGitHub,
+    LoginError, PollResult, RepoOutcome, CLIENT_ID,
+};
+use crate::sync::layout::{
+    dir_key, expected_local_path, load_or_create_machine, map_files, project_key, safe_key,
+    Machine, SyncFile,
+};
+use crate::sync::manifest::{local_entries, lock_entries_for_sync, ManifestSkill};
+use crate::sync::repo::{Auth, CommitInfo, SyncGit, SyncGitError};
+use crate::sync::state::{load_state, save_state, SyncState};
+use crate::sync::token::{KeyringStore, TokenStore};
+
+/// The only URL `open_verification_url` opens.
+pub const VERIFICATION_URL: &str = "https://github.com/login/device";
+const LOGIN_EVENT: &str = "sync://login";
+const STATUS_EVENT: &str = "sync://status-changed";
+const MEMORY_EVENT: &str = "memory-changed";
+const SLEEP_SLICE: Duration = Duration::from_millis(250);
+const HISTORY_MAX: usize = 200;
+
+pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
+type CloneUrl = Box<dyn Fn(&str, &str) -> String + Send + Sync>;
+type Sleep = Arc<dyn Fn(Duration) + Send + Sync>;
+
+// ------------------------------------------------------------------ runtime
+
+/// `HttpGitHub` built on first use: its proxy discovery can block for seconds,
+/// so it must never run on the UI thread at startup.
+#[derive(Default)]
+struct LazyHttpGitHub(OnceLock<HttpGitHub>);
+
+impl LazyHttpGitHub {
+    fn get(&self) -> &HttpGitHub {
+        self.0.get_or_init(HttpGitHub::new)
+    }
+}
+
+impl GitHubApi for LazyHttpGitHub {
+    fn device_code(&self, client_id: &str) -> Result<DeviceCode, ApiError> {
+        self.get().device_code(client_id)
+    }
+    fn poll_token(&self, client_id: &str, device_code: &str) -> Result<PollResult, ApiError> {
+        self.get().poll_token(client_id, device_code)
+    }
+    fn user(&self, token: &str) -> Result<GhUser, ApiError> {
+        self.get().user(token)
+    }
+    fn get_repo(&self, token: &str, owner: &str, name: &str) -> Result<Option<GhRepo>, ApiError> {
+        self.get().get_repo(token, owner, name)
+    }
+    fn create_repo(&self, token: &str, name: &str) -> Result<GhRepo, ApiError> {
+        self.get().create_repo(token, name)
+    }
+    fn get_file(
+        &self,
+        token: &str,
+        owner: &str,
+        name: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, ApiError> {
+        self.get().get_file(token, owner, name, path)
+    }
+    fn put_file(
+        &self,
+        token: &str,
+        owner: &str,
+        name: &str,
+        path: &str,
+        bytes: &[u8],
+        message: &str,
+    ) -> Result<(), ApiError> {
+        self.get().put_file(token, owner, name, path, bytes, message)
+    }
+    fn list_root(&self, token: &str, owner: &str, name: &str) -> Result<Vec<String>, ApiError> {
+        self.get().list_root(token, owner, name)
+    }
+}
+
+/// Sync part of `AppState`.
+pub struct SyncRuntime {
+    /// Serializes sync and login-state-changing commands.
+    pub lock: Mutex<()>,
+    /// Plans waiting for the user's resolutions, by plan id (never sent whole
+    /// to the frontend).
+    pub plans: Mutex<HashMap<String, SyncPlan>>,
+    pub login_cancel: AtomicBool,
+    /// A device-flow login thread is running.
+    login_active: AtomicBool,
+    pub api: Arc<dyn GitHubApi>,
+    pub tokens: Arc<dyn TokenStore>,
+    pub git: SyncGit,
+    /// `(owner, name) -> clone URL` (tests point it at a `file://` bare repo).
+    pub clone_url: CloneUrl,
+    /// Sleep used by device-flow polling and repo bootstrap retries.
+    pub sleep: Sleep,
+    /// Quiet period before a memory change re-emits the sync status.
+    pub status_debounce: Duration,
+    emitter: Mutex<Option<Emit>>,
+    status_tx: Mutex<Option<Sender<()>>>,
+    /// Last `pending` sent with `sync://status-changed` (-1: none yet).
+    last_pending: AtomicI64,
+}
+
+fn github_clone_url(owner: &str, name: &str) -> String {
+    format!("https://github.com/{owner}/{name}.git")
+}
+
+impl SyncRuntime {
+    /// Real GitHub (built lazily), system keychain, system git.
+    pub fn production() -> Self {
+        Self::new(
+            Arc::new(LazyHttpGitHub::default()),
+            Arc::new(KeyringStore),
+            SyncGit::new(),
+        )
+    }
+
+    pub fn new(api: Arc<dyn GitHubApi>, tokens: Arc<dyn TokenStore>, git: SyncGit) -> Self {
+        SyncRuntime {
+            lock: Mutex::new(()),
+            plans: Mutex::new(HashMap::new()),
+            login_cancel: AtomicBool::new(false),
+            login_active: AtomicBool::new(false),
+            api,
+            tokens,
+            git,
+            clone_url: Box::new(github_clone_url),
+            sleep: Arc::new(std::thread::sleep),
+            status_debounce: Duration::from_secs(1),
+            emitter: Mutex::new(None),
+            status_tx: Mutex::new(None),
+            last_pending: AtomicI64::new(-1),
+        }
+    }
+
+    pub fn set_emitter(&self, emit: Emit) {
+        *lock(&self.emitter) = Some(emit);
+    }
+
+    /// Wires events to a Tauri app handle.
+    pub fn attach(&self, handle: AppHandle) {
+        self.set_emitter(Arc::new(move |name, payload| {
+            let _ = handle.emit(name, payload);
+        }));
+    }
+
+    fn emit(&self, name: &str, payload: &impl Serialize) {
+        let emit = lock(&self.emitter).clone();
+        if let (Some(e), Ok(v)) = (emit, serde_json::to_value(payload)) {
+            e(name, v);
+        }
+    }
+
+    /// Called by the memory watcher after `memory-changed`: re-checks
+    /// `pending` after a quiet period and emits `sync://status-changed` when
+    /// it changed.
+    pub fn memory_changed(&self) {
+        if let Some(tx) = lock(&self.status_tx).as_ref() {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Sleeps `d` in short slices, stopping early once login is cancelled.
+    fn login_sleep(&self, d: Duration) {
+        let mut left = d;
+        while !left.is_zero() && !self.login_cancel.load(Ordering::SeqCst) {
+            let s = left.min(SLEEP_SLICE);
+            (self.sleep)(s);
+            left -= s;
+        }
+    }
+}
+
+/// Starts the debounce thread behind `SyncRuntime::memory_changed`.
+pub fn start_status_watch(state: &Arc<AppState>) {
+    let (tx, rx) = mpsc::channel::<()>();
+    *lock(&state.sync.status_tx) = Some(tx);
+    let weak: Weak<AppState> = Arc::downgrade(state);
+    let quiet = state.sync.status_debounce;
+    std::thread::spawn(move || loop {
+        if rx.recv().is_err() {
+            return;
+        }
+        loop {
+            match rx.recv_timeout(quiet) {
+                Ok(()) => continue,
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        let Some(state) = weak.upgrade() else { return };
+        let st = sync_status_impl(&state);
+        let prev = state.sync.last_pending.swap(st.pending as i64, Ordering::SeqCst);
+        if prev != st.pending as i64 {
+            state.sync.emit(STATUS_EVENT, &st);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------- DTOs
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct RepoDto {
+    pub owner: String,
+    pub name: String,
+    pub url: String,
+    pub private: bool,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct SyncStatusDto {
+    pub logged_in: bool,
+    pub login: Option<String>,
+    pub repo: Option<RepoDto>,
+    pub last_sync_at: Option<i64>,
+    pub pending: usize,
+    /// `public_ack` | `not_ours` | `relogin`
+    pub needs: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct DeviceCodeDto {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+}
+
+/// Payload of `sync://login`.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct LoginEvent {
+    /// `ok` | `expired` | `denied` | `cancelled` | `error` | `relogin`
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl LoginEvent {
+    fn of(status: &str) -> Self {
+        LoginEvent {
+            status: status.into(),
+            needs: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct PlanCounts {
+    pub pull: usize,
+    pub push: usize,
+    pub merged: usize,
+    pub conflicts: usize,
+    pub remote_deleted: usize,
+    pub local_all_deleted: usize,
+    pub skipped: usize,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct DeletedFileDto {
+    pub repo_path: String,
+    pub local_path: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct HeldProjectDto {
+    pub project_key: String,
+    pub files: Vec<DeletedFileDto>,
+}
+
+/// What the resolution UI needs from a `SyncPlan`.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct SyncPlanDto {
+    pub id: String,
+    pub counts: PlanCounts,
+    pub conflicts: Vec<ConflictFile>,
+    pub remote_deleted: Vec<DeletedFileDto>,
+    pub local_all_deleted: Vec<HeldProjectDto>,
+    pub skipped: Vec<SkippedFile>,
+    pub secret_hits: Vec<FileSecretHit>,
+    pub missing_skills: Vec<ManifestSkill>,
+    pub removed_elsewhere: Vec<ManifestSkill>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct SyncSummaryDto {
+    pub commit: Option<String>,
+    pub committed: bool,
+    pub pulled: usize,
+    pub pushed: usize,
+    pub merged: usize,
+}
+
+impl From<&SyncSummary> for SyncSummaryDto {
+    fn from(s: &SyncSummary) -> Self {
+        SyncSummaryDto {
+            commit: s.commit.clone(),
+            committed: s.committed,
+            pulled: s.pulled,
+            pushed: s.pushed,
+            merged: s.merged,
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncStartDto {
+    Done { summary: SyncSummaryDto },
+    NeedsResolution { plan: SyncPlanDto },
+    Blocked { secret_hits: Vec<FileSecretHit> },
+}
+
+/// A resolution sent by the frontend, keyed by repo path.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolutionDto {
+    Text { text: String },
+    DeleteLocal,
+    KeepLocal,
+    DeleteRemote,
+    KeepRemote,
+}
+
+impl From<ResolutionDto> for Resolution {
+    fn from(r: ResolutionDto) -> Self {
+        match r {
+            ResolutionDto::Text { text } => Resolution::Text(text),
+            ResolutionDto::DeleteLocal => Resolution::DeleteLocal,
+            ResolutionDto::KeepLocal => Resolution::KeepLocal,
+            ResolutionDto::DeleteRemote => Resolution::DeleteRemote,
+            ResolutionDto::KeepRemote => Resolution::KeepRemote,
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct SyncProjectDto {
+    pub project_id: String,
+    pub name: String,
+    /// Key from the project's git remote; `None` for projects without one.
+    pub key: Option<String>,
+    pub dir_key: String,
+    pub included: bool,
+}
+
+// -------------------------------------------------------------------- errors
+
+fn err(code: &str, msg: impl Into<String>) -> CommandError {
+    CommandError::new(code, msg)
+}
+
+fn api_err(e: ApiError) -> CommandError {
+    match e {
+        ApiError::Unauthorized => err("unauthorized", e.to_string()),
+        ApiError::Network(_) => err("network", e.to_string()),
+        ApiError::Http { .. } => err("github_error", e.to_string()),
+    }
+}
+
+fn git_err(e: SyncGitError) -> CommandError {
+    match e {
+        SyncGitError::NotInstalled => err("git_missing", "git is not installed"),
+        SyncGitError::Timeout => err("network", "git timed out"),
+        SyncGitError::Rejected => err("remote_moved", "the remote changed during sync"),
+        SyncGitError::Unauthorized => err("unauthorized", "GitHub rejected the credentials"),
+        SyncGitError::Failed { stderr } => err("git_error", stderr),
+    }
+}
+
+fn sync_err(e: SyncError) -> CommandError {
+    match e {
+        SyncError::Git(g) => git_err(g),
+        SyncError::Io(m) => err("io", m),
+        SyncError::Manifest(m) => err("manifest", format!("skills.json: {m}")),
+        SyncError::Unresolved { paths } => {
+            let mut c = err("unresolved", "some files still need a decision");
+            c.paths = Some(paths);
+            c
+        }
+        SyncError::Secrets { hits, .. } => {
+            let mut c = err("secrets", format!("{} secret(s) found", hits.len()));
+            c.secret_hits = Some(hits);
+            c
+        }
+        SyncError::LocalChanged { paths } => {
+            let mut c = err("local_changed", "files changed during sync");
+            c.paths = Some(paths);
+            c
+        }
+        SyncError::RemoteMoved { .. } => err("remote_moved", "the remote changed during sync"),
+        SyncError::PushFailed { message, .. } => {
+            // Errors raised after local writes are wrapped as `PushFailed`.
+            let as_git = |g: SyncGitError| SyncError::Git(g).to_string();
+            if message == as_git(SyncGitError::Unauthorized) {
+                git_err(SyncGitError::Unauthorized)
+            } else if message == as_git(SyncGitError::Timeout) {
+                git_err(SyncGitError::Timeout)
+            } else if message == as_git(SyncGitError::NotInstalled) {
+                git_err(SyncGitError::NotInstalled)
+            } else {
+                err("push_failed", message)
+            }
+        }
+    }
+}
+
+fn busy() -> CommandError {
+    err("sync_busy", "a sync or login operation is already running")
+}
+
+fn try_sync_lock(state: &AppState) -> Result<MutexGuard<'_, ()>, CommandError> {
+    match state.sync.lock.try_lock() {
+        Ok(g) => Ok(g),
+        Err(TryLockError::Poisoned(p)) => Ok(p.into_inner()),
+        Err(TryLockError::WouldBlock) => Err(busy()),
+    }
+}
+
+/// `unauthorized`: forget the token and the login, ask the UI to log in again.
+fn handle_unauthorized(state: &AppState) {
+    let _ = state.sync.tokens.clear();
+    if let Ok(mut s) = load(state) {
+        s.login = None;
+        s.needs = Some("relogin".into());
+        let _ = store(state, &s);
+    }
+    state.sync.emit(LOGIN_EVENT, &LoginEvent::of("relogin"));
+    emit_status(state);
+}
+
+/// Applies the side effects every error code needs before returning it.
+fn on_error(state: &AppState, e: CommandError) -> CommandError {
+    if e.code == "unauthorized" {
+        handle_unauthorized(state);
+    }
+    e
+}
+
+// -------------------------------------------------------------------- helpers
+
+fn sync_dir(state: &AppState) -> PathBuf {
+    state.data_dir.join("sync")
+}
+
+fn repo_dir(state: &AppState) -> PathBuf {
+    sync_dir(state).join("repo")
+}
+
+fn load(state: &AppState) -> Result<SyncState, CommandError> {
+    load_state(&sync_dir(state).join("state.json")).map_err(|e| err("io", e))
+}
+
+fn store(state: &AppState, s: &SyncState) -> Result<(), CommandError> {
+    Ok(save_state(&sync_dir(state).join("state.json"), s)?)
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn token(state: &AppState) -> Option<String> {
+    state.sync.tokens.get().ok().flatten().filter(|t| !t.is_empty())
+}
+
+fn require_token(state: &AppState, s: &SyncState) -> Result<String, CommandError> {
+    match (token(state), &s.login) {
+        (Some(t), Some(_)) => Ok(t),
+        _ => Err(err("not_logged_in", "log in to GitHub to sync")),
+    }
+}
+
+fn reset_base(s: &mut SyncState) {
+    s.last_sync_commit = None;
+    s.last_sync_at = None;
+    s.synced_projects.clear();
+    s.unsynced_paths.clear();
+    s.held_projects.clear();
+}
+
+fn split_full(full: &str, owner: &str, name: &str) -> (String, String) {
+    match full.split_once('/') {
+        Some((o, n)) if !o.is_empty() && !n.is_empty() => (o.to_string(), n.to_string()),
+        _ => (owner.to_string(), name.to_string()),
+    }
+}
+
+/// Binds (creates / checks) the sync repository and clones it when needed.
+/// Returns what still blocks sync (`not_ours` / `public_ack`), if anything.
+fn setup_repo(
+    state: &AppState,
+    token: &str,
+    login: &str,
+    s: &mut SyncState,
+) -> Result<Option<String>, CommandError> {
+    let rt = &state.sync;
+    let sleep = |d: Duration| (rt.sleep)(d);
+    let name = s.repo_name.clone();
+    let outcome =
+        ensure_repo_with(&*rt.api, token, login, &name, s.public_ack, &sleep).map_err(api_err)?;
+    match outcome {
+        RepoOutcome::Ready(repo) | RepoOutcome::Created(repo) => {
+            let (owner, name) = split_full(&repo.full_name, login, &name);
+            let full = format!("{owner}/{name}");
+            let dir = repo_dir(state);
+            let other_repo = s.clone_of.as_deref() != Some(full.as_str());
+            if other_repo || !dir.join(".git").exists() {
+                let url = (rt.clone_url)(&owner, &name);
+                rt.git
+                    .clone(&url, &dir, &Some(token.to_string()))
+                    .map_err(git_err)?;
+                if other_repo {
+                    // A different repository: the old base means nothing here.
+                    reset_base(s);
+                }
+                s.clone_of = Some(full);
+            }
+            s.repo_owner = Some(owner);
+            s.repo_name = name;
+            s.branch = Some(repo.default_branch).filter(|b| !b.is_empty());
+            s.repo_private = Some(repo.private);
+            s.needs = None;
+            store(state, s)?;
+            Ok(None)
+        }
+        RepoOutcome::NotOurs => {
+            s.repo_owner = Some(login.to_string());
+            s.repo_private = None;
+            s.needs = Some("not_ours".into());
+            store(state, s)?;
+            Ok(s.needs.clone())
+        }
+        RepoOutcome::PublicNeedsAck(repo) => {
+            let (owner, _) = split_full(&repo.full_name, login, &name);
+            s.repo_owner = Some(owner);
+            s.repo_private = Some(false);
+            s.needs = Some("public_ack".into());
+            store(state, s)?;
+            Ok(s.needs.clone())
+        }
+    }
+}
+
+fn is_ready(state: &AppState, s: &SyncState) -> bool {
+    let Some(owner) = &s.repo_owner else { return false };
+    s.needs.is_none()
+        && s.clone_of.as_deref() == Some(format!("{owner}/{}", s.repo_name).as_str())
+        && repo_dir(state).join(".git").exists()
+}
+
+/// Makes sure the repository is bound and cloned; errors with the reason
+/// otherwise.
+fn ensure_ready(state: &AppState, token: &str, s: &mut SyncState) -> Result<(), CommandError> {
+    if is_ready(state, s) {
+        return Ok(());
+    }
+    let login = s
+        .login
+        .clone()
+        .ok_or_else(|| err("not_logged_in", "log in to GitHub to sync"))?;
+    match setup_repo(state, token, &login, s)?.as_deref() {
+        Some("not_ours") => Err(err(
+            "repo_not_ours",
+            "a repository with this name exists and was not created by MemDock",
+        )),
+        Some(_) => Err(err(
+            "public_not_acked",
+            "the sync repository is public; confirm before syncing",
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Everything a `SyncCtx` borrows.
+struct Parts {
+    st: SyncState,
+    machine: Machine,
+    files: Vec<SyncFile>,
+    projects: Vec<(String, PathBuf)>,
+    local_skills: Option<Vec<ManifestSkill>>,
+    repo_dir: PathBuf,
+    branch: String,
+}
+
+fn gather(state: &AppState, st: SyncState, with_skills: bool) -> Result<Parts, CommandError> {
+    let index = state.snapshot_index();
+    let machine = load_or_create_machine(&sync_dir(state).join("machine.json"))?;
+    let files = map_files(&index, &st.included_local);
+    let projects = engine::sync_projects(&index, &st.included_local);
+    let local_skills = if with_skills {
+        local_skills(state, &index, &projects)
+    } else {
+        None
+    };
+    let dir = repo_dir(state);
+    let branch = match &st.branch {
+        Some(b) => b.clone(),
+        None if with_skills && dir.join(".git").exists() => state
+            .sync
+            .git
+            .default_branch(&dir)
+            .unwrap_or_else(|_| "main".into()),
+        None => "main".into(),
+    };
+    Ok(Parts {
+        st,
+        machine,
+        files,
+        projects,
+        local_skills,
+        repo_dir: dir,
+        branch,
+    })
+}
+
+/// This machine's skill installs for `skills.json`; `None` (manifest left
+/// unchanged) when the registry or the skill lock cannot be read.
+fn local_skills(
+    state: &AppState,
+    index: &crate::model::MemoryIndex,
+    projects: &[(String, PathBuf)],
+) -> Option<Vec<ManifestSkill>> {
+    let registry =
+        crate::skills::registry::load_registry(&state.data_dir.join("skills-registry.json")).ok()?;
+    let lock_entries = lock_entries_for_sync(&state.home).ok()?;
+    let keyed: Vec<(String, Option<String>)> = index
+        .projects
+        .iter()
+        .map(|pm| {
+            let key = projects
+                .iter()
+                .find(|(_, d)| normalize_path(&d.to_string_lossy()) == pm.project.id)
+                .map(|(k, _)| k.clone());
+            (pm.project.id.clone(), key)
+        })
+        .collect();
+    Some(local_entries(&registry, &lock_entries, &keyed))
+}
+
+fn make_ctx<'a>(state: &'a AppState, p: &'a Parts, auth: Auth) -> SyncCtx<'a> {
+    SyncCtx {
+        git: &state.sync.git,
+        repo_dir: &p.repo_dir,
+        auth,
+        branch: p.branch.clone(),
+        base_commit: p.st.last_sync_commit.clone(),
+        files: p.files.clone(),
+        projects: p.projects.clone(),
+        synced_projects: p.st.synced_projects.clone(),
+        unsynced_paths: p.st.unsynced_paths.clone(),
+        held_projects: p.st.held_projects.clone(),
+        paths: &state.paths,
+        machine: &p.machine,
+        local_skills: p.local_skills.clone(),
+        snapshots: &state.snapshots,
+        write_lock: &state.write_lock,
+    }
+}
+
+/// Local file a repo path maps to on this machine, if any.
+fn local_of(state: &AppState, p: &Parts, repo_path: &str) -> Option<PathBuf> {
+    p.files
+        .iter()
+        .find(|f| f.repo_path == repo_path)
+        .map(|f| f.local_path.clone())
+        .or_else(|| expected_local_path(repo_path, &p.projects, &state.paths))
+}
+
+/// Project key of a `projects/<key>/...` path (longest key present here).
+fn key_of(repo_path: &str, projects: &[(String, PathBuf)]) -> String {
+    let rest = repo_path.strip_prefix("projects/").unwrap_or(repo_path);
+    projects
+        .iter()
+        .filter(|(k, _)| rest.strip_prefix(k.as_str()).is_some_and(|t| t.starts_with('/')))
+        .max_by_key(|(k, _)| k.len())
+        .map(|(k, _)| k.clone())
+        .unwrap_or_else(|| rest.rsplit_once('/').map(|(k, _)| k).unwrap_or(rest).to_string())
+}
+
+fn plan_dto(state: &AppState, plan: &SyncPlan, p: &Parts) -> SyncPlanDto {
+    let file = |rp: &String| DeletedFileDto {
+        repo_path: rp.clone(),
+        local_path: local_of(state, p, rp).map(|l| l.to_string_lossy().into_owned()),
+    };
+    let mut held: Vec<HeldProjectDto> = Vec::new();
+    for rp in &plan.local_all_deleted {
+        let key = key_of(rp, &p.projects);
+        match held.iter_mut().find(|h| h.project_key == key) {
+            Some(h) => h.files.push(file(rp)),
+            None => held.push(HeldProjectDto {
+                project_key: key,
+                files: vec![file(rp)],
+            }),
+        }
+    }
+    SyncPlanDto {
+        id: plan.id.clone(),
+        counts: PlanCounts {
+            pull: plan.take_remote.len(),
+            push: plan.push_local.len(),
+            merged: plan.merged.len(),
+            conflicts: plan.conflicts.len(),
+            remote_deleted: plan.remote_deleted.len(),
+            local_all_deleted: plan.local_all_deleted.len(),
+            skipped: plan.skipped.len(),
+        },
+        conflicts: plan.conflicts.clone(),
+        remote_deleted: plan.remote_deleted.iter().map(file).collect(),
+        local_all_deleted: held,
+        skipped: plan.skipped.clone(),
+        secret_hits: plan.secret_hits.clone(),
+        missing_skills: plan.missing_skills.clone(),
+        removed_elsewhere: plan.removed_elsewhere.clone(),
+    }
+}
+
+/// Normalized ids of the local files a plan may have written.
+fn touched(state: &AppState, plan: &SyncPlan, p: &Parts) -> Vec<String> {
+    let mut out: Vec<String> = plan
+        .take_remote
+        .iter()
+        .chain(&plan.merged)
+        .chain(&plan.remote_deleted)
+        .chain(&plan.local_all_deleted)
+        .chain(plan.conflicts.iter().map(|c| &c.repo_path))
+        .filter_map(|rp| local_of(state, p, rp))
+        .map(|l| normalize_path(&l.to_string_lossy()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[derive(Serialize)]
+struct MemoryChanged {
+    paths: Vec<String>,
+}
+
+/// Rescans and tells the UI which memory files may have changed.
+fn after_local_writes(state: &AppState, paths: Vec<String>) {
+    state.rescan();
+    if !paths.is_empty() {
+        state.sync.emit(MEMORY_EVENT, &MemoryChanged { paths });
+    }
+}
+
+fn emit_status(state: &AppState) {
+    let st = sync_status_impl(state);
+    state.sync.last_pending.store(st.pending as i64, Ordering::SeqCst);
+    state.sync.emit(STATUS_EVENT, &st);
+}
+
+/// Persists the outcome of `finish` (the new base, also after errors that
+/// carry one), refreshes the index and emits events.
+fn settle(
+    state: &AppState,
+    plan: &SyncPlan,
+    p: &Parts,
+    res: Result<SyncSummary, SyncError>,
+) -> Result<SyncSummary, CommandError> {
+    let base = match &res {
+        Ok(sum) => Some((
+            sum.commit.clone(),
+            sum.synced_projects.clone(),
+            sum.unsynced_paths.clone(),
+            sum.held_projects.clone(),
+        )),
+        Err(e) => e.base_to_persist().map(|b| {
+            (
+                b.commit.clone(),
+                b.synced_projects.clone(),
+                b.unsynced_paths.clone(),
+                b.held_projects.clone(),
+            )
+        }),
+    };
+    if let Some((commit, synced, unsynced, held)) = base {
+        let mut s = load(state)?;
+        s.last_sync_commit = commit;
+        s.synced_projects = synced;
+        s.unsynced_paths = unsynced;
+        s.held_projects = held;
+        if res.is_ok() {
+            s.last_sync_at = Some(now_ms());
+        }
+        store(state, &s)?;
+        after_local_writes(state, touched(state, plan, p));
+        emit_status(state);
+    }
+    res.map_err(sync_err)
+}
+
+// ---------------------------------------------------------------------- impls
+
+pub fn sync_status_impl(state: &AppState) -> SyncStatusDto {
+    let s = load(state).unwrap_or_default();
+    let logged_in = s.login.is_some() && token(state).is_some();
+    let repo = s.repo_owner.as_ref().map(|owner| RepoDto {
+        owner: owner.clone(),
+        name: s.repo_name.clone(),
+        url: format!("https://github.com/{owner}/{}", s.repo_name),
+        private: s.repo_private.unwrap_or(true),
+    });
+    SyncStatusDto {
+        logged_in,
+        login: if logged_in { s.login.clone() } else { None },
+        repo,
+        last_sync_at: s.last_sync_at,
+        needs: s.needs.clone(),
+        pending: pending(state, s),
+    }
+}
+
+/// Files that differ from the last synced commit; local only (no network,
+/// no `write_lock`).
+fn pending(state: &AppState, s: SyncState) -> usize {
+    let Ok(p) = gather(state, s, false) else { return 0 };
+    if p.st.last_sync_commit.is_some() && !p.repo_dir.join(".git").exists() {
+        return 0;
+    }
+    engine::pending_local(&make_ctx(state, &p, None)).unwrap_or(0)
+}
+
+pub fn login_start_impl(
+    state: &Arc<AppState>,
+) -> Result<(DeviceCodeDto, JoinHandle<()>), CommandError> {
+    let rt = &state.sync;
+    // A just-cancelled login may still be finishing its current sleep slice.
+    if rt.login_cancel.load(Ordering::SeqCst) {
+        for _ in 0..40 {
+            if !rt.login_active.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    if rt.login_active.swap(true, Ordering::SeqCst) {
+        return Err(busy());
+    }
+    let code = match rt.api.device_code(CLIENT_ID) {
+        Ok(c) => c,
+        Err(e) => {
+            rt.login_active.store(false, Ordering::SeqCst);
+            return Err(api_err(e));
+        }
+    };
+    rt.login_cancel.store(false, Ordering::SeqCst);
+    let dto = DeviceCodeDto {
+        user_code: code.user_code.clone(),
+        verification_uri: code.verification_uri.clone(),
+        expires_in: code.expires_in,
+    };
+    let st = state.clone();
+    let handle = std::thread::spawn(move || {
+        let event = match run_login(&st, &code) {
+            Ok(needs) => LoginEvent {
+                status: "ok".into(),
+                needs,
+                message: None,
+            },
+            Err(LoginFail::Login(LoginError::Expired)) => LoginEvent::of("expired"),
+            Err(LoginFail::Login(LoginError::Denied)) => LoginEvent::of("denied"),
+            Err(LoginFail::Login(LoginError::Cancelled)) => LoginEvent::of("cancelled"),
+            Err(LoginFail::Login(LoginError::Api(ApiError::Unauthorized))) => {
+                LoginEvent::of("denied")
+            }
+            Err(LoginFail::Login(e)) => LoginEvent {
+                message: Some(e.to_string()),
+                ..LoginEvent::of("error")
+            },
+            Err(LoginFail::Command(e)) => LoginEvent {
+                message: Some(e.message.clone()),
+                ..LoginEvent::of(if e.code == "unauthorized" {
+                    "relogin"
+                } else {
+                    "error"
+                })
+            },
+        };
+        st.sync.login_active.store(false, Ordering::SeqCst);
+        st.sync.emit(LOGIN_EVENT, &event);
+        emit_status(&st);
+    });
+    Ok((dto, handle))
+}
+
+enum LoginFail {
+    Login(LoginError),
+    Command(CommandError),
+}
+
+/// Polls for the token, then stores it, records the login and binds the
+/// repository. Returns what still blocks sync.
+fn run_login(state: &AppState, code: &DeviceCode) -> Result<Option<String>, LoginFail> {
+    let rt = &state.sync;
+    let sleep = |d: Duration| rt.login_sleep(d);
+    let token = device_login(&*rt.api, CLIENT_ID, code, &rt.login_cancel, &sleep)
+        .map_err(LoginFail::Login)?;
+    // Wait for a running sync instead of failing a login the user just approved.
+    let _g = lock(&rt.lock);
+    if rt.login_cancel.load(Ordering::SeqCst) {
+        return Err(LoginFail::Login(LoginError::Cancelled));
+    }
+    let fail = |e: CommandError| LoginFail::Command(e);
+    let user = rt.api.user(&token).map_err(|e| fail(api_err(e)))?;
+    rt.tokens
+        .set(&token)
+        .map_err(|e| fail(err("keychain", e)))?;
+    let mut s = load(state).map_err(fail)?;
+    s.login = Some(user.login.clone());
+    s.needs = None;
+    store(state, &s).map_err(fail)?;
+    match setup_repo(state, &token, &user.login, &mut s) {
+        Ok(needs) => Ok(needs),
+        Err(e) => {
+            if e.code == "unauthorized" {
+                let _ = rt.tokens.clear();
+                if let Ok(mut s) = load(state) {
+                    s.login = None;
+                    s.needs = Some("relogin".into());
+                    let _ = store(state, &s);
+                }
+            }
+            // Other failures keep the login: the next sync retries the setup.
+            Err(fail(e))
+        }
+    }
+}
+
+pub fn login_cancel_impl(state: &AppState) {
+    state.sync.login_cancel.store(true, Ordering::SeqCst);
+}
+
+/// Forgets the token and the login; keeps the clone and the sync base.
+pub fn logout_impl(state: &AppState) -> Result<SyncStatusDto, CommandError> {
+    let _g = try_sync_lock(state)?;
+    state.sync.login_cancel.store(true, Ordering::SeqCst);
+    state
+        .sync
+        .tokens
+        .clear()
+        .map_err(|e| err("keychain", e))?;
+    let mut s = load(state)?;
+    s.login = None;
+    s.needs = None;
+    store(state, &s)?;
+    lock(&state.sync.plans).clear();
+    emit_status(state);
+    Ok(sync_status_impl(state))
+}
+
+fn valid_repo_name(name: &str) -> bool {
+    (1..=100).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && name != "."
+        && name != ".."
+}
+
+/// Binds another repository name (after `not_ours`), then re-checks it when
+/// logged in.
+pub fn set_repo_name_impl(state: &AppState, name: &str) -> Result<SyncStatusDto, CommandError> {
+    if !valid_repo_name(name) {
+        return Err(err("invalid", "repository names use A-Z a-z 0-9 . _ - (max 100)"));
+    }
+    let _g = try_sync_lock(state)?;
+    let r = (|| {
+        let mut s = load(state)?;
+        if s.repo_name != name {
+            s.repo_name = name.to_string();
+            s.public_ack = false;
+        }
+        if matches!(s.needs.as_deref(), Some("not_ours" | "public_ack")) {
+            s.needs = None;
+        }
+        store(state, &s)?;
+        if let (Some(t), Some(login)) = (token(state), s.login.clone()) {
+            setup_repo(state, &t, &login, &mut s)?;
+        }
+        Ok(())
+    })();
+    r.map_err(|e| on_error(state, e))?;
+    emit_status(state);
+    Ok(sync_status_impl(state))
+}
+
+/// The user accepted syncing into a public repository.
+pub fn ack_public_repo_impl(state: &AppState) -> Result<SyncStatusDto, CommandError> {
+    let _g = try_sync_lock(state)?;
+    let r = (|| {
+        let mut s = load(state)?;
+        s.public_ack = true;
+        if s.needs.as_deref() == Some("public_ack") {
+            s.needs = None;
+        }
+        store(state, &s)?;
+        if let (Some(t), Some(login)) = (token(state), s.login.clone()) {
+            setup_repo(state, &t, &login, &mut s)?;
+        }
+        Ok(())
+    })();
+    r.map_err(|e| on_error(state, e))?;
+    emit_status(state);
+    Ok(sync_status_impl(state))
+}
+
+pub fn sync_start_impl(state: &AppState) -> Result<SyncStartDto, CommandError> {
+    let _g = try_sync_lock(state)?;
+    let r = (|| {
+        let mut s = load(state)?;
+        let token = require_token(state, &s)?;
+        ensure_ready(state, &token, &mut s)?;
+        state.rescan();
+        let p = gather(state, s, true)?;
+        let ctx = make_ctx(state, &p, Some(token));
+        let plan = prepare(&ctx).map_err(sync_err)?;
+        if !plan.secret_hits.is_empty() {
+            return Ok(SyncStartDto::Blocked {
+                secret_hits: plan.secret_hits,
+            });
+        }
+        if plan.conflicts.is_empty()
+            && plan.remote_deleted.is_empty()
+            && plan.local_all_deleted.is_empty()
+        {
+            let res = finish(&ctx, &plan, &BTreeMap::new());
+            let sum = settle(state, &plan, &p, res)?;
+            return Ok(SyncStartDto::Done {
+                summary: (&sum).into(),
+            });
+        }
+        let dto = plan_dto(state, &plan, &p);
+        let mut plans = lock(&state.sync.plans);
+        plans.clear();
+        plans.insert(plan.id.clone(), plan);
+        Ok(SyncStartDto::NeedsResolution { plan: dto })
+    })();
+    r.map_err(|e| on_error(state, e))
+}
+
+pub fn sync_finish_impl(
+    state: &AppState,
+    plan_id: &str,
+    resolutions: HashMap<String, ResolutionDto>,
+) -> Result<SyncSummaryDto, CommandError> {
+    let _g = try_sync_lock(state)?;
+    let r = (|| {
+        let plan = lock(&state.sync.plans)
+            .remove(plan_id)
+            .ok_or_else(|| err("plan_not_found", "this sync plan is no longer available"))?;
+        let s = load(state)?;
+        let token = require_token(state, &s)?;
+        state.rescan();
+        let p = gather(state, s, true)?;
+        let ctx = make_ctx(state, &p, Some(token));
+        let res: BTreeMap<String, Resolution> = resolutions
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        let out = finish(&ctx, &plan, &res);
+        // Nothing was written: the user can fix the choices and try again.
+        if matches!(
+            &out,
+            Err(SyncError::Unresolved { .. }) | Err(SyncError::Secrets { base: None, .. })
+        ) {
+            lock(&state.sync.plans).insert(plan.id.clone(), plan.clone());
+        }
+        settle(state, &plan, &p, out).map(|s| SyncSummaryDto::from(&s))
+    })();
+    r.map_err(|e| on_error(state, e))
+}
+
+pub fn sync_discard_impl(state: &AppState, plan_id: &str) {
+    lock(&state.sync.plans).remove(plan_id);
+}
+
+pub fn set_included_local_impl(
+    state: &AppState,
+    keys: Vec<String>,
+) -> Result<Vec<SyncProjectDto>, CommandError> {
+    let _g = try_sync_lock(state)?;
+    let mut keys = keys;
+    keys.sort();
+    keys.dedup();
+    let mut s = load(state)?;
+    s.included_local = keys;
+    store(state, &s)?;
+    drop(_g);
+    emit_status(state);
+    sync_projects_impl(state)
+}
+
+pub fn sync_projects_impl(state: &AppState) -> Result<Vec<SyncProjectDto>, CommandError> {
+    let s = load(state)?;
+    let index = state.snapshot_index();
+    Ok(index
+        .projects
+        .iter()
+        .map(|pm| {
+            let dir = Path::new(&pm.project.path);
+            let key = project_key(dir).and_then(|k| safe_key(&k));
+            let dk = dir_key(dir);
+            SyncProjectDto {
+                project_id: pm.project.id.clone(),
+                name: pm.project.name.clone(),
+                included: key.is_some() || s.included_local.contains(&dk),
+                key,
+                dir_key: dk,
+            }
+        })
+        .collect())
+}
+
+fn read_parts(state: &AppState) -> Result<Option<Parts>, CommandError> {
+    let s = load(state)?;
+    if !repo_dir(state).join(".git").exists() {
+        return Ok(None);
+    }
+    Ok(Some(gather(state, s, false)?))
+}
+
+pub fn sync_history_impl(state: &AppState, limit: usize) -> Result<Vec<CommitInfo>, CommandError> {
+    let Some(p) = read_parts(state)? else {
+        return Ok(Vec::new());
+    };
+    engine::history(&make_ctx(state, &p, None), limit.clamp(1, HISTORY_MAX)).map_err(sync_err)
+}
+
+fn check_commit(commit: &str) -> Result<(), CommandError> {
+    let ok = (commit.len() == 40 || commit.len() == 64)
+        && commit.bytes().all(|b| b.is_ascii_hexdigit());
+    if ok {
+        Ok(())
+    } else {
+        Err(err("invalid", "invalid commit id"))
+    }
+}
+
+pub fn sync_file_at_impl(
+    state: &AppState,
+    commit: &str,
+    repo_path: &str,
+) -> Result<Option<String>, CommandError> {
+    check_commit(commit)?;
+    let Some(p) = read_parts(state)? else {
+        return Ok(None);
+    };
+    engine::file_at(&make_ctx(state, &p, None), commit, repo_path).map_err(sync_err)
+}
+
+/// Writes the version of `repo_path` at `commit` to the matching local file
+/// (snapshot first). It becomes an ordinary local change.
+pub fn restore_from_history_impl(
+    state: &AppState,
+    commit: &str,
+    repo_path: &str,
+) -> Result<(), CommandError> {
+    check_commit(commit)?;
+    let _g = try_sync_lock(state)?;
+    state.rescan();
+    let Some(p) = read_parts(state)? else {
+        return Err(err("not_found", "the sync repository is not cloned"));
+    };
+    let text = engine::file_at(&make_ctx(state, &p, None), commit, repo_path)
+        .map_err(sync_err)?
+        .ok_or_else(|| err("not_found", "the file does not exist in that version"))?;
+    let local = local_of(state, &p, repo_path)
+        .ok_or_else(|| err("invalid", "this file has no place on this machine"))?;
+    {
+        let _w = lock(&state.write_lock);
+        let exists = local.exists();
+        let current = if exists {
+            read_memory(&local)?.hash
+        } else {
+            String::new()
+        };
+        let text = if !exists && cfg!(windows) {
+            text.replace('\n', "\r\n")
+        } else {
+            text
+        };
+        write_memory(&local, &text, &current, &state.snapshots).map_err(|e| match e {
+            WriteError::DiskChanged { .. } => {
+                let mut c = err("local_changed", "the file changed while restoring");
+                c.paths = Some(vec![local.to_string_lossy().into_owned()]);
+                c
+            }
+            other => other.into(),
+        })?;
+    }
+    after_local_writes(state, vec![normalize_path(&local.to_string_lossy())]);
+    emit_status(state);
+    Ok(())
+}
+
+// ------------------------------------------------------------------ commands
+
+type St<'a> = State<'a, Arc<AppState>>;
+
+#[tauri::command(async)]
+pub fn sync_status(state: St) -> SyncStatusDto {
+    sync_status_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn login_start(state: St) -> Result<DeviceCodeDto, CommandError> {
+    login_start_impl(state.inner()).map(|(dto, _)| dto)
+}
+
+#[tauri::command(async)]
+pub fn login_cancel(state: St) {
+    login_cancel_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn logout(state: St) -> Result<SyncStatusDto, CommandError> {
+    logout_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn set_repo_name(state: St, name: String) -> Result<SyncStatusDto, CommandError> {
+    set_repo_name_impl(&state, &name)
+}
+
+#[tauri::command(async)]
+pub fn ack_public_repo(state: St) -> Result<SyncStatusDto, CommandError> {
+    ack_public_repo_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn open_verification_url(app: AppHandle) -> Result<(), CommandError> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(VERIFICATION_URL, None::<&str>)
+        .map_err(|e| err("io", e.to_string()))
+}
+
+#[tauri::command(async)]
+pub fn sync_start(state: St) -> Result<SyncStartDto, CommandError> {
+    sync_start_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn sync_finish(
+    state: St,
+    plan_id: String,
+    resolutions: HashMap<String, ResolutionDto>,
+) -> Result<SyncSummaryDto, CommandError> {
+    sync_finish_impl(&state, &plan_id, resolutions)
+}
+
+#[tauri::command(async)]
+pub fn sync_discard(state: St, plan_id: String) {
+    sync_discard_impl(&state, &plan_id)
+}
+
+#[tauri::command(async)]
+pub fn set_included_local(
+    state: St,
+    keys: Vec<String>,
+) -> Result<Vec<SyncProjectDto>, CommandError> {
+    set_included_local_impl(&state, keys)
+}
+
+#[tauri::command(async)]
+pub fn sync_projects(state: St) -> Result<Vec<SyncProjectDto>, CommandError> {
+    sync_projects_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn sync_history(state: St, limit: usize) -> Result<Vec<CommitInfo>, CommandError> {
+    sync_history_impl(&state, limit)
+}
+
+#[tauri::command(async)]
+pub fn sync_file_at(
+    state: St,
+    commit: String,
+    repo_path: String,
+) -> Result<Option<String>, CommandError> {
+    sync_file_at_impl(&state, &commit, &repo_path)
+}
+
+#[tauri::command(async)]
+pub fn restore_from_history(
+    state: St,
+    commit: String,
+    repo_path: String,
+) -> Result<(), CommandError> {
+    restore_from_history_impl(&state, &commit, &repo_path)
+}
+
+#[cfg(test)]
+#[path = "commands_sync_tests.rs"]
+mod tests;

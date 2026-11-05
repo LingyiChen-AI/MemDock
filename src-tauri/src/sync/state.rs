@@ -49,6 +49,15 @@ pub struct SyncState {
     /// until the user decides (no deletion of their synced files is pushed).
     #[serde(default)]
     pub held_projects: BTreeSet<String>,
+    /// What blocks sync until the user acts: `public_ack` / `not_ours` / `relogin`.
+    #[serde(default)]
+    pub needs: Option<String>,
+    /// `owner/name` of the repository cloned into `<appdata>/sync/repo`.
+    #[serde(default)]
+    pub clone_of: Option<String>,
+    /// Visibility of the bound repository as GitHub last reported it.
+    #[serde(default)]
+    pub repo_private: Option<bool>,
 }
 
 impl Default for SyncState {
@@ -65,6 +74,9 @@ impl Default for SyncState {
             synced_projects: Vec::new(),
             unsynced_paths: BTreeSet::new(),
             held_projects: BTreeSet::new(),
+            needs: None,
+            clone_of: None,
+            repo_private: None,
         }
     }
 }

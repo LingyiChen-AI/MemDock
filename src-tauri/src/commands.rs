@@ -45,6 +45,9 @@ pub struct AppState {
     pub skills_lock: Mutex<()>,
     /// Serializes git-cache check / clone / cleanup (shared with the ops layer).
     pub cache_lock: Arc<Mutex<()>>,
+    /// GitHub sync: locks, pending plans, GitHub API, token store, git.
+    /// Tests replace it with fakes before wrapping the state in an `Arc`.
+    pub sync: crate::commands_sync::SyncRuntime,
 }
 
 impl AppState {
@@ -71,6 +74,7 @@ impl AppState {
             }),
             settings_lock: Mutex::new(()),
             write_lock: Arc::new(Mutex::new(())),
+            sync: crate::commands_sync::SyncRuntime::production(),
         };
         state.rescan();
         state
@@ -153,6 +157,12 @@ pub struct CommandError {
     /// Present for skill `local_changes`: no baseline exists, local edits cannot be ruled out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unknown: Option<bool>,
+    /// Present for sync `unresolved` / `local_changed`: the files involved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
+    /// Present for sync `secrets`: file / line / rule of each hit (never the text).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_hits: Option<Vec<crate::sync::engine::FileSecretHit>>,
 }
 
 impl CommandError {
@@ -164,6 +174,8 @@ impl CommandError {
             dir: None,
             dirs: None,
             unknown: None,
+            paths: None,
+            secret_hits: None,
         }
     }
 }
@@ -184,6 +196,8 @@ impl From<WriteError> for CommandError {
                 dir: None,
                 dirs: None,
                 unknown: None,
+                paths: None,
+                secret_hits: None,
             },
             WriteError::Io(e) => e.into(),
         }

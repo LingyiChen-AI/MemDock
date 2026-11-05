@@ -12,7 +12,8 @@ import "@fontsource-variable/jetbrains-mono";
 import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "../styles/globals.css";
 import App from "../App";
-import type { MemoryFile, MemoryIndex, Project } from "../api/types";
+import type { MemoryFile, MemoryIndex, Project, SkillEntry, UpdateStatus } from "../api/types";
+import { mkSkill } from "../pages/skills/testUtils";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") ?? "dark";
@@ -148,6 +149,84 @@ const searchHits = [
   { file_id: "c:/work/jev-rpa/agents.md", line: 3, preview: "Run MySQL migrations before deploy" },
 ];
 
+
+// Skill fixtures for the Skill 管理 page.
+const skillsList: SkillEntry[] = [
+  mkSkill({
+    name: "fireworks-tech-graph",
+    description: "Create precise SVG technical diagrams, export PNG or offline HTML, and animate supported semantic SVGs to GIF.",
+    source: { url: "https://github.com/yizhiyanhua-ai/fireworks-tech-graph", git_ref: null, commit: "a1b2c3d4e5f6", skill_path: "", origin: "registry" },
+    file_count: 14,
+    size_bytes: 182_000,
+  }),
+  mkSkill({
+    name: "fireworks-tech-graph",
+    id: "c:/users/admin/.codex/skills/fireworks-tech-graph",
+    tool: "codex",
+    dir: "C:\\Users\\Admin\\.codex\\skills\\fireworks-tech-graph",
+    description: "Create precise SVG technical diagrams, export PNG or offline HTML, and animate supported semantic SVGs to GIF.",
+    is_symlink: true,
+    symlink_target: "C:\\Users\\Admin\\.claude\\skills\\fireworks-tech-graph",
+    source: { url: "https://github.com/yizhiyanhua-ai/fireworks-tech-graph", git_ref: null, commit: "a1b2c3d4e5f6", skill_path: "", origin: "registry" },
+  }),
+  mkSkill({ name: "freecall-tester", description: "Use when 需要根据 PRD 产出标准测试用例或冒烟测试用例、用 ego-browser 跑 AI 自动化测试和 UI 走查", file_count: 9 }),
+  mkSkill({
+    name: "bug-bot",
+    description: "管理飞书群里的「查 bug 机器人」：给机器人加项目、加生产库、给新群配机器人、重启 bridge",
+    scope: { type: "project", project_id: jev.id },
+    source: { url: "https://git.example.com/team/bug-bot", git_ref: "main", commit: "9f8e7d6c5b4a", skill_path: "skills/bug-bot", origin: "manual" },
+  }),
+  mkSkill({ name: "sql-window", tool: "codex", description: "Use when 用户希望在 Codex 里通过飞书「研发SQL执行群」查询生产数据库", file_count: 4 }),
+  mkSkill({ name: "legacy-notes", description: "没有来源记录的本地 skill，用来演示补登来源", file_count: 2, size_bytes: 900 }),
+  mkSkill({
+    name: "superpowers:brainstorming",
+    id: "c:/users/admin/.claude/plugins/superpowers/skills/brainstorming",
+    dir: "C:\\Users\\Admin\\.claude\\plugins\\superpowers\\skills\\brainstorming",
+    kind: "plugin",
+    plugin: "superpowers",
+    readonly: true,
+    description: "You MUST use this before any creative work - creating features, building components, adding functionality.",
+  }),
+  mkSkill({
+    name: "imagegen",
+    id: "c:/users/admin/.codex/skills/.system/imagegen",
+    dir: "C:\\Users\\Admin\\.codex\\skills\\.system\\imagegen",
+    tool: "codex",
+    kind: "codex_system",
+    readonly: true,
+    description: "Generate and edit images with the built-in image tool.",
+  }),
+];
+const skillUpdates: UpdateStatus[] = [
+  { skill_id: skillsList[0].id, current: "a1b2c3d4e5f6", latest: "0f1e2d3c4b5a", has_update: true, local_modified: true, local_state_unknown: false, error: null },
+  { skill_id: skillsList[3].id, current: "9f8e7d6c5b4a", latest: "9f8e7d6c5b4a", has_update: false, local_modified: false, local_state_unknown: true, error: null },
+];
+const skillFileList = {
+  files: [
+    { rel_path: "SKILL.md", size_bytes: 5200 },
+    { rel_path: "scripts/fireworks.py", size_bytes: 20400 },
+    { rel_path: "scripts/render.py", size_bytes: 3100 },
+    { rel_path: "references/styles.md", size_bytes: 8800 },
+    { rel_path: "assets/logo.png", size_bytes: 48000 },
+  ],
+  truncated: false,
+};
+const skillDoc = `---
+name: fireworks-tech-graph
+description: Create precise SVG technical diagrams, export PNG or offline HTML.
+---
+
+# Fireworks Tech Graph
+
+Use this skill for architecture, UML, agent, cloud or workflow diagrams.
+
+## Workflow
+
+1. Write the JSON spec
+2. Run \`fireworks.py validate\`
+3. Render and check the result
+`;
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -175,6 +254,19 @@ mockIPC(
       case "update_ui_prefs":
         if (a.accent) previewAccent = String(a.accent);
         return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
+      case "list_skills":
+        return skillsList;
+      case "git_available":
+        return true;
+      case "check_skill_updates":
+        return skillUpdates;
+      case "list_skill_files":
+        return skillFileList;
+      case "read_skill_file":
+        if (String(a.relPath).endsWith(".png")) return { text: "", hash: "p", has_bom: false, crlf: false, tokens: 0, imports: [], binary: true, too_large: false };
+        return { text: String(a.relPath) === "SKILL.md" ? skillDoc : "print('hello')", hash: "sk1", has_bom: false, crlf: false, tokens: 120, imports: [], binary: false, too_large: false };
+      case "register_skill_source":
+        return skillsList[2];
       case "plugin:dialog|open":
         return null;
       default:
@@ -215,6 +307,25 @@ if (params.get("open") === "appearance") {
     if (btn) {
       clearInterval(timer);
       btn.click();
+    }
+  }, 100);
+}
+
+// `?skilltab=files` switches the opened skill to its file editor; `?select=<name>` opens a skill row;
+// `?check=1` runs the update check.
+const selectName = params.get("select");
+if (selectName || params.get("skilltab") === "files" || params.get("check")) {
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (tries > 100) clearInterval(timer);
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
+    if (rows.length === 0) return;
+    clearInterval(timer);
+    if (params.get("check")) Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.startsWith("检查更新"))?.click();
+    if (selectName) rows.find((r) => r.textContent?.includes(selectName))?.click();
+    if (params.get("skilltab") === "files") {
+      setTimeout(() => document.querySelector<HTMLElement>('[role="radio"]:not([aria-checked="true"])')?.click(), 300);
     }
   }, 100);
 }

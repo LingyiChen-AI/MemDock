@@ -409,13 +409,13 @@ const usageQuotaNow = () => ({
 });
 const envReport = () => ({
   tools: [
-    { name: "claude", installed: true, path: "C:\Users\Admin\AppData\Roaming\npm\claude.cmd", version: "2.1.318", logged_in: true, desktop_app: null },
-    { name: "codex", installed: false, path: null, version: null, logged_in: true, desktop_app: "C:\Users\Admin\AppData\Local\Microsoft\WindowsApps\OpenAI.Codex_2p2nqsd0c76g0" },
-    { name: "node", installed: true, path: "C:\Program Files\nodejs\node.exe", version: "24.22.1", logged_in: null, desktop_app: null },
-    { name: "npm", installed: true, path: "C:\Program Files\nodejs\npm.cmd", version: "11.6.2", logged_in: null, desktop_app: null },
-    { name: "git", installed: true, path: "C:\Program Files\Git\cmd\git.exe", version: "2.51.0.windows.1", logged_in: null, desktop_app: null },
+    { name: "claude", installed: true, path: "C:\\Users\\Admin\\AppData\\Roaming\\npm\\claude.cmd", version: "2.1.318", logged_in: true, desktop_app: null },
+    { name: "codex", installed: false, path: null, version: null, logged_in: true, desktop_app: "C:\\Users\\Admin\\AppData\\Local\\Microsoft\\WindowsApps\\OpenAI.Codex_2p2nqsd0c76g0" },
+    { name: "node", installed: true, path: "C:\\Program Files\\nodejs\\node.exe", version: "24.22.1", logged_in: null, desktop_app: null },
+    { name: "npm", installed: true, path: "C:\\Program Files\\nodejs\\npm.cmd", version: "11.6.2", logged_in: null, desktop_app: null },
+    { name: "git", installed: true, path: "C:\\Program Files\\Git\\cmd\\git.exe", version: "2.51.0.windows.1", logged_in: null, desktop_app: null },
   ],
-  data_dir: "C:\Users\Admin\AppData\Roaming\com.memdock.app",
+  data_dir: "C:\\Users\\Admin\\AppData\\Roaming\\com.memdock.app",
   installing: null,
 });
 

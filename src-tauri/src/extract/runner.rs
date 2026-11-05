@@ -194,7 +194,7 @@ fn env_path_dirs() -> Vec<PathBuf> {
 /// app started from Finder / the Dock gets a minimal `PATH` without Homebrew,
 /// npm or nvm, so the login shell's `PATH` (resolved once) and well-known
 /// install directories are added; elsewhere it is the process `PATH`.
-fn path_dirs() -> Vec<PathBuf> {
+pub fn path_dirs() -> Vec<PathBuf> {
     // `cfg!` (not `#[cfg]`) so the macOS branch is type-checked everywhere.
     if !cfg!(target_os = "macos") {
         return env_path_dirs();

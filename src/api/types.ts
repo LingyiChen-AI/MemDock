@@ -79,7 +79,10 @@ export type CommandErrorCode =
   | "not_found"
   | "not_pending"
   /** The extraction data files could not be loaded; `reset_extract_data` recovers. */
-  | "store_unavailable";
+  | "store_unavailable"
+  // Environment install
+  | "npm_missing"
+  | "busy";
 
 /** Error thrown by failing commands. `current_hash` is set for `disk_changed`. */
 export interface CommandError {

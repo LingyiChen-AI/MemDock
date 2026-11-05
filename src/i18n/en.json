@@ -633,7 +633,8 @@
       "title": "Data folder",
       "desc": "MemDock's settings, snapshots, usage cache and backups live here.",
       "open": "Open folder",
-      "openFailed": "Could not open: {error}"
+      "openFailed": "Could not open: {error}",
+      "copy": "Copy path"
     }
   }
 }

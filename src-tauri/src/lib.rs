@@ -1,7 +1,9 @@
 pub mod commands;
+pub mod commands_env;
 pub mod commands_extract;
 pub mod commands_skills;
 pub mod commands_usage;
+pub mod env;
 pub mod extract;
 pub mod fsutil;
 pub mod memory;
@@ -84,7 +86,9 @@ pub fn run() {
                 use tauri::Emitter;
                 let _ = usage_handle.emit(name, payload);
             }));
+            let env_state = Arc::new(commands_env::EnvState::new(state.clone()));
             app.manage(usage);
+            app.manage(env_state);
             app.manage(state);
             app.manage(handle);
             app.manage(extract);
@@ -139,6 +143,9 @@ pub fn run() {
             commands_usage::usage_export_csv,
             commands_usage::set_claude_quota_enabled,
             commands_usage::usage_rescan,
+            commands_env::env_detect,
+            commands_env::env_install,
+            commands_env::open_data_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -633,7 +633,8 @@
       "title": "数据目录",
       "desc": "MemDock 的设置、快照、用量缓存和备份都在这里。",
       "open": "打开文件夹",
-      "openFailed": "打开失败：{error}"
+      "openFailed": "打开失败：{error}",
+      "copy": "复制路径"
     }
   }
 }

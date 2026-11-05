@@ -1,7 +1,15 @@
+import { useState } from "react";
+import { AppProviders } from "@/providers";
+import { AppShell, type NavKey } from "@/layout/AppShell";
+
 export default function App() {
+  const [current, setCurrent] = useState<NavKey>("memory");
   return (
-    <main className="p-5">
-      <h1 className="text-[18px] leading-[26px] font-semibold">Memdock</h1>
-    </main>
+    <AppProviders>
+      <AppShell current={current} onNavigate={setCurrent}>
+        {/* Memory page lands in tasks 11-12. */}
+        <main className="p-5" />
+      </AppShell>
+    </AppProviders>
   );
 }

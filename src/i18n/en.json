@@ -1,0 +1,23 @@
+{
+  "nav": {
+    "memory": "Memories",
+    "review": "Review",
+    "extract": "Extraction",
+    "skills": "Skills",
+    "usage": "Usage",
+    "settings": "Settings"
+  },
+  "shell": {
+    "mainNav": "Main navigation",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
+  },
+  "placeholder": {
+    "comingSoon": "Coming soon",
+    "language": "Language",
+    "theme": "Theme",
+    "system": "System",
+    "dark": "Dark",
+    "light": "Light"
+  }
+}

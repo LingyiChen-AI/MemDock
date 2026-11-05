@@ -279,7 +279,7 @@ pub fn read_codex_db_impl(state: &AppState) -> CodexDbResult {
     read_codex_memories(&state.paths.codex_home.join("memories_1.sqlite"))
 }
 
-fn modify_settings(
+pub(crate) fn modify_settings(
     state: &AppState,
     f: impl FnOnce(&mut Settings),
 ) -> Result<Settings, CommandError> {

@@ -1,7 +1,10 @@
 pub mod commands;
+pub mod commands_env;
 pub mod commands_extract;
 pub mod commands_skills;
 pub mod commands_sync;
+pub mod commands_usage;
+pub mod env;
 pub mod extract;
 pub mod fsutil;
 pub mod memory;
@@ -13,6 +16,7 @@ pub mod secrets;
 pub mod settings;
 pub mod skills;
 pub mod sync;
+pub mod usage;
 pub mod watcher;
 pub mod window;
 
@@ -84,6 +88,15 @@ pub fn run() {
             let extract = Arc::new(commands_extract::ExtractState::new(state.clone()));
             extract.attach(app.handle().clone());
             extract.start_scheduler();
+            let usage = Arc::new(commands_usage::UsageState::new(state.clone()));
+            let usage_handle = app.handle().clone();
+            usage.start(Arc::new(move |name: &str, payload: serde_json::Value| {
+                use tauri::Emitter;
+                let _ = usage_handle.emit(name, payload);
+            }));
+            let env_state = Arc::new(commands_env::EnvState::new(state.clone()));
+            app.manage(usage);
+            app.manage(env_state);
             app.manage(state);
             app.manage(handle);
             app.manage(extract);
@@ -148,6 +161,14 @@ pub fn run() {
             commands_sync::sync_history,
             commands_sync::sync_file_at,
             commands_sync::restore_from_history,
+            commands_usage::usage_summary,
+            commands_usage::usage_quota,
+            commands_usage::usage_export_csv,
+            commands_usage::set_claude_quota_enabled,
+            commands_usage::usage_rescan,
+            commands_env::env_detect,
+            commands_env::env_install,
+            commands_env::open_data_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

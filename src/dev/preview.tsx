@@ -400,6 +400,79 @@ const syncCommits = [
 ];
 const syncSummary = { commit: "c4", committed: true, pulled: 2, pushed: 1, merged: 1 };
 
+// Usage page fixtures: deterministic fake numbers for any range.
+const usageTotals = (input: number, output: number, read: number, write: number, cost: number, unpriced = 0) => ({
+  input, output, cache_read: read, cache_write: write, total_tokens: input + output + read + write, cost, unpriced_tokens: unpriced,
+});
+const addT = (a: ReturnType<typeof usageTotals>, b: ReturnType<typeof usageTotals>) =>
+  usageTotals(a.input + b.input, a.output + b.output, a.cache_read + b.cache_read, a.cache_write + b.cache_write, a.cost + b.cost, a.unpriced_tokens + b.unpriced_tokens);
+const usageRow = (key: string, seed: number, scale: number) => {
+  const wave = (k: number) => Math.abs(Math.sin(seed * 1.7 + k)) * scale;
+  const c = usageTotals(Math.round(wave(1) * 9000), Math.round(wave(2) * 60000), Math.round(wave(3) * 3_000_000), Math.round(wave(4) * 200000), wave(5) * 9);
+  const x0 = usageTotals(Math.round(wave(6) * 12000), Math.round(wave(7) * 40000), Math.round(wave(8) * 900000), 0, wave(9) * 3);
+  const x1 = usageTotals(Math.round(wave(10) * 3000), Math.round(wave(11) * 8000), Math.round(wave(12) * 200000), 0, 0, Math.round(wave(12) * 211000));
+  const codex = addT(x0, x1);
+  return {
+    key, claude: c, codex, totals: addT(c, codex),
+    breakdown: [
+      { tool: "claude", model: "claude-opus-5-5", totals: c },
+      { tool: "codex", model: "gpt-5.2-codex", totals: x0 },
+      { tool: "codex", model: "gpt-6.1-sol", totals: x1 },
+    ],
+  };
+};
+const usageReport = (a: Record<string, unknown>) => {
+  const view = String(a.view);
+  const from = String(a.from);
+  const to = String(a.to);
+  const keys: string[] = [];
+  if (view === "today") for (let h = 0; h < 24; h++) keys.push(String(h).padStart(2, "0"));
+  else {
+    const d = new Date(`${from}T00:00:00`);
+    const end = new Date(`${to}T00:00:00`);
+    while (d <= end) {
+      const k = view === "monthly" ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (!keys.includes(k)) keys.push(k);
+      d.setDate(d.getDate() + 1);
+    }
+  }
+  const scale = view === "monthly" ? 25 : view === "today" ? 0.15 : 1;
+  const rows = keys.map((k, i) => (view === "today" && (i < 8 || i > 16) ? usageRow(k, 0, 0) : usageRow(k, i + 1, scale)));
+  const totals = rows.reduce((acc, r) => addT(acc, r.totals), usageTotals(0, 0, 0, 0, 0));
+  const days = view === "today" ? 1 : Math.max(1, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86_400_000) + 1);
+  const peak = rows.reduce((p, r) => (r.totals.cost > p.totals.cost ? r : p), rows[0]);
+  return {
+    view, from, to, rows,
+    summary: {
+      totals, days, daily_avg_cost: totals.cost / days, daily_avg_tokens: totals.total_tokens / days,
+      peak: peak ? { key: peak.key, cost: peak.totals.cost, tokens: peak.totals.total_tokens } : null,
+      cache_hit_rate: totals.cache_read / Math.max(1, totals.input + totals.cache_read),
+    },
+    models: ["claude-opus-5-5", "gpt-5.2-codex", "gpt-6.1-sol"],
+    unknown_models: ["gpt-6.1-sol"],
+    pricing_updated: "2026-11-06",
+    scanning: false,
+  };
+};
+let claudeQuotaOn = params.get("quota") === "on";
+const usageQuotaNow = () => ({
+  claude: claudeQuotaOn
+    ? { status: "ok", five_hour: { used_percent: 37.5, resets_at: Date.now() + 2.4 * 3600_000, window_minutes: 300 }, weekly: { used_percent: 84, resets_at: Date.now() + 3.2 * 86_400_000, window_minutes: 10080 }, updated_at: Date.now() }
+    : { status: "disabled", five_hour: null, weekly: null, updated_at: null },
+  codex: { status: "ok", five_hour: { used_percent: 12, resets_at: Date.now() + 47 * 60_000, window_minutes: 300 }, weekly: { used_percent: 46, resets_at: Date.now() + 5 * 86_400_000, window_minutes: 10080 }, updated_at: Date.now() - 600_000 },
+});
+const envReport = () => ({
+  tools: [
+    { name: "claude", installed: true, path: "C:\\Users\\Admin\\AppData\\Roaming\\npm\\claude.cmd", version: "2.1.318", logged_in: true, desktop_app: null },
+    { name: "codex", installed: false, path: null, version: null, logged_in: true, desktop_app: "C:\\Users\\Admin\\AppData\\Local\\Microsoft\\WindowsApps\\OpenAI.Codex_2p2nqsd0c76g0" },
+    { name: "node", installed: true, path: "C:\\Program Files\\nodejs\\node.exe", version: "24.22.1", logged_in: null, desktop_app: null },
+    { name: "npm", installed: true, path: "C:\\Program Files\\nodejs\\npm.cmd", version: "11.6.2", logged_in: null, desktop_app: null },
+    { name: "git", installed: true, path: "C:\\Program Files\\Git\\cmd\\git.exe", version: "2.51.0.windows.1", logged_in: null, desktop_app: null },
+  ],
+  data_dir: "C:\\Users\\Admin\\AppData\\Roaming\\com.memdock.app",
+  installing: null,
+});
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -423,7 +496,7 @@ mockIPC(
       case "read_codex_db":
         return { status: "unavailable", reason: "preview" };
       case "get_settings":
-        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn };
       case "update_ui_prefs":
         if (a.accent) previewAccent = String(a.accent);
         return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
@@ -538,6 +611,30 @@ mockIPC(
         return syncCommits;
       case "sync_file_at":
         return TEXT;
+      case "usage_summary":
+        return usageReport(a);
+      case "usage_quota":
+        return usageQuotaNow();
+      case "set_claude_quota_enabled":
+        claudeQuotaOn = Boolean(a.enabled);
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn };
+      case "usage_rescan":
+        return false;
+      case "usage_export_csv":
+        return null;
+      case "plugin:dialog|save":
+        return null;
+      case "env_detect":
+        return envReport();
+      case "env_install":
+        setTimeout(() => {
+          void emit("env://install-log", { kind: "log", tool: String(a.tool), line: "$ npm install -g @openai/codex" });
+          void emit("env://install-log", { kind: "log", tool: String(a.tool), line: "added 1 package in 3s" });
+          void emit("env://install-done", { kind: "done", tool: String(a.tool), ok: true, code: 0, error: null });
+        }, 400);
+        return null;
+      case "open_data_dir":
+        return envReport().data_dir;
       case "plugin:dialog|open":
         return null;
       default:

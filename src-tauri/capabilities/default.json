@@ -7,9 +7,10 @@
     "core:default",
     "core:event:default",
     "dialog:allow-open",
+    "dialog:allow-save",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/*" }]
+      "allow": [{ "url": "https://github.com/*" }, { "url": "https://nodejs.org/*" }]
     }
   ]
 }

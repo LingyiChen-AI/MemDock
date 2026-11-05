@@ -7,6 +7,8 @@ import { MemoryPage } from "@/pages/memory/MemoryPage";
 import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
+import { UsagePage } from "@/pages/usage/UsagePage";
+import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { AccountSlot } from "@/components/account/AccountSlot";
@@ -46,6 +48,8 @@ function Shell() {
           sync: (
             <SyncPage status={syncStatus} onStatus={setSyncStatus} onOpenLogin={() => setLoginOpen(true)} onDirtyChange={onDirty} />
           ),
+          usage: <UsagePage />,
+          settings: <SettingsPage onNavigate={navigate} />,
         }}
       >
         <MemoryPage onDirtyChange={onDirty} pendingByProject={pending?.by_project} />

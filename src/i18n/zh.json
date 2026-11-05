@@ -646,5 +646,147 @@
     "absent": "这个版本里没有该文件",
     "loading": "加载中…",
     "retry": "重试"
+  },
+  "usage": {
+    "title": "用量统计",
+    "subtitle": "读取本机 Claude Code 与 Codex 日志统计 token，金额按公开单价估算",
+    "refresh": "重新扫描",
+    "scanning": "正在首次扫描本机日志，数据稍后补全…",
+    "quota": {
+      "fiveHour": "5 小时窗口",
+      "weekly": "本周",
+      "used": "已用 {pct}%",
+      "resetsIn": "{time}后重置",
+      "resetUnknown": "重置时间未知",
+      "unavailable": "暂不可用",
+      "unavailableReason": "额度接口暂不可用（{reason}），token 统计不受影响",
+      "noData": "暂无额度数据，使用 Codex 后会出现",
+      "disabledTitle": "Claude Code 额度查询未开启",
+      "explain": "开启后，MemDock 读取 Claude Code 本机的登录凭据，向 Anthropic 的用量接口查询 5 小时和本周额度。这是非公开接口，可能随时失效；凭据只用于这次请求，不保存、不写日志。关闭时不会发出任何网络请求。",
+      "enable": "开启查询",
+      "updated": "数据时间 {time}"
+    },
+    "views": {
+      "today": "今天",
+      "daily": "每日",
+      "monthly": "每月"
+    },
+    "range": {
+      "last7": "近 7 天",
+      "last30": "近 30 天",
+      "thisMonth": "本月",
+      "last6m": "近 6 个月",
+      "last12m": "近 12 个月",
+      "from": "开始日期",
+      "to": "结束日期"
+    },
+    "filter": {
+      "tool": "工具",
+      "model": "模型",
+      "allTools": "全部工具",
+      "allModels": "全部模型"
+    },
+    "export": "导出 CSV",
+    "exported": "已导出到 {path}",
+    "exportFailed": "导出失败：{error}",
+    "loadFailed": "读取用量失败：{error}",
+    "summary": {
+      "cost": "区间金额",
+      "tokens": "区间 tokens",
+      "dailyAvg": "日均",
+      "peakDay": "最高一天",
+      "peakHour": "最高一小时",
+      "peakMonth": "最高一月",
+      "hitRate": "缓存命中率",
+      "perDay": "{cost} · {tokens} tokens",
+      "none": "无"
+    },
+    "estimateNote": "金额按公开单价估算（单价表更新于 {date}），订阅用户实际不按此扣费。",
+    "unknownPrice": "含未知价格模型：{models}。这些模型的 token 已统计，但未计入金额。",
+    "chart": {
+      "daily": "每日金额",
+      "today": "今天每小时金额",
+      "monthly": "每月金额",
+      "total": "合计",
+      "hint": "点击柱子查看当天明细"
+    },
+    "table": {
+      "date": "日期",
+      "hour": "时段",
+      "month": "月份",
+      "input": "输入",
+      "output": "输出",
+      "cacheRead": "缓存读",
+      "cacheWrite": "缓存写",
+      "total": "总 tokens",
+      "cost": "金额",
+      "expand": "展开 {key} 的工具 × 模型明细",
+      "collapse": "收起",
+      "unknown": "未知价格"
+    },
+    "empty": "这段时间没有用量记录",
+    "duration": {
+      "d": "{d} 天 {h} 小时",
+      "h": "{h} 小时 {m} 分",
+      "m": "{m} 分钟"
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "env": {
+      "title": "环境",
+      "desc": "检测本机的 Claude Code、Codex 与 Node.js。未安装的 CLI 可以一键用 npm 安装。",
+      "recheck": "重新检测",
+      "checking": "检测中…",
+      "installed": "已安装",
+      "notInstalled": "未安装",
+      "version": "版本 {v}",
+      "loggedIn": "已登录",
+      "notLoggedIn": "未登录",
+      "install": "一键安装",
+      "installing": "安装中…",
+      "installOk": "{name} 安装完成",
+      "installFailed": "{name} 安装失败：{error}",
+      "desktopOnly": "检测到 Codex 桌面版，但没有命令行版本（提取等功能需要 CLI）",
+      "loginHint": "在终端运行 {cmd} 完成登录",
+      "copy": "复制命令",
+      "copied": "已复制",
+      "npmMissing": "没有找到 npm，请先安装 Node.js",
+      "nodeLink": "前往 Node.js 官网",
+      "log": "安装日志",
+      "busy": "已有安装任务在进行",
+      "names": {
+        "claude": "Claude Code",
+        "codex": "Codex CLI",
+        "node": "Node.js",
+        "npm": "npm",
+        "git": "Git"
+      }
+    },
+    "appearance": {
+      "title": "外观"
+    },
+    "extract": {
+      "title": "记忆提取",
+      "desc": "提取使用的工具、定时和项目范围在提取页配置。",
+      "open": "打开提取设置"
+    },
+    "sync": {
+      "title": "GitHub 同步",
+      "desc": "绑定仓库后在多台机器之间同步记忆和 skill 清单。",
+      "open": "打开同步设置",
+      "pending": "同步功能合并后可用"
+    },
+    "quota": {
+      "title": "Claude Code 额度查询",
+      "toggle": "查询 Claude Code 额度"
+    },
+    "data": {
+      "title": "数据目录",
+      "desc": "MemDock 的设置、快照、用量缓存和备份都在这里。",
+      "open": "打开文件夹",
+      "openFailed": "打开失败：{error}",
+      "copy": "复制路径"
+    }
   }
 }

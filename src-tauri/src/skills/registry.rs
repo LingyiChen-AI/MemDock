@@ -10,7 +10,7 @@ use walkdir::WalkDir;
 use crate::model::Tool;
 use crate::projects::normalize_path;
 use crate::skills::model::{SkillEntry, SkillScope, SkillSource, SourceOrigin};
-use crate::skills::source::normalize_url;
+use crate::skills::source::{normalize_url, parse_url};
 
 /// One place a registered skill is installed.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -46,22 +46,29 @@ impl Default for Registry {
     }
 }
 
-/// Loads the registry. Missing -> empty. Unparseable -> copied to `<path>.bak`
-/// (timestamped if one exists) and an empty registry is returned.
-pub fn load_registry(path: &Path) -> Registry {
-    let Ok(text) = fs::read_to_string(path) else {
-        return Registry::default();
-    };
-    match serde_json::from_str(&text) {
-        Ok(r) => r,
+/// Loads the registry. A missing file -> empty. Any other read or parse failure
+/// -> the file is copied to `<path>.bak` (timestamped if one exists) and an
+/// empty registry is returned; if that backup fails an error is returned so the
+/// caller never overwrites data it could not preserve.
+pub fn load_registry(path: &Path) -> Result<Registry, String> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Registry::default()),
         Err(_) => {
-            backup_corrupt(path);
-            Registry::default()
+            backup_corrupt(path)?;
+            return Ok(Registry::default());
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(r) => Ok(r),
+        Err(_) => {
+            backup_corrupt(path)?;
+            Ok(Registry::default())
         }
     }
 }
 
-fn backup_corrupt(path: &Path) {
+fn backup_corrupt(path: &Path) -> Result<(), String> {
     let base = path
         .file_name()
         .map(OsString::from)
@@ -78,11 +85,16 @@ fn backup_corrupt(path: &Path) {
         named.push(format!(".{ms}.bak"));
         target = path.with_file_name(named);
     }
-    let _ = fs::copy(path, target);
+    fs::copy(path, &target)
+        .map(|_| ())
+        .map_err(|e| format!("cannot back up unreadable registry {}: {e}", path.display()))
 }
 
-/// Saves atomically via `<path>.tmp` + rename.
+/// Saves atomically: unique temp file in the same directory, fsync, rename.
 pub fn save_registry(path: &Path, r: &Registry) -> io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let json = serde_json::to_string_pretty(r)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if let Some(parent) = path.parent() {
@@ -94,23 +106,38 @@ pub fn save_registry(path: &Path, r: &Registry) -> io::Result<()> {
         .file_name()
         .map(OsString::from)
         .unwrap_or_else(|| OsString::from("skills-registry.json"));
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp_path = path.with_file_name(tmp_name);
-    fs::write(&tmp_path, json)?;
-    fs::rename(&tmp_path, path)
+    let write = || -> io::Result<()> {
+        let mut f = fs::File::create(&tmp_path)?;
+        f.write_all(json.as_bytes())?;
+        f.sync_all()?;
+        fs::rename(&tmp_path, path)
+    };
+    let res = write();
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    res
 }
 
 /// Deterministic content hash: files sorted by `/`-separated relative path,
-/// each contributing sha256(path + NUL + bytes). `.git/` and `.DS_Store` are skipped.
+/// each contributing sha256(path + NUL + bytes); symlinks contribute
+/// `symlink:<target>` instead. `.git/`, `node_modules/` and `.DS_Store` are skipped.
 pub fn dir_content_hash(dir: &Path) -> io::Result<String> {
     let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
     let walker = WalkDir::new(dir).into_iter().filter_entry(|e| {
         let n = e.file_name();
-        !(n == ".git" || n == ".DS_Store")
+        !(n == ".git" || n == ".DS_Store" || n == "node_modules")
     });
     for item in walker {
         let item = item.map_err(io::Error::other)?;
-        if !item.file_type().is_file() {
+        let ft = item.file_type();
+        if !ft.is_file() && !ft.is_symlink() {
             continue;
         }
         let rel = item
@@ -129,7 +156,13 @@ pub fn dir_content_hash(dir: &Path) -> io::Result<String> {
         let mut h = Sha256::new();
         h.update(rel.as_bytes());
         h.update([0u8]);
-        h.update(fs::read(&path)?);
+        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            let target = fs::read_link(&path)?;
+            h.update(b"symlink:");
+            h.update(target.to_string_lossy().replace('\\', "/").as_bytes());
+        } else {
+            h.update(fs::read(&path)?);
+        }
         total.update(h.finalize());
     }
     Ok(total
@@ -147,7 +180,10 @@ pub fn register_manual(
     skill_path: &str,
 ) -> Result<(), String> {
     let trimmed = url.trim();
-    if !(trimmed.starts_with("https://") || trimmed.starts_with("git@")) {
+    let scheme_ok = ["https://", "http://", "ssh://", "git@"]
+        .iter()
+        .any(|p| trimmed.starts_with(p));
+    if !scheme_ok || parse_url(trimmed).is_none() {
         return Err(format!("unsupported url: {url}"));
     }
     let url = normalize_url(trimmed);
@@ -248,9 +284,9 @@ mod tests {
     fn registry_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("sub").join("reg.json");
-        assert_eq!(load_registry(&path), Registry::default());
+        assert_eq!(load_registry(&path).unwrap(), Registry::default());
         save_registry(&path, &sample()).unwrap();
-        assert_eq!(load_registry(&path), sample());
+        assert_eq!(load_registry(&path).unwrap(), sample());
         assert!(!tmp.path().join("sub").join("reg.json.tmp").exists());
     }
 
@@ -259,19 +295,59 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("reg.json");
         fs::write(&path, "{ oops").unwrap();
-        assert_eq!(load_registry(&path), Registry::default());
+        assert_eq!(load_registry(&path).unwrap(), Registry::default());
         assert_eq!(
             fs::read_to_string(tmp.path().join("reg.json.bak")).unwrap(),
             "{ oops"
         );
         fs::write(&path, "garbage2").unwrap();
-        load_registry(&path);
+        load_registry(&path).unwrap();
         assert!(
             fs::read_to_string(tmp.path().join("reg.json.bak"))
                 .unwrap()
                 .contains("oops")
         );
         assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn non_utf8_registry_is_backed_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("reg.json");
+        fs::write(&path, [0xffu8, 0xfe, 0x00, 0x80]).unwrap();
+        assert_eq!(load_registry(&path).unwrap(), Registry::default());
+        assert_eq!(
+            fs::read(tmp.path().join("reg.json.bak")).unwrap(),
+            vec![0xffu8, 0xfe, 0x00, 0x80]
+        );
+    }
+
+    #[test]
+    fn unreadable_registry_without_backup_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A directory in place of the file: read fails (not NotFound) and cannot be copied.
+        let path = tmp.path().join("reg.json");
+        fs::create_dir(&path).unwrap();
+        assert!(load_registry(&path).is_err());
+    }
+
+    #[test]
+    fn content_hash_covers_symlinks_and_skips_node_modules() {
+        let a = tempfile::tempdir().unwrap();
+        fs::write(a.path().join("SKILL.md"), "x").unwrap();
+        let base = dir_content_hash(a.path()).unwrap();
+        fs::create_dir(a.path().join("node_modules")).unwrap();
+        fs::write(a.path().join("node_modules").join("m.js"), "m").unwrap();
+        assert_eq!(base, dir_content_hash(a.path()).unwrap());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("t1", a.path().join("l")).unwrap();
+            let h1 = dir_content_hash(a.path()).unwrap();
+            assert_ne!(base, h1);
+            fs::remove_file(a.path().join("l")).unwrap();
+            std::os::unix::fs::symlink("t2", a.path().join("l")).unwrap();
+            assert_ne!(h1, dir_content_hash(a.path()).unwrap());
+        }
     }
 
     #[test]
@@ -300,8 +376,11 @@ mod tests {
         fs::write(tmp.path().join("SKILL.md"), "x").unwrap();
         let e = entry(tmp.path());
         let mut reg = Registry::default();
-        assert!(register_manual(&mut reg, &e, "http://github.com/a/b", "").is_err());
+        assert!(register_manual(&mut reg, &e, "ftp://github.com/a/b", "").is_err());
         assert!(register_manual(&mut reg, &e, "not a url", "").is_err());
+        assert!(register_manual(&mut reg, &e, "https://", "").is_err());
+        assert!(register_manual(&mut reg, &e, "git@x", "").is_err());
+        assert!(register_manual(&mut reg, &e, "https://github.com/", "").is_err());
         assert!(reg.skills.is_empty());
         register_manual(&mut reg, &e, "git@github.com:a/b.git", "/skills/demo/").unwrap();
         let s = &reg.skills[0];

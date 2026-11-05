@@ -6,25 +6,42 @@ use crate::skills::git::GitRunner;
 use crate::skills::model::{SkillEntry, SkillSource, SourceOrigin};
 use crate::skills::registry::Registry;
 
-/// Normalizes a git URL: `git@host:owner/repo(.git)` -> `https://host/owner/repo`,
-/// and strips a trailing `.git` and `/`.
+/// Splits a git URL into `(lowercase host without www., repo path without .git)`.
+/// Handles http(s)/ssh/git schemes (user info and ssh port dropped) and scp-style
+/// `user@host:owner/repo`. Returns `None` when there is no host or no path.
+pub fn parse_url(url: &str) -> Option<(String, String)> {
+    let u = url.trim();
+    let (host_raw, path_raw) = if let Some((scheme, rest)) = u.split_once("://") {
+        let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let host = auth.rsplit_once('@').map_or(auth, |(_, h)| h);
+        let host = if scheme.eq_ignore_ascii_case("ssh") {
+            host.split(':').next().unwrap_or("")
+        } else {
+            host
+        };
+        (host, path)
+    } else {
+        let (auth, path) = u.split_once(':')?;
+        (auth.rsplit_once('@').map_or(auth, |(_, h)| h), path)
+    };
+    let host = host_raw.trim().to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
+    let mut path = path_raw.trim().trim_matches('/');
+    if let Some(p) = path.strip_suffix(".git") {
+        path = p.trim_end_matches('/');
+    }
+    if host.is_empty() || path.is_empty() || host.contains(char::is_whitespace) {
+        return None;
+    }
+    Some((host, path.to_string()))
+}
+
+/// Normalizes a git URL to `https://<host>/<path>` (no `.git`, no trailing `/`).
 pub fn normalize_url(url: &str) -> String {
-    let mut u = url.trim().to_string();
-    if let Some(rest) = u.strip_prefix("git@") {
-        if let Some((host, path)) = rest.split_once(':') {
-            u = format!("https://{host}/{path}");
-        }
+    match parse_url(url) {
+        Some((host, path)) => format!("https://{host}/{path}"),
+        None => url.trim().trim_end_matches('/').to_string(),
     }
-    while u.ends_with('/') {
-        u.pop();
-    }
-    if let Some(s) = u.strip_suffix(".git") {
-        u = s.to_string();
-    }
-    while u.ends_with('/') {
-        u.pop();
-    }
-    u
 }
 
 /// Reads `home/.agents/.skill-lock.json` (v3). Missing or malformed -> empty.
@@ -132,9 +149,25 @@ pub fn infer_source(
             return Some(s);
         }
     }
-    lock.iter()
-        .find(|(n, _)| *n == entry.name)
-        .map(|(_, s)| s.clone())
+    // skill-lock keys are directory names under `~/.agents/skills/`; only skills
+    // living there (or symlinked to it) are attributed, never same-named local ones.
+    let key = [Some(entry.dir.as_str()), entry.symlink_target.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(agents_skill_key)?;
+    lock.iter().find(|(n, _)| *n == key).map(|(_, s)| s.clone())
+}
+
+/// `<anything>/.agents/skills/<key>` -> `<key>`.
+fn agents_skill_key(path: &str) -> Option<String> {
+    let p = path.replace('\\', "/");
+    let parts: Vec<&str> = p.trim_end_matches('/').split('/').collect();
+    let n = parts.len();
+    if n >= 3 && parts[n - 2] == "skills" && parts[n - 3] == ".agents" && !parts[n - 1].is_empty() {
+        Some(parts[n - 1].to_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -231,6 +264,19 @@ mod tests {
             normalize_url("git@github.com:a/b"),
             "https://github.com/a/b"
         );
+        for u in [
+            "ssh://git@github.com/a/b.git",
+            "ssh://git@github.com:22/a/b",
+            "http://github.com/a/b",
+            "https://user:tok@github.com/a/b.git/",
+            "https://www.GitHub.com/a/b",
+            "git@GitHub.com:a/b.git",
+        ] {
+            assert_eq!(normalize_url(u), "https://github.com/a/b", "{u}");
+        }
+        assert!(parse_url("https://").is_none());
+        assert!(parse_url("git@x").is_none());
+        assert!(parse_url("https://github.com/").is_none());
     }
 
     #[test]
@@ -342,18 +388,52 @@ mod tests {
     }
 
     #[test]
-    fn infer_from_skill_lock() {
+    fn infer_from_skill_lock_by_dir_name() {
         let tmp = tempfile::tempdir().unwrap();
-        let e = entry("demo", tmp.path());
+        let dir = tmp.path().join(".agents").join("skills").join("demo-dir");
+        fs::create_dir_all(&dir).unwrap();
+        // Frontmatter name differs from the directory name (the lock key).
+        let e = entry("Fancy Name", &dir);
         let s = infer_source(
             &e,
             &Registry::default(),
-            &[lock_entry("demo")],
+            &[lock_entry("demo-dir")],
             &FakeGit::none(),
         )
         .unwrap();
         assert_eq!(s.origin, SourceOrigin::SkillLock);
         assert_eq!(s.url, "https://github.com/l/l");
+        // A symlink pointing into ~/.agents/skills/<key> is attributed too.
+        let link = tmp.path().join(".claude").join("skills").join("alias");
+        let mut l = entry("alias", &link);
+        l.is_symlink = true;
+        l.symlink_target = Some(dir.to_string_lossy().into_owned());
+        assert!(
+            infer_source(
+                &l,
+                &Registry::default(),
+                &[lock_entry("demo-dir")],
+                &FakeGit::none()
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn infer_skill_lock_ignores_same_named_local_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".claude").join("skills").join("demo");
+        fs::create_dir_all(&dir).unwrap();
+        let e = entry("demo", &dir);
+        assert!(
+            infer_source(
+                &e,
+                &Registry::default(),
+                &[lock_entry("demo")],
+                &FakeGit::none()
+            )
+            .is_none()
+        );
     }
 
     #[test]

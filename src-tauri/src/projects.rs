@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
@@ -26,11 +26,21 @@ pub fn normalize_path(p: &str) -> String {
 
 /// Scans the first `MAX_LINES` lines of a jsonl file; returns the first string
 /// produced by `pick` for a parsed line. Unparsable lines are skipped.
+/// Opens a jsonl log for line-by-line reading; `.zst` files are stream-decompressed.
+pub fn open_jsonl(path: &Path) -> io::Result<Box<dyn BufRead>> {
+    let file = File::open(path)?;
+    if path.extension().is_some_and(|x| x == "zst") {
+        Ok(Box::new(BufReader::new(zstd::stream::read::Decoder::new(file)?)))
+    } else {
+        Ok(Box::new(BufReader::new(file)))
+    }
+}
+
 fn scan_jsonl<F>(path: &Path, limit: usize, pick: F) -> Option<String>
 where
     F: Fn(&serde_json::Value) -> Option<String>,
 {
-    let reader = BufReader::new(File::open(path).ok()?);
+    let reader = open_jsonl(path).ok()?;
     for line in reader.lines().take(limit) {
         let Ok(line) = line else { continue };
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
@@ -86,13 +96,14 @@ pub fn claude_project_dirs(paths: &AgentPaths) -> HashMap<String, PathBuf> {
 }
 
 fn codex_cwds(paths: &AgentPaths) -> Vec<String> {
-    let mut files: Vec<PathBuf> = WalkDir::new(paths.codex_home.join("sessions"))
-        .into_iter()
+    let mut files: Vec<PathBuf> = ["sessions", "archived_sessions"]
+        .iter()
+        .flat_map(|d| WalkDir::new(paths.codex_home.join(d)))
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .filter(|e| {
             let n = e.file_name().to_string_lossy();
-            n.starts_with("rollout-") && n.ends_with(".jsonl")
+            n.starts_with("rollout-") && (n.ends_with(".jsonl") || n.ends_with(".jsonl.zst"))
         })
         .map(|e| e.into_path())
         .collect();
@@ -147,8 +158,9 @@ pub fn discover_projects(paths: &AgentPaths, manual: &[String]) -> Vec<Project> 
         add(cwd, ProjectSource::CodexSessions);
     }
     for m in manual {
-        if !m.trim().is_empty() {
-            add(m.clone(), ProjectSource::Manual);
+        let m = m.trim();
+        if !m.is_empty() {
+            add(m.to_string(), ProjectSource::Manual);
         }
     }
     let mut list: Vec<Project> = by_id.into_values().collect();
@@ -277,5 +289,43 @@ mod tests {
         lines.push(json!({"cwd": "/late/proj"}).to_string());
         claude_file(&paths, "late", "s.jsonl", &lines);
         assert!(discover_projects(&paths, &[]).is_empty());
+    }
+
+    fn zst_file(path: &Path, cwd: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let line = json!({"type":"session_meta","payload":{"cwd":cwd}}).to_string() + "
+";
+        fs::write(path, zstd::encode_all(line.as_bytes(), 3).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn discovers_from_codex_zst_session() {
+        let tmp = TempDir::new().unwrap();
+        let paths = AgentPaths::from_home(tmp.path());
+        zst_file(&paths.codex_home.join("sessions/2026/11/05/rollout-1.jsonl.zst"), "/z/proj-z");
+        let list = discover_projects(&paths, &[]);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "proj-z");
+        assert_eq!(list[0].sources, vec![ProjectSource::CodexSessions]);
+    }
+
+    #[test]
+    fn discovers_from_codex_archived_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let paths = AgentPaths::from_home(tmp.path());
+        zst_file(&paths.codex_home.join("archived_sessions/rollout-2.jsonl.zst"), "/arc/one");
+        let line = json!({"type":"session_meta","payload":{"cwd":"/arc/two"}}).to_string();
+        write_lines(&paths.codex_home.join("archived_sessions/rollout-3.jsonl"), &[line]);
+        let names: Vec<String> = discover_projects(&paths, &[]).into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn manual_path_is_trimmed() {
+        let tmp = TempDir::new().unwrap();
+        let paths = AgentPaths::from_home(tmp.path());
+        let list = discover_projects(&paths, &["  /m/one  ".to_string()]);
+        assert_eq!(list[0].path, "/m/one");
+        assert_eq!(list[0].id, normalize_path("/m/one"));
     }
 }

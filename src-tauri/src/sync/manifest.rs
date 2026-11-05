@@ -1,12 +1,14 @@
 //! Skills install manifest (`skills.json`): syncs how skills are installed, not their files.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::Tool;
 use crate::skills::model::{SkillScope, SkillSource};
 use crate::skills::registry::Registry;
+use crate::skills::source::normalize_url;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -49,14 +51,28 @@ impl Default for Manifest {
 
 impl Manifest {
     /// Pretty JSON (2 spaces) with a trailing newline.
-    pub fn to_json(&self) -> String {
-        let mut s = serde_json::to_string_pretty(self).unwrap_or_default();
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        let mut s = serde_json::to_string_pretty(self)?;
         s.push('\n');
-        s
+        Ok(s)
     }
 
+    /// Err means abort the sync; never treat as an empty manifest. A missing file
+    /// is the only case for Default. A newer `format`, unknown tool or scope
+    /// values are errors. Urls and skill paths are normalized.
     pub fn from_json(text: &str) -> Result<Manifest, String> {
-        serde_json::from_str(text).map_err(|e| e.to_string())
+        let mut m: Manifest = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if m.format > 1 {
+            return Err(format!(
+                "skills.json format {} is newer than supported (1)",
+                m.format
+            ));
+        }
+        for s in &mut m.skills {
+            s.url = norm_url(&s.url);
+            s.skill_path = norm_path(&s.skill_path);
+        }
+        Ok(m)
     }
 }
 
@@ -69,10 +85,18 @@ fn tool_rank(t: Tool) -> u8 {
     }
 }
 
+fn norm_url(u: &str) -> String {
+    normalize_url(u)
+}
+
+fn norm_path(p: &str) -> String {
+    p.trim_matches('/').to_string()
+}
+
 fn identity(s: &ManifestSkill) -> Identity {
     (
-        s.url.clone(),
-        s.skill_path.clone(),
+        norm_url(&s.url),
+        norm_path(&s.skill_path),
         tool_rank(s.tool),
         s.scope.clone(),
     )
@@ -88,10 +112,10 @@ fn make(name: &str, src: &SkillSource, tool: Tool, scope: ManifestScope) -> Opti
     }
     Some(ManifestSkill {
         name: name.to_string(),
-        url: src.url.clone(),
+        url: norm_url(&src.url),
         git_ref: src.git_ref.clone(),
         commit: src.commit.clone(),
-        skill_path: src.skill_path.clone(),
+        skill_path: norm_path(&src.skill_path),
         tool,
         scope,
         installed_on: BTreeSet::new(),
@@ -105,6 +129,8 @@ fn make(name: &str, src: &SkillSource, tool: Tool, scope: ManifestScope) -> Opti
 ///
 /// Skill-lock entries (`npx skills`) cannot say which tool reads them; they are
 /// treated as Codex global installs (`~/.agents/skills`). Registry entries win.
+/// Callers pass `skill_lock` already filtered by `installed_lock_entries`, so
+/// stale lock entries (directory gone) do not count as installed.
 pub fn local_entries(
     registry: &Registry,
     skill_lock: &[(String, SkillSource)],
@@ -142,6 +168,18 @@ pub fn local_entries(
     out
 }
 
+/// Keeps only skill-lock entries whose directory still exists under
+/// `<home>/.agents/skills/<key>`.
+pub fn installed_lock_entries(
+    home: &Path,
+    lock: Vec<(String, SkillSource)>,
+) -> Vec<(String, SkillSource)> {
+    let base = home.join(".agents").join("skills");
+    lock.into_iter()
+        .filter(|(key, _)| !key.is_empty() && base.join(key).exists())
+        .collect()
+}
+
 pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> Manifest {
     let mut result: Vec<ManifestSkill> = Vec::new();
     for r in &base_remote.skills {
@@ -150,7 +188,8 @@ pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> 
         if let Some(l) = local.iter().find(|l| identity(l) == id) {
             item.installed_on.insert(machine.to_string());
             item.removed_on.remove(machine);
-            item.commit = l.commit.clone();
+            item.commit = l.commit.clone().or(item.commit.take());
+            item.git_ref = l.git_ref.clone().or(item.git_ref.take());
         } else if item.installed_on.contains(machine) {
             item.installed_on.remove(machine);
             item.removed_on.insert(machine.to_string());
@@ -185,7 +224,10 @@ pub fn missing_here(m: &Manifest, local: &[ManifestSkill], machine: &str) -> Vec
     m.skills
         .iter()
         .filter(|s| {
-            !s.installed_on.is_empty() && !has_local(local, s) && !s.removed_on.contains(machine)
+            !s.installed_on.is_empty()
+                && !s.installed_on.contains(machine)
+                && !has_local(local, s)
+                && !s.removed_on.contains(machine)
         })
         .cloned()
         .collect()
@@ -375,11 +417,93 @@ mod tests {
     fn merge_is_deterministic() {
         let remote = man(vec![sk("z", &["B", "A"], &[]), sk("a", &["B"], &["C"])]);
         let local = vec![sk("m", &[], &[]), sk("z", &[], &[])];
-        let s1 = merge(&remote, &local, "A").to_json();
+        let s1 = merge(&remote, &local, "A").to_json().unwrap();
         let rev: Vec<_> = local.iter().rev().cloned().collect();
-        let s2 = merge(&remote, &rev, "A").to_json();
+        let s2 = merge(&remote, &rev, "A").to_json().unwrap();
         assert_eq!(s1, s2);
         assert!(s1.ends_with("}\n"));
         assert!(s1.contains("\n  \"format\""));
+    }
+
+    #[test]
+    fn from_json_rejects_bad_input() {
+        assert!(Manifest::from_json("{not json").is_err());
+        assert!(Manifest::from_json(r#"{"format":2,"skills":[]}"#).is_err());
+        let bad_tool = r#"{"format":1,"skills":[{"name":"a","url":"u","skill_path":"","tool":"vim","scope":{"type":"global"}}]}"#;
+        assert!(Manifest::from_json(bad_tool).is_err());
+        let bad_scope = r#"{"format":1,"skills":[{"name":"a","url":"u","skill_path":"","tool":"claude","scope":{"type":"moon"}}]}"#;
+        assert!(Manifest::from_json(bad_scope).is_err());
+        assert!(Manifest::from_json(r#"{"format":1,"skills":[]}"#).is_ok());
+    }
+
+    #[test]
+    fn from_json_normalizes_identity() {
+        let t = r#"{"format":1,"skills":[{"name":"a","url":"https://github.com/O/a.git/","skill_path":"/s/a/","tool":"claude","scope":{"type":"global"}}]}"#;
+        let m = Manifest::from_json(t).unwrap();
+        assert_eq!(m.skills[0].skill_path, "s/a");
+        assert!(!m.skills[0].url.ends_with(".git/"));
+    }
+
+    #[test]
+    fn never_installed_here_is_not_marked_removed() {
+        let remote = man(vec![sk("x", &["A"], &[])]);
+        let merged = merge(&remote, &[], "B");
+        assert!(merged.skills[0].removed_on.is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_remote_pin_when_local_has_none() {
+        let mut r = sk("x", &["A"], &[]);
+        r.commit = Some("pin".into());
+        r.git_ref = Some("main".into());
+        let merged = merge(&man(vec![r]), &[sk("x", &[], &[])], "B");
+        assert_eq!(merged.skills[0].commit.as_deref(), Some("pin"));
+        assert_eq!(merged.skills[0].git_ref.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn empty_installed_on_edge_cases() {
+        let m = man(vec![sk("x", &[], &["B"])]);
+        assert!(missing_here(&m, &[], "A").is_empty());
+        assert_eq!(removed_elsewhere(&m, &[sk("x", &[], &[])], "A").len(), 1);
+    }
+
+    #[test]
+    fn missing_here_excludes_self_installed() {
+        let m = man(vec![sk("x", &["A", "B"], &[])]);
+        assert!(missing_here(&m, &[], "A").is_empty());
+    }
+
+    #[test]
+    fn registry_wins_over_skill_lock() {
+        let reg = Registry {
+            version: 1,
+            skills: vec![entry(
+                "a",
+                src("https://github.com/o/a", ""),
+                vec![inst(Tool::Codex, SkillScope::Global)],
+            )],
+        };
+        let mut lock_src = src("https://github.com/o/a", "");
+        lock_src.origin = SourceOrigin::SkillLock;
+        lock_src.commit = Some("lock".into());
+        let got = local_entries(&reg, &[("a".into(), lock_src)], &[]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].commit.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn installed_lock_entries_drops_missing_dirs() {
+        let home = std::env::temp_dir().join(format!("md-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".agents").join("skills").join("here")).unwrap();
+        let lock = vec![
+            ("here".to_string(), src("https://github.com/o/h", "")),
+            ("gone".to_string(), src("https://github.com/o/g", "")),
+        ];
+        let got = installed_lock_entries(&home, lock);
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "here");
     }
 }

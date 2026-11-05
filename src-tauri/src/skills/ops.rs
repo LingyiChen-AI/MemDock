@@ -15,7 +15,7 @@ use crate::projects::normalize_path;
 use crate::skills::frontmatter::parse_frontmatter;
 use crate::skills::fsops::{
     MAX_ZIP_BYTES, atomic_replace_dir, backup_dir, cleanup_leftovers, copy_dir, copy_dir_confined,
-    extract_zip, now_millis, remove_any,
+    extract_zip, now_millis, prune_backups, remove_any,
 };
 use crate::skills::git::{GitError, GitRunner};
 use crate::skills::git_cache::{CACHE_MAX_AGE, cache_dir_for, cleanup_cache, is_complete_cache};
@@ -435,7 +435,10 @@ fn update_registry(
             .collect();
         let hash = dir_content_hash(&installed[0].1)?;
         if let Some(e) = reg.skills.iter_mut().find(|e| {
-            e.name == name && e.source.url == src.url && e.source.skill_path == src.skill_path
+            e.name == name
+                && e.source.url == src.url
+                && e.source.skill_path == src.skill_path
+                && e.source.commit == src.commit
         }) {
             e.installs.extend(records);
             e.source.git_ref = src.git_ref.clone();
@@ -683,11 +686,36 @@ pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> 
     out
 }
 
+/// Backup bucket / temp-name key: the skill directory's own name, never the
+/// (untrusted) frontmatter name.
+fn skill_key(entry: &SkillEntry) -> Result<String, OpsError> {
+    let name = Path::new(&entry.dir)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    validate_name(&name).map_err(invalid)?;
+    Ok(name)
+}
+
+const REGISTRY_NOT_SAVED: &str = "files updated, registry not saved";
+
 /// Writes the post-update / post-rollback state of the install at `entry.dir`
 /// into the registry. An entry shared by several installs is split so every
 /// install keeps its own commit and hash. `create` adds a record for skills
 /// that were not registered yet.
 fn record_state(
+    ctx: &OpsCtx,
+    entry: &SkillEntry,
+    source: &SkillSource,
+    clone_url: &str,
+    commit: Option<String>,
+    create: bool,
+) -> Result<(), OpsError> {
+    record_state_inner(ctx, entry, source, clone_url, commit, create)
+        .map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))
+}
+
+fn record_state_inner(
     ctx: &OpsCtx,
     entry: &SkillEntry,
     source: &SkillSource,
@@ -809,8 +837,23 @@ fn update_by_pull(ctx: &OpsCtx, entry: &SkillEntry) -> Result<(), OpsError> {
         .git
         .repo_root(&base)
         .ok_or_else(|| invalid("skill is not inside a git repository"))?;
-    backup_dir(&base, &ctx.backups_root(), &entry.name)?;
+    let key = skill_key(entry)?;
+    // Back up outside the real bucket so a failed pull neither leaves a
+    // useless backup nor prunes older ones.
+    let stage = TempDir::new(&ctx.staging_root())?;
+    let info = backup_dir(&base, &stage.0, &key)?;
     ctx.git.pull_ff_only(&root).map_err(git_err)?;
+    let dest_base = ctx.backups_root().join(&key);
+    fs::create_dir_all(&dest_base)?;
+    let mut id = info.id.parse::<i64>().unwrap_or_else(|_| now_millis());
+    while dest_base.join(id.to_string()).exists() {
+        id += 1;
+    }
+    fs::rename(
+        stage.0.join(&key).join(&info.id),
+        dest_base.join(id.to_string()),
+    )?;
+    prune_backups(&ctx.backups_root(), &key, &id.to_string());
     Ok(())
 }
 
@@ -856,7 +899,8 @@ fn update_by_clone(
     if !content.join("SKILL.md").is_file() {
         return Err(invalid("SKILL.md not found in the updated skill"));
     }
-    place(ctx, &content, Path::new(&entry.dir), &entry.name, true)?;
+    let key = skill_key(entry)?;
+    place(ctx, &content, Path::new(&entry.dir), &key, true)?;
     let recorded = record_state(ctx, entry, source, url, Some(commit), true);
     cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
     recorded
@@ -872,7 +916,8 @@ pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEn
     if backup_id.is_empty() || !backup_id.bytes().all(|b| b.is_ascii_digit()) {
         return Err(invalid("invalid backup id"));
     }
-    let backup = ctx.backups_root().join(&entry.name).join(backup_id);
+    let key = skill_key(&entry)?;
+    let backup = ctx.backups_root().join(&key).join(backup_id);
     if !backup.is_dir() {
         return Err(invalid(format!("backup not found: {backup_id}")));
     }
@@ -883,7 +928,7 @@ pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEn
     cleanup_leftovers(parent);
     let sibling = parent.join(format!(
         ".{}.memdock-new-{}-{}",
-        entry.name,
+        key,
         std::process::id(),
         now_millis()
     ));
@@ -894,9 +939,9 @@ pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEn
     let mut moved_git = false;
     let result = (|| -> Result<(), OpsError> {
         copy_dir(&backup, &sibling)?;
-        backup_dir(&dir, &ctx.backups_root(), &entry.name)?;
+        backup_dir(&dir, &ctx.backups_root(), &key)?;
         // copy_dir never brings `.git` back; carry the live repository over.
-        if !is_link && live_git.is_dir() {
+        if !is_link && fs::symlink_metadata(&live_git).is_ok() {
             fs::rename(&live_git, sibling.join(".git"))?;
             moved_git = true;
         }
@@ -1448,6 +1493,8 @@ mod tests {
         inner: SystemGit,
         ls_calls: AtomicUsize,
         fail_clone: AtomicBool,
+        /// After a successful clone, turn this path into a directory.
+        sabotage: std::sync::Mutex<Option<PathBuf>>,
     }
 
     impl WrapGit {
@@ -1456,6 +1503,7 @@ mod tests {
                 inner: SystemGit::new(),
                 ls_calls: AtomicUsize::new(0),
                 fail_clone: AtomicBool::new(false),
+                sabotage: std::sync::Mutex::new(None),
             })
         }
     }
@@ -1479,7 +1527,12 @@ mod tests {
                     stderr: "injected clone failure".into(),
                 });
             }
-            self.inner.shallow_clone(url, r, dest)
+            let res = self.inner.shallow_clone(url, r, dest);
+            if let Some(p) = self.sabotage.lock().unwrap().take() {
+                let _ = fs::remove_file(&p);
+                fs::create_dir_all(&p).unwrap();
+            }
+            res
         }
         fn remote_url(&self, dir: &Path) -> Option<String> {
             self.inner.remote_url(dir)
@@ -1832,5 +1885,161 @@ mod tests {
         // check_updates skips read-only skills.
         let es = all_entries(&e);
         assert!(check_updates(&e.ctx, &es).is_empty());
+    }
+
+    #[test]
+    fn untrusted_frontmatter_name_cannot_escape_backup_or_sibling_paths() {
+        for bad in ["../evil", "a/b", r"..\evil"] {
+            let e = env();
+            let (url, work) = repo_with_skill(&e);
+            install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+            let dir = installed_x(&e);
+            let id = normalize_path(&dir.to_string_lossy());
+            push_change(
+                &work,
+                "skills/x/SKILL.md",
+                &format!(
+                    "---
+name: {bad}
+description: evil
+---
+v2
+"
+                ),
+            );
+            update(&e.ctx, &id, false).unwrap();
+            let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "x");
+            assert_eq!(backups.len(), 1, "{bad}");
+            rollback(&e.ctx, &id, &backups[0].id).unwrap();
+            // Nothing named after the malicious value exists anywhere.
+            for ent in walkdir::WalkDir::new(&e.root).into_iter().flatten() {
+                let n = ent.file_name().to_string_lossy().into_owned();
+                assert!(!n.contains("evil") || n == "SKILL.md", "{bad}: {n}");
+            }
+            let created: Vec<_> = fs::read_dir(e.ctx.backups_root())
+                .unwrap()
+                .flatten()
+                .map(|d| d.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(created, vec!["x".to_string()], "{bad}");
+        }
+    }
+
+    #[test]
+    fn rollback_keeps_gitfile_pointer() {
+        let e = env();
+        let src = folder_skill(&e, "demo", "demo", "v1");
+        install(
+            &e.ctx,
+            InstallFrom::Folder { path: src },
+            &[claude()],
+            false,
+        )
+        .unwrap();
+        let dir = e.ctx.paths.claude_home.join("skills").join("demo");
+        let src2 = folder_skill(&e, "demo2", "demo", "v2");
+        install(
+            &e.ctx,
+            InstallFrom::Folder { path: src2 },
+            &[claude()],
+            true,
+        )
+        .unwrap();
+        fs::write(
+            dir.join(".git"),
+            "gitdir: /somewhere
+",
+        )
+        .unwrap();
+        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        let id = normalize_path(&dir.to_string_lossy());
+        rollback(&e.ctx, &id, &b[0].id).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join(".git")).unwrap(),
+            "gitdir: /somewhere
+"
+        );
+        assert!(
+            fs::read_to_string(dir.join("SKILL.md"))
+                .unwrap()
+                .contains("v1")
+        );
+    }
+
+    #[test]
+    fn install_does_not_merge_into_entry_with_other_commit() {
+        let e = env();
+        let (url, work) = repo_with_skill(&e);
+        install(
+            &e.ctx,
+            tracked(&url, "skills/x"),
+            &[claude(), codex()],
+            false,
+        )
+        .unwrap();
+        let c1 = load_registry(&e.ctx.registry_path).unwrap().skills[0]
+            .source
+            .commit
+            .clone()
+            .unwrap();
+        let c2 = push_change(&work, "skills/x/more.md", "m");
+        let id = normalize_path(&installed_x(&e).to_string_lossy());
+        update(&e.ctx, &id, false).unwrap();
+        // Reinstall into the updated target: must not touch the codex entry.
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], true).unwrap();
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        let codex_dir = normalize_path(&e.ctx.paths.codex_home.join("skills/x").to_string_lossy());
+        let b = find_reg(&reg, &codex_dir).unwrap();
+        assert_eq!(b.source.commit.as_deref(), Some(c1.as_str()));
+        let a = find_reg(&reg, &id).unwrap();
+        assert_eq!(a.source.commit.as_deref(), Some(c2.as_str()));
+        assert_eq!(reg.skills.len(), 2);
+    }
+
+    #[test]
+    fn failed_pull_does_not_leave_or_evict_backups() {
+        let e = env();
+        let (dir, work) = git_dir_skill(&e);
+        let id = normalize_path(&dir.to_string_lossy());
+        for _ in 0..10 {
+            crate::skills::fsops::backup_dir(&dir, &e.ctx.backups_root(), "gd").unwrap();
+        }
+        let before: Vec<String> = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "gd")
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(before.len(), 10);
+        write(&dir.join("local.md"), "l");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-q", "-m", "local"]);
+        push_change(&work, "remote.md", "r");
+        assert!(update(&e.ctx, &id, true).is_err());
+        let after: Vec<String> = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "gd")
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(after, before);
+        assert_eq!(fs::read_dir(e.ctx.staging_root()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn registry_save_failure_reports_files_updated() {
+        let (e, w) = env_wrap();
+        let (url, work) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let dir = installed_x(&e);
+        push_change(&work, "skills/x/more.md", "m");
+        *w.sabotage.lock().unwrap() = Some(e.ctx.registry_path.clone());
+        let id = normalize_path(&dir.to_string_lossy());
+        match update(&e.ctx, &id, false) {
+            Err(OpsError::Io { message }) => {
+                assert!(
+                    message.contains("files updated, registry not saved"),
+                    "{message}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(dir.join("more.md").is_file());
     }
 }

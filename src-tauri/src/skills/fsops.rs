@@ -173,16 +173,20 @@ pub fn backup_dir(src: &Path, backups_root: &Path, name: &str) -> io::Result<Bac
         created_at: ms,
         size_bytes: dir_size(&dest),
     };
-    // Never prune the backup that was just made, even if older-looking ids
-    // sort after it (clock changes, future-dated backups).
+    prune_backups(backups_root, name, &info.id);
+    Ok(info)
+}
+
+/// Deletes the oldest backups of `name` beyond [`MAX_BACKUPS`], never `keep_id`.
+pub fn prune_backups(backups_root: &Path, name: &str, keep_id: &str) {
+    let base = backups_root.join(name);
     let others: Vec<BackupInfo> = list_backups(backups_root, name)
         .into_iter()
-        .filter(|b| b.id != info.id)
+        .filter(|b| b.id != keep_id)
         .collect();
     for old in others.iter().skip(MAX_BACKUPS - 1) {
         let _ = fs::remove_dir_all(base.join(&old.id));
     }
-    Ok(info)
 }
 
 /// Backups of `name`, newest first.

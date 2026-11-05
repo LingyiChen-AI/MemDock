@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -7,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+use crate::fsutil::{load_json_or_backup, save_json_atomic, Loaded};
 use crate::model::Tool;
 use crate::projects::normalize_path;
 use crate::skills::model::{SkillEntry, SkillScope, SkillSource, SourceOrigin};
@@ -59,100 +59,15 @@ pub const REGISTRY_VERSION: u32 = 1;
 /// newer version is backed up and refused (error), never read as the current
 /// format and never overwritten.
 pub fn load_registry(path: &Path) -> Result<Registry, String> {
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Registry::default()),
-        Err(_) => {
-            backup_corrupt(path)?;
-            return Ok(Registry::default());
-        }
-    };
-    match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(v) => {
-            let version = v.get("version").and_then(|x| x.as_u64()).unwrap_or(1);
-            if version > u64::from(REGISTRY_VERSION) {
-                backup_corrupt(path)?;
-                return Err(format!(
-                    "skills registry {} has version {version}, newer than this build supports ({REGISTRY_VERSION}); it was backed up and left untouched",
-                    path.display()
-                ));
-            }
-            match serde_json::from_value(v) {
-                Ok(r) => Ok(r),
-                Err(_) => {
-                    backup_corrupt(path)?;
-                    Ok(Registry::default())
-                }
-            }
-        }
-        Err(_) => {
-            backup_corrupt(path)?;
-            Ok(Registry::default())
-        }
+    match load_json_or_backup::<Registry>(path, REGISTRY_VERSION, "skills registry")? {
+        Loaded::Ok(r) => Ok(r),
+        Loaded::Missing | Loaded::Recovered => Ok(Registry::default()),
     }
-}
-
-fn backup_corrupt(path: &Path) -> Result<(), String> {
-    let base = path
-        .file_name()
-        .map(OsString::from)
-        .unwrap_or_else(|| OsString::from("skills-registry.json"));
-    let mut bak = base.clone();
-    bak.push(".bak");
-    let mut target = path.with_file_name(bak);
-    // Already backed up (the same unreadable file is loaded again and again).
-    if let (Ok(a), Ok(b)) = (fs::read(path), fs::read(&target)) {
-        if a == b {
-            return Ok(());
-        }
-    }
-    if target.exists() {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let mut named = base;
-        named.push(format!(".{ms}.bak"));
-        target = path.with_file_name(named);
-    }
-    fs::copy(path, &target)
-        .map(|_| ())
-        .map_err(|e| format!("cannot back up unreadable registry {}: {e}", path.display()))
 }
 
 /// Saves atomically: unique temp file in the same directory, fsync, rename.
 pub fn save_registry(path: &Path, r: &Registry) -> io::Result<()> {
-    use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let json = serde_json::to_string_pretty(r)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    let mut tmp_name = path
-        .file_name()
-        .map(OsString::from)
-        .unwrap_or_else(|| OsString::from("skills-registry.json"));
-    tmp_name.push(format!(
-        ".{}.{}.tmp",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let tmp_path = path.with_file_name(tmp_name);
-    let write = || -> io::Result<()> {
-        let mut f = fs::File::create(&tmp_path)?;
-        f.write_all(json.as_bytes())?;
-        f.sync_all()?;
-        fs::rename(&tmp_path, path)
-    };
-    let res = write();
-    if res.is_err() {
-        let _ = fs::remove_file(&tmp_path);
-    }
-    res
+    save_json_atomic(path, r)
 }
 
 /// Deterministic content hash: files sorted by `/`-separated relative path,

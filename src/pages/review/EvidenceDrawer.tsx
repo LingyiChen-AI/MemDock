@@ -17,14 +17,22 @@ export interface EvidenceDrawerProps {
   suggestion: Suggestion | null;
 }
 
-/** First occurrence of the quote in the turn text, tolerating surrounding whitespace in the quote. */
+/** First occurrence of the quote in the turn text; whitespace runs match any whitespace run. */
 function locate(text: string, quote: string): [number, number] | null {
-  for (const q of [quote, quote.trim()]) {
-    if (!q) continue;
-    const i = text.indexOf(q);
-    if (i >= 0) return [i, i + q.length];
+  const words = quote.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"));
+  const m = re.exec(text);
+  return m ? [m.index, m.index + m[0].length] : null;
+}
+
+/** The turn the quote came from: a user turn first, then an assistant turn; -1 if none contains it. */
+function findHit(turns: ContextTurn[], quote: string): number {
+  for (const role of ["user", "assistant"] as const) {
+    const i = turns.findIndex((x) => x.role === role && locate(x.text, quote) !== null);
+    if (i >= 0) return i;
   }
-  return null;
+  return -1;
 }
 
 const shortId = (id: string) => (id.length > 10 ? `${id.slice(0, 8)}…` : id);
@@ -93,7 +101,7 @@ function Group({ ctx }: { ctx: SuggestionContext }) {
   const r = t.review;
   const { evidence, turns } = ctx;
   // The turn that contains the quote; if no turn does, nothing is highlighted.
-  const hitIndex = turns.findIndex((x) => locate(x.text, evidence.quote) !== null);
+  const hitIndex = findHit(turns, evidence.quote);
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
@@ -101,6 +109,7 @@ function Group({ ctx }: { ctx: SuggestionContext }) {
         <CopyId id={evidence.session_id} />
         <span>{formatSnapshotTime(evidence.ts)}</span>
       </div>
+      {turns.length > 0 && hitIndex < 0 ? <p className="text-xs text-warning">{r.quoteNotFound}</p> : null}
       {turns.length === 0 ? (
         <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
       ) : (

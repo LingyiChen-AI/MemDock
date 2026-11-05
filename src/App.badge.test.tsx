@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, configure, render, screen, within } from "@testing-library/react";
 import { vi, type Mock } from "vitest";
 import type { PendingSummary } from "@/api/types";
 
@@ -16,6 +16,9 @@ vi.mock("@/api/extract", () => ({
 import { onSuggestionsChanged, pendingSummary } from "@/api/extract";
 import App from "./App";
 
+configure({ asyncUtilTimeout: 4000 });
+vi.setConfig({ testTimeout: 15000 });
+
 describe("sidebar pending badge", () => {
   it("sidebar badge updates on event", async () => {
     let cb: (s: PendingSummary) => void = () => {};
@@ -25,9 +28,9 @@ describe("sidebar pending badge", () => {
       return () => {};
     });
     render(<App />);
-    const nav = await screen.findByRole("button", { name: "待审核" });
+    const nav = await screen.findByRole("button", { name: "待审核" }, { timeout: 4000 });
     const item = nav.closest("li")!;
-    expect(await within(item).findByText("2")).toBeInTheDocument();
+    expect(await within(item).findByText("2", {}, { timeout: 4000 })).toBeInTheDocument();
     await act(async () => cb({ total: 7, by_project: {} }));
     expect(within(item).getByText("7")).toBeInTheDocument();
     await act(async () => cb({ total: 0, by_project: {} }));

@@ -87,7 +87,7 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
       if (mine !== seq.current) return;
       setFetched(list);
       setIndex(idx);
-      setLastRun(runs[0] ?? null);
+      setLastRun([...runs].filter((x) => x.status === "succeeded").sort((a, b) => b.started_at - a.started_at)[0] ?? null);
     } catch (e) {
       if (mine === seq.current) setLoadError(errorMessage(e));
     }
@@ -279,7 +279,7 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
           {all && total > 0 ? (
             <Button
               type="button"
-              disabled={bulkBusy || acceptable.length === 0}
+              disabled={bulkBusy || busy.size > 0 || acceptable.length === 0}
               onClick={() => setBulkIds(acceptable.map(({ s }) => s.id))}
               className="h-8 cursor-pointer px-3 text-sm font-semibold"
             >

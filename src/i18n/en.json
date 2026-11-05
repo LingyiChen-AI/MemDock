@@ -476,6 +476,7 @@
     "copied": "Copied",
     "roleUser": "User",
     "roleAssistant": "Assistant",
-    "quoteHit": "Match"
+    "quoteHit": "Match",
+    "quoteNotFound": "The quote was not found in the context"
   }
 }

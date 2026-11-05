@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, configure, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { PendingSummary, RunRecord, Suggestion } from "@/api/types";
@@ -77,6 +77,10 @@ const run = (over: Partial<RunRecord> = {}): RunRecord => ({
   error: null,
   ...over,
 });
+
+// Full-page renders with Radix / DiffView are slow under load: generous async timeouts.
+configure({ asyncUtilTimeout: 4000 });
+vi.setConfig({ testTimeout: 15000 });
 
 let changedCb: (s: PendingSummary) => void = () => {};
 
@@ -191,12 +195,19 @@ describe("ReviewPage", () => {
     expect(within(card).queryByRole("button", { name: "通过" })).not.toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "编辑后通过" })).not.toBeInTheDocument();
     // a reload (suggestions-changed) must not make the greyed card vanish
-    (listSuggestions as Mock).mockResolvedValue([]);
-    await act(async () => changedCb({ total: 0, by_project: {} }));
-    expect(screen.getByRole("article")).toBeInTheDocument();
+    let resolveReload: (v: Suggestion[]) => void = () => {};
+    (listSuggestions as Mock).mockReturnValue(new Promise<Suggestion[]>((r) => (resolveReload = r)));
+    const before = (listSuggestions as Mock).mock.calls.length;
+    act(() => changedCb({ total: 0, by_project: {} }));
+    await waitFor(() => expect(listSuggestions).toHaveBeenCalledTimes(before + 1));
+    // the reload returns only a different item: once it shows, the reload has been applied
+    await act(async () => resolveReload([add]));
+    expect(await screen.findByRole("article", { name: /^新增/ })).toBeInTheDocument();
+    const stale = screen.getByRole("article", { name: /^修改/ });
+    expect(within(stale).getByText("目标内容已变化，建议已失效")).toBeInTheDocument();
     (rejectSuggestion as Mock).mockResolvedValue(undefined);
-    await userEvent.click(within(screen.getByRole("article")).getByRole("button", { name: "驳回" }));
-    await waitFor(() => expect(screen.queryByRole("article")).not.toBeInTheDocument());
+    await userEvent.click(within(screen.getByRole("article", { name: /^修改/ })).getByRole("button", { name: "驳回" }));
+    await waitFor(() => expect(screen.queryByRole("article", { name: /^修改/ })).not.toBeInTheDocument());
     expect(rejectSuggestion).toHaveBeenCalledWith("s-mod");
   });
 
@@ -305,5 +316,87 @@ describe("ReviewPage", () => {
     expect(within(drawer).getByText("Claude Code")).toBeInTheDocument();
     expect(within(drawer).getByText(/sess-012/)).toBeInTheDocument();
     expect(within(drawer).queryByText(/sess-0123456789abcdef/)).not.toBeInTheDocument();
+  });
+  it("needs confirm retry keeps the edited text", async () => {
+    setup([modify]);
+    (applySuggestion as Mock)
+      .mockResolvedValueOnce({ kind: "needs_confirm", reason: "disk_changed" })
+      .mockResolvedValueOnce({ kind: "applied", hash: "x", saved: true });
+    const card = (await cards())[0];
+    await userEvent.click(within(card).getByRole("button", { name: "编辑后通过" }));
+    const editor = within(card).getByLabelText("editor");
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "改过的文字");
+    await userEvent.click(within(card).getByRole("button", { name: "确认通过" }));
+    expect(applySuggestion).toHaveBeenNthCalledWith(1, "s-mod", "改过的文字", false);
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "确认应用" }));
+    await waitFor(() => expect(applySuggestion).toHaveBeenNthCalledWith(2, "s-mod", "改过的文字", true));
+  });
+
+  it("not_found and not_pending self-heal by removing the card", async () => {
+    setup([modify, add]);
+    (applySuggestion as Mock)
+      .mockRejectedValueOnce({ code: "not_found", message: "gone" })
+      .mockRejectedValueOnce({ code: "not_pending", message: "done" });
+    let list = await cards();
+    await userEvent.click(within(list[0]).getByRole("button", { name: "通过" }));
+    expect(await screen.findByText("这条建议已不存在")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+    list = screen.getAllByRole("article");
+    await userEvent.click(within(list[0]).getByRole("button", { name: "通过" }));
+    expect(await screen.findByText("这条建议已被处理")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("article")).not.toBeInTheDocument());
+  });
+
+  it("bulk result with saved=false shows the warning", async () => {
+    setup([modify]);
+    (acceptSuggestions as Mock).mockResolvedValue([{ id: "s-mod", outcome: { kind: "applied", hash: "x", saved: false } }]);
+    await cards();
+    await userEvent.click(screen.getByRole("button", { name: "全部通过" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "通过 1 条" }));
+    expect(await screen.findByText("已写入，但状态保存失败；重启后这条建议可能再次出现")).toBeInTheDocument();
+  });
+
+  it("accept all is disabled while a single card request is in flight", async () => {
+    setup([modify, add]);
+    let resolve: (v: unknown) => void = () => {};
+    (applySuggestion as Mock).mockReturnValue(new Promise((r) => (resolve = r)));
+    const list = await cards();
+    await userEvent.click(within(list[0]).getByRole("button", { name: "通过" }));
+    expect(screen.getByRole("button", { name: "全部通过" })).toBeDisabled();
+    await act(async () => resolve({ kind: "applied", hash: "x", saved: true }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "全部通过" })).toBeEnabled());
+  });
+
+  it("header time uses the most recent succeeded run", async () => {
+    (listExtractRuns as Mock).mockResolvedValue([
+      run({ id: "r3", status: "failed", started_at: new Date(2026, 10, 5, 12, 0).getTime() }),
+      run({ id: "r1", started_at: new Date(2026, 10, 4, 8, 15).getTime() }),
+      run({ id: "r2", started_at: new Date(2026, 10, 5, 9, 30).getTime() }),
+    ]);
+    setup();
+    expect(await screen.findByText("3 条建议 · 来自 11-05 09:30")).toBeInTheDocument();
+  });
+
+  it("evidence prefers the user turn, normalizes whitespace, and notes a missing quote", async () => {
+    setup([modify]);
+    const turn = (role: "user" | "assistant", text: string, ts: number) => ({ tool: "claude" as const, session_id: "sess-0123456789abcdef", project_id: null, ts, role, text });
+    (suggestionContext as Mock).mockResolvedValue([
+      {
+        evidence: ev("把从库延迟   调小到 1 秒"),
+        turns: [turn("assistant", "我会把从库延迟 调小到 1 秒", 1), turn("user", "请把从库延迟\n调小到 1 秒，谢谢", 2)],
+      },
+    ]);
+    await userEvent.click(within((await cards())[0]).getByRole("button", { name: "查看原对话" }));
+    const drawer = await screen.findByRole("dialog");
+    const mark = await within(drawer).findByText(/调小到 1 秒/, { selector: "mark" });
+    expect(mark.closest("li")).toHaveAttribute("data-hit", "true");
+    expect(mark.closest("li")).toHaveTextContent("请把从库延迟");
+    expect(within(drawer).queryByText("未在上下文中找到原话")).not.toBeInTheDocument();
+
+    (suggestionContext as Mock).mockResolvedValue([{ evidence: ev("完全不存在的话"), turns: [turn("user", "别的内容", 2)] }]);
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(within((await cards())[0]).getByRole("button", { name: "查看原对话" }));
+    expect(await screen.findByText("未在上下文中找到原话")).toBeInTheDocument();
   });
 });

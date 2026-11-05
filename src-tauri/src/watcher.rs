@@ -92,6 +92,27 @@ pub fn skill_roots(paths: &AgentPaths, home: &Path, project_roots: &[String]) ->
     v
 }
 
+/// Whether a changed path adds / removes a directory that needs its own watch:
+/// a skills root or a skill directory directly below one (depth <= 1).
+/// Plain file edits (e.g. `SKILL.md`) never need a rebuild.
+pub fn needs_rewatch(
+    path: &Path,
+    paths: &AgentPaths,
+    home: &Path,
+    project_roots: &[String],
+) -> bool {
+    let n = normalize_path(&path.to_string_lossy());
+    skill_roots(paths, home, project_roots).iter().any(|root| {
+        let r = normalize_path(&root.to_string_lossy());
+        if n == r {
+            return true;
+        }
+        n.strip_prefix(&format!("{r}/")).is_some_and(|rest| {
+            !rest.contains('/') && !is_leftover_name(rest) && rest != ".git" && rest != "node_modules"
+        }) && !path.is_file()
+    })
+}
+
 /// Whether a changed `path` is a skills root or lies at most two levels below
 /// one (the skill directory, or a file directly inside it). `.git`,
 /// `node_modules` and the app's own leftover temp names are ignored.
@@ -222,6 +243,7 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
         let mut roots = project_roots(&state);
         let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
         let mut pending_skills: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut rewatch = false;
         let mut deb = Debouncer::new(DEBOUNCE, MAX_WAIT);
         loop {
             let msg = match deb.deadline() {
@@ -243,6 +265,7 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
                         let skill = is_skill_relevant(&p, &state.paths, &state.home, &roots);
                         deb.offer(memory || skill, now);
                         if skill {
+                            rewatch |= needs_rewatch(&p, &state.paths, &state.home, &roots);
                             pending_skills.insert(p.clone());
                         }
                         if memory {
@@ -275,8 +298,11 @@ pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
                         );
                     }
                     if !skills_changed.is_empty() {
-                        // New skill directories need their own watches.
-                        _watcher = build_watcher(&thread_tx, &state);
+                        // New or removed skill directories need their own watches;
+                        // plain file edits do not.
+                        if std::mem::take(&mut rewatch) {
+                            _watcher = build_watcher(&thread_tx, &state);
+                        }
                         let _ = app.emit(
                             "skills-changed",
                             SkillsChangedPayload {
@@ -334,6 +360,21 @@ mod tests {
         assert!(!yes("/other/.claude/skills/demo"));
         // Skills paths never count as memory changes.
         assert!(!is_relevant(Path::new("/h/.claude/skills/demo/SKILL.md"), &paths, &roots));
+    }
+
+    #[test]
+    fn needs_rewatch_only_for_skill_dirs() {
+        let home = Path::new("/h");
+        let paths = AgentPaths::from_home(home);
+        let roots = vec!["/work/app".to_string()];
+        let yes = |p: &str| needs_rewatch(Path::new(p), &paths, home, &roots);
+        assert!(yes("/h/.claude/skills"));
+        assert!(yes("/h/.codex/skills/demo"));
+        assert!(yes("/work/app/.agents/skills/demo"));
+        assert!(!yes("/h/.codex/skills/demo/SKILL.md"));
+        assert!(!yes("/h/.codex/skills/.demo.memdock-new-1"));
+        assert!(!yes("/h/.codex/skills/demo/.git"));
+        assert!(!yes("/h/.claude/CLAUDE.md"));
     }
 
     #[test]

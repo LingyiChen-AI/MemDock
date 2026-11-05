@@ -16,9 +16,7 @@ use crate::memory::io::{read_memory, write_memory};
 use crate::model::{Project, Tool};
 use crate::skills::fsops::{list_backups, BackupInfo};
 use crate::skills::git::GitError;
-use crate::skills::git_cache::{
-    cache_dir_for, is_complete_cache, list_repo_skills, parse_github_input, RepoSkill,
-};
+use crate::skills::git_cache::{list_repo_skills, parse_github_input, RepoSkill};
 use crate::skills::model::{SkillEntry, SkillScope};
 use crate::skills::ops::{
     self, InstallFrom, InstallTarget, OpsCtx, OpsError, UpdateStatus,
@@ -45,13 +43,6 @@ fn git_message(e: &GitError) -> String {
         GitError::NotInstalled => "git is not installed".to_string(),
         GitError::Timeout => "git timed out".to_string(),
         GitError::Failed { stderr } => stderr.clone(),
-    }
-}
-
-fn git_cmd_error(e: GitError) -> CommandError {
-    match e {
-        GitError::NotInstalled => CommandError::new("git_unavailable", "git is not installed"),
-        e => CommandError::new("git_failed", git_message(&e)),
     }
 }
 
@@ -150,9 +141,8 @@ impl From<InstallTargetDto> for InstallTarget {
 // Output DTOs
 // ---------------------------------------------------------------------------
 
-/// Result of `inspect_git_source`. Serialized in camelCase.
+/// Result of `inspect_git_source`.
 #[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct InspectResult {
     pub url: String,
     pub clone_url: String,
@@ -161,6 +151,16 @@ pub struct InspectResult {
     pub skills: Vec<RepoSkill>,
     /// Skill path pinned by the input (a `tree/<ref>/<path>` URL), if any.
     pub preselected: Option<String>,
+}
+
+/// At most this many files are listed for one skill.
+pub const MAX_LISTED_FILES: usize = 5000;
+
+#[derive(Serialize, Debug, Clone)]
+pub struct SkillFileList {
+    pub files: Vec<SkillFileInfo>,
+    /// True when the listing stopped at `MAX_LISTED_FILES`.
+    pub truncated: bool,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -219,6 +219,7 @@ fn ops_ctx(state: &AppState) -> OpsCtx {
         appdata: state.data_dir.clone(),
         git: state.git.clone(),
         registry_path: state.data_dir.join("skills-registry.json"),
+        cache_lock: state.cache_lock.clone(),
     }
 }
 
@@ -249,25 +250,13 @@ pub fn inspect_git_source_impl(
     if !state.git.available() {
         return Err(CommandError::new("git_unavailable", "git is not installed"));
     }
-    let _g = lock(&state.skills_lock);
-    let git_ref = parsed.git_ref.as_deref();
-    let head = state
-        .git
-        .ls_remote_head(&parsed.clone_url, git_ref)
-        .map_err(git_cmd_error)?;
-    let cache_root = state.data_dir.join("git-cache");
-    let cache = cache_dir_for(&cache_root, &parsed.url, &head);
-    let commit = if is_complete_cache(&cache) {
-        head
-    } else {
-        if cache.exists() {
-            fs::remove_dir_all(&cache)?;
-        }
-        state
-            .git
-            .shallow_clone(&parsed.clone_url, git_ref, &cache)
-            .map_err(git_cmd_error)?
-    };
+    // No skills_lock here: only the cache lock inside `ensure_cache`.
+    let (cache, commit) = ops::ensure_cache(
+        &ops_ctx(state),
+        &parsed.url,
+        &parsed.clone_url,
+        parsed.git_ref.as_deref(),
+    )?;
     Ok(InspectResult {
         skills: list_repo_skills(&cache),
         url: parsed.url,
@@ -371,6 +360,16 @@ fn files_dir(entry: &SkillEntry) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(&entry.dir))
 }
 
+/// CON, PRN, AUX, NUL, COM1-9, LPT1-9 (case-insensitive, with or without extension).
+fn is_windows_reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
+    ["con", "prn", "aux", "nul"].contains(&stem.as_str())
+        || ["com", "lpt"].iter().any(|p| {
+            stem.strip_prefix(p)
+                .is_some_and(|n| n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9'))
+        })
+}
+
 /// Normalizes a user-supplied relative path: no absolute paths, drive
 /// letters, `..` or empty result.
 fn clean_rel(rel: &str) -> Result<PathBuf, CommandError> {
@@ -387,6 +386,12 @@ fn clean_rel(rel: &str) -> Result<PathBuf, CommandError> {
             "" | "." => {}
             ".." => return Err(invalid("path must not contain '..'")),
             p if p.contains(':') => return Err(invalid("invalid path")),
+            p if p.eq_ignore_ascii_case(".git") || p.eq_ignore_ascii_case("node_modules") => {
+                return Err(invalid(format!("access to {p} is not allowed")));
+            }
+            p if p.ends_with('.') || p.ends_with(' ') || is_windows_reserved(p) => {
+                return Err(invalid(format!("invalid file name: {p:?}")));
+            }
             p => out.push(p),
         }
     }
@@ -439,7 +444,7 @@ fn to_file_dto(state: &AppState, path: &Path, c: crate::memory::io::FileContent)
 pub fn list_skill_files_impl(
     state: &AppState,
     skill_id: &str,
-) -> Result<Vec<SkillFileInfo>, CommandError> {
+) -> Result<SkillFileList, CommandError> {
     let entry = find_entry(state, skill_id)?;
     let base = fs::canonicalize(files_dir(&entry))?;
     let walker = walkdir::WalkDir::new(&base)
@@ -449,9 +454,14 @@ pub fn list_skill_files_impl(
             e.depth() == 0 || !matches!(e.file_name().to_str(), Some(".git" | "node_modules"))
         });
     let mut out = Vec::new();
+    let mut truncated = false;
     for e in walker.flatten() {
         if !e.file_type().is_file() {
             continue;
+        }
+        if out.len() >= MAX_LISTED_FILES {
+            truncated = true;
+            break;
         }
         let Ok(rel) = e.path().strip_prefix(&base) else {
             continue;
@@ -466,7 +476,10 @@ pub fn list_skill_files_impl(
         });
     }
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    Ok(out)
+    Ok(SkillFileList {
+        files: out,
+        truncated,
+    })
 }
 
 pub fn read_skill_file_impl(
@@ -636,10 +649,7 @@ pub fn register_skill_source(
 }
 
 #[tauri::command(async)]
-pub fn list_skill_files(
-    state: St,
-    skill_id: String,
-) -> Result<Vec<SkillFileInfo>, CommandError> {
+pub fn list_skill_files(state: St, skill_id: String) -> Result<SkillFileList, CommandError> {
     list_skill_files_impl(&state, &skill_id)
 }
 
@@ -745,6 +755,84 @@ mod tests {
         assert!(!c.binary);
     }
 
+    #[test]
+    fn git_dir_node_modules_and_reserved_names_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let e = install_demo(&st);
+        for bad in [
+            ".git/config",
+            "ref/.GIT/hooks/pre-commit",
+            "node_modules/x.js",
+            "CON",
+            "nul.txt",
+            "ref/com1.md",
+            "LPT9.log",
+            "trailing.",
+            "space ",
+        ] {
+            assert_eq!(
+                read_skill_file_impl(&st, &e.id, bad).unwrap_err().code,
+                "invalid",
+                "read {bad:?}"
+            );
+            assert_eq!(
+                write_skill_file_impl(&st, &e.id, bad, "x", "").unwrap_err().code,
+                "invalid",
+                "write {bad:?}"
+            );
+        }
+        assert!(!std::path::Path::new(&e.dir).join(".git").exists());
+        // Similar but legal names pass.
+        write_skill_file_impl(&st, &e.id, "ref/console.md", "ok", "").unwrap();
+        write_skill_file_impl(&st, &e.id, ".gitignore", "ok", "").unwrap();
+    }
+
+    #[test]
+    fn list_skill_files_truncates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let e = install_demo(&st);
+        let d = std::path::Path::new(&e.dir).join("many");
+        fs::create_dir_all(&d).unwrap();
+        for i in 0..(MAX_LISTED_FILES + 5) {
+            fs::write(d.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let l = list_skill_files_impl(&st, &e.id).unwrap();
+        assert!(l.truncated);
+        assert_eq!(l.files.len(), MAX_LISTED_FILES);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_escape_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let e = install_demo(&st);
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("f.txt"), "o").unwrap();
+        let link = std::path::Path::new(&e.dir).join("jlink");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{status:?}");
+        assert_eq!(
+            read_skill_file_impl(&st, &e.id, "jlink/f.txt").unwrap_err().code,
+            "invalid"
+        );
+        assert_eq!(
+            write_skill_file_impl(&st, &e.id, "jlink/new.txt", "x", "")
+                .unwrap_err()
+                .code,
+            "invalid"
+        );
+        assert!(!outside.join("new.txt").exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlink_escape_rejected() {
@@ -796,7 +884,9 @@ mod tests {
         fs::write(dir.join("node_modules/m/i.js"), "x").unwrap();
         fs::write(dir.join("big.bin"), vec![0u8; 2 * 1024 * 1024]).unwrap();
         fs::write(dir.join("bin.dat"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
-        let files = list_skill_files_impl(&st, &e.id).unwrap();
+        let listing = list_skill_files_impl(&st, &e.id).unwrap();
+        assert!(!listing.truncated);
+        let files = listing.files;
         let names: Vec<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
         assert!(names.contains(&"SKILL.md") && names.contains(&"big.bin"));
         assert!(!names.iter().any(|n| n.contains(".git") || n.contains("node_modules")));
@@ -912,7 +1002,7 @@ b
         assert_eq!(r.skills.len(), 1);
         assert_eq!(r.preselected.as_deref(), Some("skills/one"));
         let v = serde_json::to_value(&r).unwrap();
-        assert!(v.get("cloneUrl").is_some() && v.get("gitRef").is_some());
+        assert!(v.get("clone_url").is_some() && v.get("git_ref").is_some());
         // Second call reuses the complete cache.
         assert_eq!(inspect_git_source_impl(&st, "o/r").unwrap().preselected, None);
         let err = inspect_git_source_impl(&st, "not a repo").unwrap_err();

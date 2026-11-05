@@ -42,6 +42,8 @@ pub struct AppState {
     pub git: Arc<dyn GitRunner>,
     /// Serializes every mutating skill operation.
     pub skills_lock: Mutex<()>,
+    /// Serializes git-cache check / clone / cleanup (shared with the ops layer).
+    pub cache_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -60,6 +62,7 @@ impl AppState {
             data_dir: data_dir.clone(),
             git: Arc::new(SystemGit::new()),
             skills_lock: Mutex::new(()),
+            cache_lock: Arc::new(Mutex::new(())),
             snapshots: SnapshotStore::new(data_dir.join("snapshots")),
             index: Mutex::new(MemoryIndex {
                 global: vec![],

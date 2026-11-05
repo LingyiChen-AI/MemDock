@@ -7,7 +7,7 @@ import type {
   InstallTarget,
   SkillEntry,
   SkillFileDto,
-  SkillFileInfo,
+  SkillFileList,
   SkillsChangedPayload,
   UpdateStatus,
 } from "./types";
@@ -72,8 +72,8 @@ export function registerSkillSource(
   return invoke<SkillEntry>("register_skill_source", { skillId, url, skillPath });
 }
 
-export function listSkillFiles(skillId: string): Promise<SkillFileInfo[]> {
-  return invoke<SkillFileInfo[]>("list_skill_files", { skillId });
+export function listSkillFiles(skillId: string): Promise<SkillFileList> {
+  return invoke<SkillFileList>("list_skill_files", { skillId });
 }
 
 export function readSkillFile(skillId: string, relPath: string): Promise<SkillFileDto> {

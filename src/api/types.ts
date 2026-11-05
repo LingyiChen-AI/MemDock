@@ -183,11 +183,11 @@ export interface RepoSkill {
   description: string;
 }
 
-/** Result of inspectGitSource (camelCase, unlike the other DTOs). */
+/** Result of inspectGitSource. */
 export interface InspectResult {
   url: string;
-  cloneUrl: string;
-  gitRef: string | null;
+  clone_url: string;
+  git_ref: string | null;
   commit: string;
   skills: RepoSkill[];
   /** Skill path pinned by the input (a tree/<ref>/<path> URL), if any. */
@@ -208,6 +208,12 @@ export interface InstallTarget {
 export interface SkillFileInfo {
   rel_path: string;
   size_bytes: number;
+}
+
+export interface SkillFileList {
+  files: SkillFileInfo[];
+  /** True when the listing stopped at 5000 files. */
+  truncated: boolean;
 }
 
 /** Binary / oversized files have `binary: true` and no text (read-only). */

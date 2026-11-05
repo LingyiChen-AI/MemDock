@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -35,6 +35,9 @@ pub struct OpsCtx {
     pub appdata: PathBuf,
     pub git: Arc<dyn GitRunner>,
     pub registry_path: PathBuf,
+    /// Serializes cache check / clone / cleanup (never held by skills_lock users
+    /// beyond `ensure_cache`).
+    pub cache_lock: Arc<Mutex<()>>,
 }
 
 impl OpsCtx {
@@ -49,6 +52,32 @@ impl OpsCtx {
     fn staging_root(&self) -> PathBuf {
         self.appdata.join("skill-tmp")
     }
+}
+
+/// Returns a complete clone of `url` at the remote commit of `git_ref`, as
+/// `(cache dir, commit)`. Under `cache_lock`: old entries are cleaned first,
+/// only complete caches are reused, anything else is re-cloned.
+pub fn ensure_cache(
+    ctx: &OpsCtx,
+    url: &str,
+    clone_url: &str,
+    git_ref: Option<&str>,
+) -> Result<(PathBuf, String), OpsError> {
+    let head = ctx.git.ls_remote_head(clone_url, git_ref).map_err(git_err)?;
+    let _g = ctx.cache_lock.lock().unwrap_or_else(|e| e.into_inner());
+    cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
+    let cache = cache_dir_for(&ctx.cache_root(), url, &head);
+    if is_complete_cache(&cache) {
+        return Ok((cache, head));
+    }
+    if cache.exists() {
+        remove_any(&cache)?;
+    }
+    let commit = ctx
+        .git
+        .shallow_clone(clone_url, git_ref, &cache)
+        .map_err(git_err)?;
+    Ok((cache, commit))
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -305,22 +334,7 @@ fn prepare(ctx: &OpsCtx, from: &InstallFrom, staging: &Path) -> Result<Prepared,
             if !ctx.git.available() {
                 return Err(OpsError::GitUnavailable);
             }
-            let git_ref = git_ref.as_deref();
-            let head = ctx
-                .git
-                .ls_remote_head(clone_url, git_ref)
-                .map_err(git_err)?;
-            let cache = cache_dir_for(&ctx.cache_root(), url, &head);
-            let commit = if is_complete_cache(&cache) {
-                head
-            } else {
-                if cache.exists() {
-                    remove_any(&cache)?;
-                }
-                ctx.git
-                    .shallow_clone(clone_url, git_ref, &cache)
-                    .map_err(git_err)?
-            };
+            let (cache, commit) = ensure_cache(ctx, url, clone_url, git_ref.as_deref())?;
             let skill_src = cache.join(&sub);
             if !skill_src.is_dir() {
                 return Err(invalid(format!(
@@ -350,7 +364,7 @@ fn prepare(ctx: &OpsCtx, from: &InstallFrom, staging: &Path) -> Result<Prepared,
                 source: Some((
                     SkillSource {
                         url: url.clone(),
-                        git_ref: git_ref.map(str::to_string),
+                        git_ref: git_ref.clone(),
                         commit: Some(commit),
                         skill_path: sub
                             .components()
@@ -543,9 +557,6 @@ pub fn install(
     }
     // Record what was installed even if a later target failed.
     let reg_result = update_registry(ctx, &done, &name, prepared.source.as_ref(), true);
-    if matches!(from, InstallFrom::Git { .. }) {
-        cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
-    }
     if let Some(e) = failure {
         return Err(e);
     }
@@ -876,19 +887,7 @@ fn update_by_clone(
     url: &str,
 ) -> Result<(), OpsError> {
     let sub = repo_subpath(&source.skill_path)?;
-    let git_ref = source.git_ref.as_deref();
-    let head = ctx.git.ls_remote_head(url, git_ref).map_err(git_err)?;
-    let cache = cache_dir_for(&ctx.cache_root(), &source.url, &head);
-    let commit = if is_complete_cache(&cache) {
-        head
-    } else {
-        if cache.exists() {
-            remove_any(&cache)?;
-        }
-        ctx.git
-            .shallow_clone(url, git_ref, &cache)
-            .map_err(git_err)?
-    };
+    let (cache, commit) = ensure_cache(ctx, &source.url, url, source.git_ref.as_deref())?;
     let skill_src = cache.join(&sub);
     if !skill_src.is_dir() {
         return Err(invalid(format!(
@@ -912,9 +911,7 @@ fn update_by_clone(
     }
     let key = skill_key(entry)?;
     place(ctx, &content, Path::new(&entry.dir), &key, true)?;
-    let recorded = record_state(ctx, entry, source, url, Some(commit), true);
-    cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
-    recorded
+    record_state(ctx, entry, source, url, Some(commit), true)
 }
 
 /// Restores a backup. The current state is backed up first, so a rollback can
@@ -1162,6 +1159,7 @@ mod tests {
             appdata: root.join("appdata"),
             git: Arc::new(SystemGit::new()),
             registry_path: root.join("appdata").join("skills-registry.json"),
+            cache_lock: Arc::new(Mutex::new(())),
         };
         Env {
             _tmp: tmp,
@@ -1254,6 +1252,23 @@ mod tests {
             git_ref: None,
             skill_path: path.to_string(),
         }
+    }
+
+    #[test]
+    fn concurrent_ensure_cache_leaves_one_complete_dir() {
+        let e = env();
+        let (url, _work) = repo_with_skill(&e);
+        let results: Vec<(PathBuf, String)> = std::thread::scope(|sc| {
+            let hs: Vec<_> = (0..4)
+                .map(|_| sc.spawn(|| ensure_cache(&e.ctx, &url, &url, None).unwrap()))
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert!(results.iter().all(|r| r.0 == results[0].0 && r.1 == results[0].1));
+        assert!(is_complete_cache(&results[0].0));
+        let dirs: Vec<_> = fs::read_dir(e.ctx.cache_root()).unwrap().flatten().collect();
+        assert_eq!(dirs.len(), 1, "{dirs:?}");
+        assert!(results[0].0.join("skills/x/SKILL.md").is_file());
     }
 
     #[test]

@@ -14,8 +14,29 @@ use tempfile::TempDir;
 const GLOBAL: &str = "global/claude/CLAUDE.md";
 const CODEX: &str = "global/codex/AGENTS.md";
 
+/// Token store that counts reads (status must never read the keychain).
+#[derive(Default)]
+struct CountingTokens {
+    inner: MemoryTokenStore,
+    gets: std::sync::atomic::AtomicUsize,
+}
+
+impl TokenStore for CountingTokens {
+    fn get(&self) -> Result<Option<String>, String> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        self.inner.get()
+    }
+    fn set(&self, t: &str) -> Result<(), String> {
+        self.inner.set(t)
+    }
+    fn clear(&self) -> Result<(), String> {
+        self.inner.clear()
+    }
+}
+
 #[derive(Default)]
 struct FakeGitHub {
+    login: Mutex<Option<String>>,
     polls: Mutex<VecDeque<PollResult>>,
     repo: Mutex<Option<GhRepo>>,
     marker: Mutex<Option<Vec<u8>>>,
@@ -62,7 +83,7 @@ impl GitHubApi for FakeGitHub {
     fn user(&self, _: &str) -> Result<GhUser, ApiError> {
         self.auth()?;
         Ok(GhUser {
-            login: "octo".into(),
+            login: self.login.lock().unwrap().clone().unwrap_or_else(|| "octo".into()),
         })
     }
     fn get_repo(&self, _: &str, _: &str, _: &str) -> Result<Option<GhRepo>, ApiError> {
@@ -114,7 +135,7 @@ struct Env {
     bare: PathBuf,
     url: String,
     api: Arc<FakeGitHub>,
-    tokens: Arc<MemoryTokenStore>,
+    tokens: Arc<CountingTokens>,
     events: Events,
     state: Arc<AppState>,
 }
@@ -131,7 +152,7 @@ fn env() -> Env {
     fs::create_dir_all(&paths.codex_home).unwrap();
     let mut st = AppState::with_home(paths, t.path().join("data"), home);
     let api = Arc::new(FakeGitHub::default());
-    let tokens = Arc::new(MemoryTokenStore::new());
+    let tokens = Arc::new(CountingTokens::default());
     let mut rt = SyncRuntime::new(api.clone(), tokens.clone(), SyncGit::new());
     let u = url.clone();
     rt.clone_url = Box::new(move |_, _| u.clone());
@@ -191,6 +212,12 @@ impl Env {
 
     /// Commits on top of `main` as another machine would.
     fn push_remote(&self, changes: &[(&str, &str)]) {
+        let raw: Vec<(&str, Vec<u8>)> =
+            changes.iter().map(|(p, c)| (*p, c.as_bytes().to_vec())).collect();
+        self.push_bytes(&raw);
+    }
+
+    fn push_bytes(&self, changes: &[(&str, Vec<u8>)]) {
         let g = SyncGit::new();
         let seed = self.t.path().join("seed");
         if !seed.join(".git").exists() {
@@ -207,7 +234,7 @@ impl Env {
             None => BTreeMap::new(),
         };
         for (p, c) in changes {
-            tree.insert(p.to_string(), TreeBlob::Data(c.as_bytes().to_vec()));
+            tree.insert(p.to_string(), TreeBlob::Data(c.clone()));
         }
         let c = g
             .commit_tree_blobs(&seed, head.as_deref(), &tree, "other", SYNC_AUTHOR)
@@ -217,7 +244,7 @@ impl Env {
 
     fn done(&self) -> SyncSummaryDto {
         match sync_start_impl(&self.state).unwrap() {
-            SyncStartDto::Done { summary } => summary,
+            SyncStartDto::Done { summary, .. } => summary,
             other => panic!("expected done, got {other:?}"),
         }
     }
@@ -265,7 +292,7 @@ fn login_flow_creates_repo_and_clones() {
     assert_eq!(st.login.as_deref(), Some("octo"));
     let repo = st.repo.unwrap();
     assert_eq!(repo.url, "https://github.com/octo/MemDockHub");
-    assert!(repo.private);
+    assert_eq!(repo.private, Some(true));
     assert_eq!(st.needs, None);
 }
 
@@ -298,7 +325,7 @@ fn login_cancel_and_public_repo_need_ack() {
     assert_eq!(sync_start_impl(&e.state).unwrap_err().code, "public_not_acked");
     let st = ack_public_repo_impl(&e.state).unwrap();
     assert_eq!(st.needs, None);
-    assert!(!st.repo.unwrap().private);
+    assert_eq!(st.repo.unwrap().private, Some(false));
     assert!(e.state.data_dir.join("sync/repo/.git").exists());
 }
 
@@ -593,4 +620,146 @@ fn not_logged_in_errors() {
     let e = env();
     assert_eq!(sync_start_impl(&e.state).unwrap_err().code, "not_logged_in");
     assert!(sync_history_impl(&e.state, 5).unwrap().is_empty());
+}
+
+fn set_public_marked_repo(e: &Env, owner: &str) {
+    *e.api.repo.lock().unwrap() = Some(GhRepo {
+        private: false,
+        default_branch: "main".into(),
+        clone_url: String::new(),
+        description: None,
+        full_name: format!("{owner}/MemDockHub"),
+    });
+    *e.api.marker.lock().unwrap() = Some(br#"{"format":1,"app":"MemDock"}"#.to_vec());
+}
+
+#[test]
+fn done_reports_skipped_and_missing_skills() {
+    let e = env();
+    e.login();
+    let skills = r#"{"format":1,"skills":[{"name":"demo","url":"https://github.com/me/skills","skill_path":"demo","tool":"claude","scope":{"type":"global"},"installed_on":["other-machine"]}]}"#;
+    e.push_bytes(&[
+        (CODEX, vec![0xff, 0xfe, 0x00, 0x41]),
+        ("skills.json", skills.as_bytes().to_vec()),
+    ]);
+    match sync_start_impl(&e.state).unwrap() {
+        SyncStartDto::Done {
+            skipped,
+            missing_skills,
+            ..
+        } => {
+            assert!(skipped.iter().any(|s| s.repo_path == CODEX), "{skipped:?}");
+            assert_eq!(missing_skills.len(), 1);
+            assert_eq!(missing_skills[0].name, "demo");
+        }
+        other => panic!("expected done, got {other:?}"),
+    }
+    let v = serde_json::to_value(sync_start_impl(&e.state).unwrap()).unwrap();
+    assert_eq!(v["kind"], "done");
+    assert!(v["skipped"].is_array() && v["missing_skills"].is_array());
+    assert!(v["removed_elsewhere"].is_array());
+}
+
+#[test]
+fn account_switch_requires_new_public_ack() {
+    let e = env();
+    set_public_marked_repo(&e, "octo");
+    e.login();
+    ack_public_repo_impl(&e.state).unwrap();
+    assert_eq!(e.sync_state().public_ack_for.as_deref(), Some("octo/MemDockHub"));
+    e.done();
+    logout_impl(&e.state).unwrap();
+    assert_eq!(e.sync_state().public_ack_for, None);
+
+    // Another account with its own public MemDockHub must confirm again.
+    *e.api.login.lock().unwrap() = Some("other".into());
+    set_public_marked_repo(&e, "other");
+    e.login();
+    assert_eq!(e.events_named(LOGIN_EVENT).last().unwrap()["needs"], "public_ack");
+    assert_eq!(sync_start_impl(&e.state).unwrap_err().code, "public_not_acked");
+    ack_public_repo_impl(&e.state).unwrap();
+    assert_eq!(e.sync_state().public_ack_for.as_deref(), Some("other/MemDockHub"));
+}
+
+#[test]
+fn repo_made_public_after_binding_requires_ack() {
+    let e = env();
+    e.login();
+    write(&e.global(), "one\n");
+    e.done();
+    let head = e.head();
+    // Someone flips the repository to public on GitHub.
+    e.api.repo.lock().unwrap().as_mut().unwrap().private = false;
+    write(&e.global(), "two\n");
+    assert_eq!(sync_start_impl(&e.state).unwrap_err().code, "public_not_acked");
+    assert_eq!(e.head(), head, "nothing synced");
+    assert_eq!(fs::read_to_string(e.global()).unwrap(), "two\n");
+    let st = sync_status_impl(&e.state);
+    assert_eq!(st.needs.as_deref(), Some("public_ack"));
+    assert_eq!(st.repo.unwrap().private, Some(false));
+    ack_public_repo_impl(&e.state).unwrap();
+    assert_eq!(e.done().pushed, 1);
+}
+
+#[test]
+fn status_never_reads_the_keychain() {
+    let e = env();
+    e.login();
+    start_status_watch(&e.state);
+    e.tokens.gets.store(0, Ordering::SeqCst);
+    let st = sync_status_impl(&e.state);
+    assert!(st.logged_in);
+    emit_status(&e.state);
+    write(&e.global(), "x\n");
+    e.state.sync.memory_changed();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(e.tokens.gets.load(Ordering::SeqCst), 0);
+    // Logout updates the cache without a read.
+    logout_impl(&e.state).unwrap();
+    assert!(!sync_status_impl(&e.state).logged_in);
+    assert_eq!(e.tokens.gets.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn git_unauthorized_after_local_writes_relogs_and_keeps_base() {
+    let e = env();
+    let plan = conflict_setup(&e);
+    let head1 = e.head();
+    // The remote refuses the push as GitHub does for a revoked token.
+    let hook = e.bare.join("hooks").join("pre-receive");
+    fs::write(&hook, "#!/bin/sh\necho 'fatal: Authentication failed' >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let res: HashMap<String, ResolutionDto> = serde_json::from_value(serde_json::json!({
+        GLOBAL: { "kind": "text", "text": "M1\nl2\nl3\nl4\nl5\n" }
+    }))
+    .unwrap();
+    let err = sync_finish_impl(&e.state, &plan.id, res).unwrap_err();
+    assert_eq!(err.code, "unauthorized", "{err:?}");
+    assert_eq!(e.tokens.get().unwrap(), None);
+    assert_eq!(e.events_named(LOGIN_EVENT).last().unwrap()["status"], "relogin");
+    let s = e.sync_state();
+    assert_eq!(s.login, None);
+    assert_eq!(s.last_sync_commit.as_deref(), Some(head1.as_str()));
+    assert_eq!(fs::read_to_string(e.global()).unwrap(), "M1\nl2\nl3\nl4\nl5\n");
+}
+
+#[test]
+fn finish_keeps_plan_on_pre_write_errors() {
+    let e = env();
+    let plan = conflict_setup(&e);
+    e.tokens.inner.clear().unwrap();
+    let res = || -> HashMap<String, ResolutionDto> {
+        serde_json::from_value(serde_json::json!({
+            GLOBAL: { "kind": "text", "text": "M1\nl2\nl3\nl4\nl5\n" }
+        }))
+        .unwrap()
+    };
+    assert_eq!(sync_finish_impl(&e.state, &plan.id, res()).unwrap_err().code, "not_logged_in");
+    e.tokens.inner.set("tok-1").unwrap();
+    let sum = sync_finish_impl(&e.state, &plan.id, res()).unwrap();
+    assert!(sum.committed);
 }

@@ -886,7 +886,10 @@ fn push_failure_persists_base_and_next_sync_is_clean() {
     let r = a.finish(&plan, &text_res(GLOBAL, resolved));
     fs::rename(&moved, &w.bare).unwrap();
     match &r {
-        Err(SyncError::PushFailed { base, .. }) => assert_eq!(base.commit, r1),
+        Err(SyncError::PushFailed { base, cause, .. }) => {
+            assert_eq!(base.commit, r1);
+            assert!(matches!(cause, Some(SyncGitError::Failed { .. })), "{cause:?}");
+        }
         other => panic!("expected PushFailed, got {other:?}"),
     }
     assert_eq!(read(&a.global()), resolved);

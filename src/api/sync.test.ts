@@ -31,7 +31,14 @@ beforeEach(() => {
   listen.mockReset();
   mockIPC((cmd, args) => {
     calls.push([cmd, args]);
-    if (cmd === "sync_start") return { kind: "done", summary: { pulled: 1 } };
+    if (cmd === "sync_start")
+      return {
+        kind: "done",
+        summary: { pulled: 1 },
+        skipped: [{ repo_path: "global/codex/AGENTS.md", reason: "not_utf8_remote" }],
+        missing_skills: [],
+        removed_elsewhere: [],
+      };
     if (cmd === "sync_finish") throw { code: "plan_not_found", message: "gone" };
     return null;
   });
@@ -84,6 +91,7 @@ describe("sync api", () => {
     const r = await syncStart();
     expect(last()).toEqual(["sync_start", undefined]);
     expect(r.kind).toBe("done");
+    if (r.kind === "done") expect(r.skipped[0].reason).toBe("not_utf8_remote");
   });
 
   it("syncFinish sends resolutions keyed by repo path and rethrows errors", async () => {

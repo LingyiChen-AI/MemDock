@@ -53,6 +53,7 @@ export function openVerificationUrl(): Promise<void> {
   return invoke<void>("open_verification_url");
 }
 
+/** `done` also reports skipped files and skill differences (nothing needed a decision). */
 export function syncStart(): Promise<SyncStartResult> {
   return invoke<SyncStartResult>("sync_start");
 }

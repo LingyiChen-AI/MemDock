@@ -130,6 +130,9 @@ pub struct SyncRuntime {
     status_tx: Mutex<Option<Sender<()>>>,
     /// Last `pending` sent with `sync://status-changed` (-1: none yet).
     last_pending: AtomicI64,
+    /// Whether the token store holds a token, as last seen. Status reads use
+    /// this so they never touch the keychain; `None` until first known.
+    has_token: Mutex<Option<bool>>,
 }
 
 fn github_clone_url(owner: &str, name: &str) -> String {
@@ -161,7 +164,33 @@ impl SyncRuntime {
             emitter: Mutex::new(None),
             status_tx: Mutex::new(None),
             last_pending: AtomicI64::new(-1),
+            has_token: Mutex::new(None),
         }
+    }
+
+    fn set_has_token(&self, v: bool) {
+        *lock(&self.has_token) = Some(v);
+    }
+
+    /// Reads the token store (keychain) and refreshes the cached flag.
+    fn read_token(&self) -> Option<String> {
+        let t = self.tokens.get().ok().flatten().filter(|t| !t.is_empty());
+        self.set_has_token(t.is_some());
+        t
+    }
+
+    fn store_token(&self, t: &str) -> Result<(), String> {
+        self.tokens.set(t)?;
+        self.set_has_token(true);
+        Ok(())
+    }
+
+    fn clear_token(&self) -> Result<(), String> {
+        let r = self.tokens.clear();
+        if r.is_ok() {
+            self.set_has_token(false);
+        }
+        r
     }
 
     pub fn set_emitter(&self, emit: Emit) {
@@ -235,7 +264,8 @@ pub struct RepoDto {
     pub owner: String,
     pub name: String,
     pub url: String,
-    pub private: bool,
+    /// `None` when GitHub's answer is not known (e.g. `not_ours`).
+    pub private: Option<bool>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -338,7 +368,14 @@ impl From<&SyncSummary> for SyncSummaryDto {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SyncStartDto {
-    Done { summary: SyncSummaryDto },
+    /// `skipped` / skill differences are reported even when nothing needed
+    /// a decision.
+    Done {
+        summary: SyncSummaryDto,
+        skipped: Vec<SkippedFile>,
+        missing_skills: Vec<ManifestSkill>,
+        removed_elsewhere: Vec<ManifestSkill>,
+    },
     NeedsResolution { plan: SyncPlanDto },
     Blocked { secret_hits: Vec<FileSecretHit> },
 }
@@ -421,19 +458,10 @@ fn sync_err(e: SyncError) -> CommandError {
             c
         }
         SyncError::RemoteMoved { .. } => err("remote_moved", "the remote changed during sync"),
-        SyncError::PushFailed { message, .. } => {
-            // Errors raised after local writes are wrapped as `PushFailed`.
-            let as_git = |g: SyncGitError| SyncError::Git(g).to_string();
-            if message == as_git(SyncGitError::Unauthorized) {
-                git_err(SyncGitError::Unauthorized)
-            } else if message == as_git(SyncGitError::Timeout) {
-                git_err(SyncGitError::Timeout)
-            } else if message == as_git(SyncGitError::NotInstalled) {
-                git_err(SyncGitError::NotInstalled)
-            } else {
-                err("push_failed", message)
-            }
-        }
+        SyncError::PushFailed { message, cause, .. } => match cause {
+            Some(SyncGitError::Failed { .. }) | None => err("push_failed", message),
+            Some(g) => git_err(g),
+        },
     }
 }
 
@@ -451,7 +479,7 @@ fn try_sync_lock(state: &AppState) -> Result<MutexGuard<'_, ()>, CommandError> {
 
 /// `unauthorized`: forget the token and the login, ask the UI to log in again.
 fn handle_unauthorized(state: &AppState) {
-    let _ = state.sync.tokens.clear();
+    let _ = state.sync.clear_token();
     if let Ok(mut s) = load(state) {
         s.login = None;
         s.needs = Some("relogin".into());
@@ -491,8 +519,24 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Reads the real token (keychain). Only sync / login operations call this.
 fn token(state: &AppState) -> Option<String> {
-    state.sync.tokens.get().ok().flatten().filter(|t| !t.is_empty())
+    state.sync.read_token()
+}
+
+/// Cached "a token is stored" flag: no keychain access.
+fn has_token_cached(state: &AppState) -> bool {
+    lock(&state.sync.has_token).unwrap_or(false)
+}
+
+/// Reads the keychain once in the background at startup, then re-emits the
+/// status so the UI learns whether the user is logged in.
+pub fn warm_token_cache(state: &Arc<AppState>) {
+    let st = state.clone();
+    std::thread::spawn(move || {
+        st.sync.read_token();
+        emit_status(&st);
+    });
 }
 
 fn require_token(state: &AppState, s: &SyncState) -> Result<String, CommandError> {
@@ -528,12 +572,24 @@ fn setup_repo(
     let rt = &state.sync;
     let sleep = |d: Duration| (rt.sleep)(d);
     let name = s.repo_name.clone();
+    // An acknowledgement only counts for the exact repository it was given for.
+    let acked = s
+        .public_ack_for
+        .as_deref()
+        .is_some_and(|a| a.eq_ignore_ascii_case(&format!("{login}/{name}")));
     let outcome =
-        ensure_repo_with(&*rt.api, token, login, &name, s.public_ack, &sleep).map_err(api_err)?;
+        ensure_repo_with(&*rt.api, token, login, &name, acked, &sleep).map_err(api_err)?;
     match outcome {
         RepoOutcome::Ready(repo) | RepoOutcome::Created(repo) => {
             let (owner, name) = split_full(&repo.full_name, login, &name);
             let full = format!("{owner}/{name}");
+            if s
+                .public_ack_for
+                .as_deref()
+                .is_some_and(|a| !a.eq_ignore_ascii_case(&full))
+            {
+                s.public_ack_for = None;
+            }
             let dir = repo_dir(state);
             let other_repo = s.clone_of.as_deref() != Some(full.as_str());
             if other_repo || !dir.join(".git").exists() {
@@ -573,19 +629,10 @@ fn setup_repo(
     }
 }
 
-fn is_ready(state: &AppState, s: &SyncState) -> bool {
-    let Some(owner) = &s.repo_owner else { return false };
-    s.needs.is_none()
-        && s.clone_of.as_deref() == Some(format!("{owner}/{}", s.repo_name).as_str())
-        && repo_dir(state).join(".git").exists()
-}
-
 /// Makes sure the repository is bound and cloned; errors with the reason
-/// otherwise.
+/// otherwise. Always asks GitHub (sync is online anyway), so a repository
+/// made public, deleted or replaced since the last sync is noticed.
 fn ensure_ready(state: &AppState, token: &str, s: &mut SyncState) -> Result<(), CommandError> {
-    if is_ready(state, s) {
-        return Ok(());
-    }
     let login = s
         .login
         .clone()
@@ -826,12 +873,12 @@ fn settle(
 
 pub fn sync_status_impl(state: &AppState) -> SyncStatusDto {
     let s = load(state).unwrap_or_default();
-    let logged_in = s.login.is_some() && token(state).is_some();
+    let logged_in = s.login.is_some() && has_token_cached(state);
     let repo = s.repo_owner.as_ref().map(|owner| RepoDto {
         owner: owner.clone(),
         name: s.repo_name.clone(),
         url: format!("https://github.com/{owner}/{}", s.repo_name),
-        private: s.repo_private.unwrap_or(true),
+        private: s.repo_private,
     });
     SyncStatusDto {
         logged_in,
@@ -909,6 +956,9 @@ pub fn login_start_impl(
                 })
             },
         };
+        // TODO(exit): app exit does not cancel this thread or a running sync;
+        // the process ends with them. Hook `login_cancel` into RunEvent::Exit
+        // if a clean shutdown is ever needed.
         st.sync.login_active.store(false, Ordering::SeqCst);
         st.sync.emit(LOGIN_EVENT, &event);
         emit_status(&st);
@@ -935,10 +985,19 @@ fn run_login(state: &AppState, code: &DeviceCode) -> Result<Option<String>, Logi
     }
     let fail = |e: CommandError| LoginFail::Command(e);
     let user = rt.api.user(&token).map_err(|e| fail(api_err(e)))?;
-    rt.tokens
-        .set(&token)
+    rt.store_token(&token)
         .map_err(|e| fail(err("keychain", e)))?;
     let mut s = load(state).map_err(fail)?;
+    // A public-repository acknowledgement belongs to one account's repository.
+    let prev_account = s.login.clone().or_else(|| s.repo_owner.clone());
+    let ack_owner_differs = s.public_ack_for.as_deref().is_some_and(|a| {
+        !a.split('/').next().unwrap_or("").eq_ignore_ascii_case(&user.login)
+    });
+    if ack_owner_differs
+        || prev_account.is_some_and(|p| !p.eq_ignore_ascii_case(&user.login))
+    {
+        s.public_ack_for = None;
+    }
     s.login = Some(user.login.clone());
     s.needs = None;
     store(state, &s).map_err(fail)?;
@@ -946,7 +1005,7 @@ fn run_login(state: &AppState, code: &DeviceCode) -> Result<Option<String>, Logi
         Ok(needs) => Ok(needs),
         Err(e) => {
             if e.code == "unauthorized" {
-                let _ = rt.tokens.clear();
+                let _ = rt.clear_token();
                 if let Ok(mut s) = load(state) {
                     s.login = None;
                     s.needs = Some("relogin".into());
@@ -969,12 +1028,12 @@ pub fn logout_impl(state: &AppState) -> Result<SyncStatusDto, CommandError> {
     state.sync.login_cancel.store(true, Ordering::SeqCst);
     state
         .sync
-        .tokens
-        .clear()
+        .clear_token()
         .map_err(|e| err("keychain", e))?;
     let mut s = load(state)?;
     s.login = None;
     s.needs = None;
+    s.public_ack_for = None;
     store(state, &s)?;
     lock(&state.sync.plans).clear();
     emit_status(state);
@@ -1001,7 +1060,7 @@ pub fn set_repo_name_impl(state: &AppState, name: &str) -> Result<SyncStatusDto,
         let mut s = load(state)?;
         if s.repo_name != name {
             s.repo_name = name.to_string();
-            s.public_ack = false;
+            s.public_ack_for = None;
         }
         if matches!(s.needs.as_deref(), Some("not_ours" | "public_ack")) {
             s.needs = None;
@@ -1022,7 +1081,12 @@ pub fn ack_public_repo_impl(state: &AppState) -> Result<SyncStatusDto, CommandEr
     let _g = try_sync_lock(state)?;
     let r = (|| {
         let mut s = load(state)?;
-        s.public_ack = true;
+        let owner = s
+            .repo_owner
+            .clone()
+            .or_else(|| s.login.clone())
+            .ok_or_else(|| err("not_logged_in", "log in to GitHub to sync"))?;
+        s.public_ack_for = Some(format!("{owner}/{}", s.repo_name));
         if s.needs.as_deref() == Some("public_ack") {
             s.needs = None;
         }
@@ -1060,6 +1124,9 @@ pub fn sync_start_impl(state: &AppState) -> Result<SyncStartDto, CommandError> {
             let sum = settle(state, &plan, &p, res)?;
             return Ok(SyncStartDto::Done {
                 summary: (&sum).into(),
+                skipped: plan.skipped,
+                missing_skills: plan.missing_skills,
+                removed_elsewhere: plan.removed_elsewhere,
             });
         }
         let dto = plan_dto(state, &plan, &p);
@@ -1078,13 +1145,17 @@ pub fn sync_finish_impl(
 ) -> Result<SyncSummaryDto, CommandError> {
     let _g = try_sync_lock(state)?;
     let r = (|| {
-        let plan = lock(&state.sync.plans)
-            .remove(plan_id)
-            .ok_or_else(|| err("plan_not_found", "this sync plan is no longer available"))?;
+        let not_found = || err("plan_not_found", "this sync plan is no longer available");
+        if !lock(&state.sync.plans).contains_key(plan_id) {
+            return Err(not_found());
+        }
+        // Everything that can fail before the engine runs is checked while
+        // the plan stays stored, so the user can retry it.
         let s = load(state)?;
         let token = require_token(state, &s)?;
         state.rescan();
         let p = gather(state, s, true)?;
+        let plan = lock(&state.sync.plans).remove(plan_id).ok_or_else(not_found)?;
         let ctx = make_ctx(state, &p, Some(token));
         let res: BTreeMap<String, Resolution> = resolutions
             .into_iter()

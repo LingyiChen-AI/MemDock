@@ -414,7 +414,8 @@ export interface SyncRepo {
   owner: string;
   name: string;
   url: string;
-  private: boolean;
+  /** `null` when GitHub's answer is not known (e.g. `not_ours`). */
+  private: boolean | null;
 }
 
 export interface SyncStatus {
@@ -532,7 +533,16 @@ export interface SyncSummary {
 }
 
 export type SyncStartResult =
-  | { kind: "done"; summary: SyncSummary }
+  | {
+      kind: "done";
+      summary: SyncSummary;
+      /** Files left out of this sync, with reasons. */
+      skipped: SyncSkipped[];
+      /** Skills other machines have that this one lacks. */
+      missing_skills: ManifestSkill[];
+      /** Skills installed here that every other machine removed. */
+      removed_elsewhere: ManifestSkill[];
+    }
   | { kind: "needs_resolution"; plan: SyncPlan }
   | { kind: "blocked"; secret_hits: FileSecretHit[] };
 

@@ -35,8 +35,10 @@ pub struct SyncState {
     pub last_sync_commit: Option<String>,
     #[serde(default)]
     pub last_sync_at: Option<i64>,
+    /// `owner/name` of the public repository the user agreed to sync into.
+    /// An acknowledgement never carries over to another repository or account.
     #[serde(default)]
-    pub public_ack: bool,
+    pub public_ack_for: Option<String>,
     #[serde(default)]
     pub included_local: Vec<String>,
     #[serde(default)]
@@ -69,7 +71,7 @@ impl Default for SyncState {
             branch: None,
             last_sync_commit: None,
             last_sync_at: None,
-            public_ack: false,
+            public_ack_for: None,
             included_local: Vec::new(),
             synced_projects: Vec::new(),
             unsynced_paths: BTreeSet::new(),
@@ -110,7 +112,7 @@ mod tests {
             branch: Some("main".into()),
             last_sync_commit: Some("abc".into()),
             last_sync_at: Some(123),
-            public_ack: true,
+            public_ack_for: Some("octo/MemDockHub".into()),
             included_local: vec!["C:/x".into()],
             synced_projects: vec![SyncedProject {
                 key: "k1".into(),

@@ -154,7 +154,12 @@ pub enum SyncError {
     RemoteMoved { base: SyncBase },
     /// Local files were written, then committing / pushing failed: persist
     /// `base` so the next sync does not replay this one as conflicts.
-    PushFailed { message: String, base: SyncBase },
+    /// `cause` is the git failure behind it, when there was one.
+    PushFailed {
+        message: String,
+        cause: Option<SyncGitError>,
+        base: SyncBase,
+    },
 }
 
 impl SyncError {
@@ -171,7 +176,13 @@ impl SyncError {
 impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SyncError::Git(e) => write!(f, "git: {e:?}"),
+            SyncError::Git(e) => match e {
+                SyncGitError::NotInstalled => write!(f, "git is not installed"),
+                SyncGitError::Timeout => write!(f, "git timed out"),
+                SyncGitError::Rejected => write!(f, "the remote rejected the push"),
+                SyncGitError::Unauthorized => write!(f, "GitHub rejected the credentials"),
+                SyncGitError::Failed { stderr } => write!(f, "git: {stderr}"),
+            },
             SyncError::Io(m) => write!(f, "{m}"),
             SyncError::Manifest(m) => write!(f, "skills.json: {m}"),
             SyncError::Unresolved { paths } => write!(f, "unresolved: {}", paths.join(", ")),
@@ -508,9 +519,19 @@ fn after_writes(e: SyncError, base: Option<SyncBase>) -> SyncError {
             base: Some(base),
         },
         SyncError::RemoteMoved { base } => SyncError::RemoteMoved { base },
-        SyncError::PushFailed { message, base } => SyncError::PushFailed { message, base },
+        SyncError::PushFailed {
+            message, cause, ..
+        } => SyncError::PushFailed {
+            message,
+            cause,
+            base,
+        },
         other => SyncError::PushFailed {
             message: other.to_string(),
+            cause: match &other {
+                SyncError::Git(g) => Some(g.clone()),
+                _ => None,
+            },
             base,
         },
     }

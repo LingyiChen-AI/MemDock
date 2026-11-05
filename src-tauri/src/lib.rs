@@ -78,6 +78,8 @@ pub fn run() {
             std::thread::spawn(move || commands_skills::startup_cleanup(&cleanup_state));
             state.sync.attach(app.handle().clone());
             commands_sync::start_status_watch(&state);
+            // Keychain read happens once, off the UI thread.
+            commands_sync::warm_token_cache(&state);
             let handle = watcher::start(app.handle().clone(), state.clone());
             let extract = Arc::new(commands_extract::ExtractState::new(state.clone()));
             extract.attach(app.handle().clone());

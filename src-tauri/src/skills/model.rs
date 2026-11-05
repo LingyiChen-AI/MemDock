@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::Tool;
 
@@ -13,17 +13,34 @@ pub enum SkillKind {
 }
 
 /// Whether a skill is installed globally or inside one project.
-#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SkillScope {
     Global,
     Project { project_id: String },
 }
 
-/// Origin of an installed skill (filled in by the source-tracking step).
-#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
+/// How a skill's source was determined.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceOrigin {
+    Registry,
+    GitDir,
+    SymlinkRepo,
+    SkillLock,
+    Manual,
+}
+
+/// Origin of an installed skill.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct SkillSource {
+    /// Normalized: `https://github.com/owner/repo` (no `.git`, no trailing `/`).
     pub url: String,
+    /// Commit the install corresponds to, when known.
+    pub git_ref: Option<String>,
+    /// Path inside the repository; `""` when the skill is the repo root.
+    pub skill_path: String,
+    pub origin: SourceOrigin,
 }
 
 /// A skill directory containing a `SKILL.md`.

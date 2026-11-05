@@ -14,6 +14,8 @@ pub struct Settings {
     /// "green" | "blue" | "violet" | "orange" | "teal"; empty means "green".
     pub accent: Option<String>,
     pub manual_projects: Vec<String>,
+    /// Opt-in: query Claude Code's quota endpoint with its OAuth token.
+    pub claude_quota_enabled: bool,
 }
 
 /// Loads settings from `path`. A missing file yields `Settings::default()`.
@@ -115,6 +117,7 @@ mod tests {
             theme: Some("dark".to_string()),
             accent: Some("blue".to_string()),
             manual_projects: vec!["/a".to_string()],
+            claude_quota_enabled: true,
         };
         save_settings(&path, &s).unwrap();
         let loaded = load_settings(&path);

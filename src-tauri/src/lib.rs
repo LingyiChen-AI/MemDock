@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod commands_extract;
 pub mod commands_skills;
+pub mod commands_usage;
 pub mod extract;
 pub mod fsutil;
 pub mod memory;
@@ -10,6 +11,7 @@ pub mod proc;
 pub mod projects;
 pub mod settings;
 pub mod skills;
+pub mod usage;
 pub mod watcher;
 pub mod window;
 
@@ -76,6 +78,13 @@ pub fn run() {
             let extract = Arc::new(commands_extract::ExtractState::new(state.clone()));
             extract.attach(app.handle().clone());
             extract.start_scheduler();
+            let usage = Arc::new(commands_usage::UsageState::new(state.clone()));
+            let usage_handle = app.handle().clone();
+            usage.start(Arc::new(move |name: &str, payload: serde_json::Value| {
+                use tauri::Emitter;
+                let _ = usage_handle.emit(name, payload);
+            }));
+            app.manage(usage);
             app.manage(state);
             app.manage(handle);
             app.manage(extract);
@@ -125,6 +134,11 @@ pub fn run() {
             commands_skills::read_skill_file,
             commands_skills::read_skill_backup_file,
             commands_skills::write_skill_file,
+            commands_usage::usage_summary,
+            commands_usage::usage_quota,
+            commands_usage::usage_export_csv,
+            commands_usage::set_claude_quota_enabled,
+            commands_usage::usage_rescan,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

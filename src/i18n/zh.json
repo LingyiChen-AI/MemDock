@@ -10,7 +10,11 @@
   "shell": {
     "mainNav": "主导航",
     "collapse": "收起侧栏",
-    "expand": "展开侧栏"
+    "expand": "展开侧栏",
+    "leaveTitle": "放弃未保存的修改？",
+    "leaveBody": "离开当前页面会丢失未保存的修改。",
+    "leaveConfirm": "放弃修改并离开",
+    "leaveKeep": "继续编辑"
   },
   "placeholder": {
     "comingSoon": "即将推出"
@@ -122,6 +126,7 @@
     "checkUpdatesN": "检查更新（{n}）",
     "checking": "检查中",
     "needGit": "需要安装 git",
+    "updateNeedSource": "来源未知，先补登来源",
     "checkFailed": "检查更新失败：{message}",
     "addSkill": "添加 skill",
     "listLabel": "Skill 列表",
@@ -175,6 +180,7 @@
     "modifiedAt": "更新时间",
     "description": "描述",
     "pluginSource": "插件 {name}",
+    "removedBanner": "这个 skill 已被外部删除，编辑器里还有未保存的修改，先复制出来再离开。",
     "readOnlyBanner": "只读来源，不能直接修改。可复制到可写位置后再编辑。",
     "filesTree": "文件树",
     "filesTruncated": "文件太多，只显示前 5000 个",

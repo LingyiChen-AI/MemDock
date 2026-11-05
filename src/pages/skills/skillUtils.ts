@@ -49,3 +49,14 @@ export function formatSize(bytes: number): string {
 export function shortCommit(c: string | null | undefined): string {
   return c ? c.slice(0, 7) : "";
 }
+
+function normUrl(u: string): string {
+  return u.trim().toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
+}
+
+/** Same skill installed in several places: same name and the same source repository (or both without one). */
+export function sameSkill(a: SkillEntry, b: SkillEntry): boolean {
+  if (a.name !== b.name) return false;
+  if (!a.source || !b.source) return !a.source && !b.source;
+  return normUrl(a.source.url) === normUrl(b.source.url);
+}

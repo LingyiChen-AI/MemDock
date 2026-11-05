@@ -14,19 +14,24 @@ vi.mock("@/api/skills", () => ({
   writeSkillFile: vi.fn(),
   onSkillsChanged: vi.fn(),
 }));
+const cmProps = vi.hoisted(() => ({ lastExtLength: -1, lengths: [] as number[] }));
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({
+    extensions,
     value,
     onChange,
     editable,
     readOnly,
   }: {
+    extensions?: unknown[];
     value: string;
     onChange?: (v: string) => void;
     editable?: boolean;
     readOnly?: boolean;
   }) => {
-    useEffect(() => {}, []);
+    useEffect(() => {
+      cmProps.lengths.push((extensions ?? []).length);
+    }, [extensions]);
     return (
       <textarea
         aria-label="editor"
@@ -41,7 +46,7 @@ vi.mock("@uiw/react-codemirror", () => ({
 
 import { listSkillFiles, onSkillsChanged, readSkillFile, writeSkillFile } from "@/api/skills";
 import { renderApp } from "@/test/fixtures";
-import { SkillFiles } from "./SkillFiles";
+import { SkillFiles, isMarkdownPath } from "./SkillFiles";
 
 const dto = (over: Partial<SkillFileDto> = {}): SkillFileDto => ({
   text: "# hello",
@@ -153,5 +158,19 @@ describe("SkillFiles", () => {
     (readSkillFile as Mock).mockResolvedValue(dto({ text: "# remote", hash: "h5" }));
     await act(async () => emit({ paths: ["C:\\x\\SKILL.md"] }));
     expect(await screen.findByDisplayValue("# remote")).toBeInTheDocument();
+  });
+
+  it("markdown language only for .md files", async () => {
+    expect(isMarkdownPath("SKILL.md")).toBe(true);
+    expect(isMarkdownPath("docs/a.MD")).toBe(true);
+    expect(isMarkdownPath("scripts/run.py")).toBe(false);
+    expect(isMarkdownPath("notes.mdx")).toBe(false);
+    (readSkillFile as Mock).mockResolvedValue(dto());
+    cmProps.lengths.length = 0;
+    renderApp(<SkillFiles skillId="s1" readonly={false} />);
+    await screen.findByDisplayValue("# hello");
+    const mdLen = cmProps.lengths[cmProps.lengths.length - 1];
+    await userEvent.click(screen.getByRole("treeitem", { name: /run.py/ }));
+    await waitFor(() => expect(cmProps.lengths[cmProps.lengths.length - 1]).toBe(mdLen - 1));
   });
 });

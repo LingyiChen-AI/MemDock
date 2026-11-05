@@ -13,6 +13,11 @@ import { memdockCmTheme } from "@/pages/memory/cmTheme";
 import { fmt } from "@/pages/memory/paths";
 import { asCommandError, errorMessage } from "./skillUtils";
 
+/** Only Markdown gets a language; every other file is plain text. */
+export function isMarkdownPath(path: string | undefined): boolean {
+  return !!path && /\.(md|markdown)$/i.test(path);
+}
+
 export interface SkillFilesProps {
   skillId: string;
   readonly: boolean;
@@ -220,9 +225,10 @@ export function SkillFiles({ skillId, readonly, onDirtyChange }: SkillFilesProps
   };
 
   const tree = React.useMemo(() => buildTree(list?.files ?? []), [list]);
+  const md = isMarkdownPath(relPath);
   const extensions = React.useMemo(
-    () => [markdown(), ...memdockCmTheme, EditorView.lineWrapping],
-    [],
+    () => [...(md ? [markdown()] : []), ...memdockCmTheme, EditorView.lineWrapping],
+    [md],
   );
   const editable = !readonly;
 

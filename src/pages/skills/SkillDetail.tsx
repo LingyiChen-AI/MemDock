@@ -17,10 +17,17 @@ type Tab = "overview" | "files";
 
 export interface SkillDetailProps {
   entry: SkillEntry;
-  /** Every install of this skill (same name), the opened one included. */
+  /**
+   * Display-only: installs of the same skill (same name and same source), the opened one included.
+   * Must never be used as an action target; actions always use `entry`.
+   */
   installs: SkillEntry[];
   projectName: (projectId: string) => string;
   update?: UpdateStatus;
+  /** git is installed; updating needs it. */
+  gitOk?: boolean;
+  /** The skill is gone from disk but has unsaved file edits; the editor stays with a warning. */
+  removed?: boolean;
   onUpdate: (entry: SkillEntry) => void;
   onSync: (entry: SkillEntry) => void;
   onDelete: (entry: SkillEntry) => void;
@@ -37,6 +44,8 @@ export function SkillDetail({
   installs,
   projectName,
   update,
+  gitOk = true,
+  removed = false,
   onUpdate,
   onSync,
   onDelete,
@@ -55,6 +64,8 @@ export function SkillDetail({
     if (next === "files") setFilesVisited(true);
   };
   const scopeText = entry.scope.type === "global" ? s.global : projectName(entry.scope.project_id);
+  // Updating pulls from the source repository: it needs a recorded source and git.
+  const updateBlock = !entry.source ? s.updateNeedSource : !gitOk ? s.needGit : null;
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -76,15 +87,18 @@ export function SkillDetail({
           </Button>
         ) : (
           <>
-            <Button
-              type="button"
-              variant={update?.has_update ? "default" : "outline"}
-              onClick={() => onUpdate(entry)}
-              className={cn(actionBtn, update?.has_update && "bg-primary font-semibold hover:bg-primary/90")}
-            >
-              <RefreshCw className="size-4" aria-hidden="true" />
-              {s.update}
-            </Button>
+            <span className="inline-flex shrink-0" title={updateBlock ?? undefined}>
+              <Button
+                type="button"
+                variant={update?.has_update ? "default" : "outline"}
+                disabled={updateBlock !== null}
+                onClick={() => onUpdate(entry)}
+                className={cn(actionBtn, update?.has_update && "bg-primary font-semibold hover:bg-primary/90")}
+              >
+                <RefreshCw className="size-4" aria-hidden="true" />
+                {s.update}
+              </Button>
+            </span>
             <Button type="button" variant="outline" onClick={() => showTab("files")} className={actionBtn}>
               <Pencil className="size-4" aria-hidden="true" />
               {s.editFiles}
@@ -116,6 +130,12 @@ export function SkillDetail({
         )}
       </div>
 
+      {removed ? (
+        <div className="mx-4 mt-3 flex shrink-0 items-center gap-2.5 rounded-md bg-warning/15 px-3 py-2 text-warning">
+          <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
+          <span className="text-foreground">{s.removedBanner}</span>
+        </div>
+      ) : null}
       <div className="flex h-10 shrink-0 items-center border-b border-border px-4">
         <div role="radiogroup" aria-label={s.tabsLabel} className="inline-flex overflow-hidden rounded-md border border-border">
           {(["overview", "files"] as const).map((k) => (
@@ -265,6 +285,7 @@ function Overview({
                 <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
                   <ToolTag tool={i.tool} />
                   <span className={tagClass}>{i.scope.type === "global" ? s.global : projectName(i.scope.project_id)}</span>
+                  <span className={tagClass}>{sourceLabel(i, s)}</span>
                   <span
                     className={cn("min-w-0 font-mono text-[12.5px] break-all select-text", i.dir === entry.dir ? "text-foreground" : "text-muted-foreground")}
                     title={i.dir}

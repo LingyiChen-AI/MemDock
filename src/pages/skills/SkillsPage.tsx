@@ -9,7 +9,7 @@ import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { basename, fmt } from "@/pages/memory/paths";
 import { SkillDetail } from "./SkillDetail";
 import { SkillList } from "./SkillList";
-import { entryKey, errorMessage, sortEntries } from "./skillUtils";
+import { entryKey, errorMessage, sameSkill, sortEntries } from "./skillUtils";
 
 const WIDTH_KEY = "memdock.skillListWidth";
 const MIN_W = 280;
@@ -35,6 +35,8 @@ export interface SkillsPageProps {
   onSync?: (entry: SkillEntry) => void;
   onDelete?: (entry: SkillEntry) => void;
   onBackups?: (entry: SkillEntry) => void;
+  /** Reports unsaved file edits so the app can confirm before leaving the page. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const noop = () => {};
@@ -45,6 +47,7 @@ export function SkillsPage({
   onSync = noop,
   onDelete = noop,
   onBackups = noop,
+  onDirtyChange,
 }: SkillsPageProps) {
   const { t } = useI18n();
   const s = t.skills;
@@ -111,9 +114,22 @@ export function SkillsPage({
     setSelectedKey(entryKey(sortEntries(entries)[0]));
   }, [entries]);
 
-  const selected = entries?.find((e) => entryKey(e) === selectedKey);
+  React.useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  React.useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  // A skill can vanish (deleted outside MemDock). With unsaved file edits the detail stays, so the
+  // text is not lost; otherwise the page falls back to the empty detail.
+  const lastSelected = React.useRef<{ key: string; entry: SkillEntry } | null>(null);
+  const found = entries?.find((e) => entryKey(e) === selectedKey);
+  if (found && selectedKey) lastSelected.current = { key: selectedKey, entry: found };
+  const kept = !found && dirty && selectedKey && lastSelected.current?.key === selectedKey ? lastSelected.current.entry : undefined;
+  const selected = found ?? kept;
+  const removed = !found && kept !== undefined;
+  // Display-only grouping of installs of the same skill (same name + same source); never an action target.
   const installs = React.useMemo(
-    () => (selected ? (entries ?? []).filter((e) => e.name === selected.name) : []),
+    () => (selected ? (entries ?? []).filter((e) => sameSkill(e, selected)) : []),
     [entries, selected],
   );
 
@@ -245,6 +261,8 @@ export function SkillsPage({
             installs={installs}
             projectName={projectName}
             update={updates.get(selected.id)}
+            gitOk={gitOk}
+            removed={removed}
             onUpdate={onUpdate}
             onSync={onSync}
             onDelete={onDelete}

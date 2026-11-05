@@ -10,7 +10,11 @@
   "shell": {
     "mainNav": "Main navigation",
     "collapse": "Collapse sidebar",
-    "expand": "Expand sidebar"
+    "expand": "Expand sidebar",
+    "leaveTitle": "Discard unsaved changes?",
+    "leaveBody": "Leaving this page loses the unsaved edits.",
+    "leaveConfirm": "Discard and leave",
+    "leaveKeep": "Keep editing"
   },
   "placeholder": {
     "comingSoon": "Coming soon"
@@ -122,6 +126,7 @@
     "checkUpdatesN": "Check updates ({n})",
     "checking": "Checking",
     "needGit": "git must be installed",
+    "updateNeedSource": "Unknown source: register a source first",
     "checkFailed": "Update check failed: {message}",
     "addSkill": "Add skill",
     "listLabel": "Skills",
@@ -175,6 +180,7 @@
     "modifiedAt": "Updated",
     "description": "Description",
     "pluginSource": "Plugin {name}",
+    "removedBanner": "This skill was deleted outside MemDock. The editor still has unsaved edits; copy them out before leaving.",
     "readOnlyBanner": "This skill is read-only. Copy it to a writable location to edit it.",
     "filesTree": "File tree",
     "filesTruncated": "Too many files; showing the first 5000",

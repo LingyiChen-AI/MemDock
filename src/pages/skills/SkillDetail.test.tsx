@@ -49,16 +49,43 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("SkillDetail", () => {
   it("writable detail shows all actions and wires the handlers", async () => {
-    const p = setup();
+    const p = setup(withSource);
     for (const n of ["更新", "编辑文件", "同步到…", "删除"]) {
       expect(screen.getByRole("button", { name: n })).toBeInTheDocument();
     }
     await userEvent.click(screen.getByRole("button", { name: "更新" }));
-    expect(p.onUpdate).toHaveBeenCalledWith(local);
+    expect(p.onUpdate).toHaveBeenCalledWith(withSource);
     await userEvent.click(screen.getByRole("button", { name: "同步到…" }));
-    expect(p.onSync).toHaveBeenCalledWith(local);
+    expect(p.onSync).toHaveBeenCalledWith(withSource);
     await userEvent.click(screen.getByRole("button", { name: "删除" }));
-    expect(p.onDelete).toHaveBeenCalledWith(local);
+    expect(p.onDelete).toHaveBeenCalledWith(withSource);
+  });
+
+  it("update is disabled without a source, sync stays enabled", () => {
+    setup();
+    const btn = screen.getByRole("button", { name: "更新" });
+    expect(btn).toBeDisabled();
+    expect(btn.closest("span")).toHaveAttribute("title", "来源未知，先补登来源");
+    expect(screen.getByRole("button", { name: "同步到…" })).toBeEnabled();
+  });
+
+  it("update is disabled without git", () => {
+    setup(withSource, { gitOk: false });
+    const btn = screen.getByRole("button", { name: "更新" });
+    expect(btn).toBeDisabled();
+    expect(btn.closest("span")).toHaveAttribute("title", "需要安装 git");
+    expect(screen.getByRole("button", { name: "同步到…" })).toBeEnabled();
+  });
+
+  it("each install row shows its own source tag", () => {
+    const other = mkSkill({ name: "gh-skill", id: "other", tool: "codex", dir: "/other/dir", source: withSource.source });
+    setup(withSource, { installs: [withSource, other] });
+    expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("shows the removed banner when the skill vanished", () => {
+    setup(withSource, { removed: true });
+    expect(screen.getByText(/已被外部删除/)).toBeInTheDocument();
   });
 
   it("readonly detail hides edit and delete", () => {

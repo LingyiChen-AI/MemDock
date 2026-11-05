@@ -31,7 +31,7 @@ pub fn parse_frontmatter(text: &str) -> Frontmatter {
     }
     let docs = match YamlLoader::load_from_str(&yaml) {
         Ok(d) => d,
-        Err(_) => return Frontmatter::default(),
+        Err(_) => return fallback_parse(&yaml),
     };
     let Some(doc) = docs.first() else {
         return Frontmatter::default();
@@ -46,6 +46,59 @@ pub fn parse_frontmatter(text: &str) -> Frontmatter {
         name: field("name"),
         description: field("description"),
     }
+}
+
+fn squash(s: &str) -> Option<String> {
+    Some(s.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|s| !s.is_empty())
+}
+
+fn unquote(v: &str) -> &str {
+    let v = v.trim();
+    for q in ['"', '\''] {
+        if v.len() >= 2 && v.starts_with(q) && v.ends_with(q) {
+            return &v[1..v.len() - 1];
+        }
+    }
+    v
+}
+
+/// Line-based reader used when strict YAML rejects the block (for example an
+/// unquoted value containing ": "). Reads top-level `name` and `description`.
+fn fallback_parse(yaml: &str) -> Frontmatter {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut fm = Frontmatter::default();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        i += 1;
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if key != "name" && key != "description" {
+            continue;
+        }
+        let rest = rest.trim();
+        let value = if matches!(rest.chars().next(), Some('>' | '|')) {
+            let mut parts = Vec::new();
+            while i < lines.len()
+                && (lines[i].starts_with(' ')
+                    || lines[i].starts_with('\t')
+                    || lines[i].trim().is_empty())
+            {
+                parts.push(lines[i].trim());
+                i += 1;
+            }
+            squash(&parts.join(" "))
+        } else {
+            squash(unquote(rest))
+        };
+        if key == "name" {
+            fm.name = value;
+        } else {
+            fm.description = value;
+        }
+    }
+    fm
 }
 
 #[cfg(test)]
@@ -69,6 +122,38 @@ mod tests {
         let fm = parse_frontmatter(text);
         assert_eq!(fm.name.as_deref(), Some("quoted"));
         assert_eq!(fm.description.as_deref(), Some("line one line two"));
+    }
+
+    #[test]
+    fn frontmatter_unquoted_colon_falls_back() {
+        let text = "---\nname: my-skill\ndescription: Use when X: do Y\n---\n";
+        let fm = parse_frontmatter(text);
+        assert_eq!(fm.name.as_deref(), Some("my-skill"));
+        assert_eq!(fm.description.as_deref(), Some("Use when X: do Y"));
+    }
+
+    #[test]
+    fn frontmatter_fallback_block_and_quotes() {
+        let text =
+            "---\nname: \"q: x\"\ndescription: >-\n  first: part\n  second\nother: a: b\n---\n";
+        let fm = parse_frontmatter(text);
+        assert_eq!(fm.name.as_deref(), Some("q: x"));
+        assert_eq!(fm.description.as_deref(), Some("first: part second"));
+    }
+
+    #[test]
+    fn frontmatter_name_only() {
+        let fm = parse_frontmatter("---\nname: solo\n---\n");
+        assert_eq!(fm.name.as_deref(), Some("solo"));
+        assert_eq!(fm.description, None);
+    }
+
+    #[test]
+    fn frontmatter_bom_and_crlf() {
+        let text = "\u{feff}---\r\nname: win\r\ndescription: Use when X: do Y\r\n---\r\nbody\r\n";
+        let fm = parse_frontmatter(text);
+        assert_eq!(fm.name.as_deref(), Some("win"));
+        assert_eq!(fm.description.as_deref(), Some("Use when X: do Y"));
     }
 
     #[test]

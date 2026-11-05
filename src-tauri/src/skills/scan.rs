@@ -80,15 +80,30 @@ pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec
         scan_children(&root.join(".codex").join("skills"), &[], &codex, &mut out);
     }
 
-    // Plugins.
-    for (key, install) in plugin_installs(&paths.claude_home) {
+    // Plugins (deduped by installPath and scope).
+    let mut seen: Vec<(String, Option<String>)> = Vec::new();
+    for inst in plugin_installs(&paths.claude_home) {
+        let marker = (
+            normalize_path(&inst.path.to_string_lossy()),
+            inst.project_id.clone(),
+        );
+        if seen.contains(&marker) {
+            continue;
+        }
+        seen.push(marker);
+        let scope = match &inst.project_id {
+            Some(id) => SkillScope::Project {
+                project_id: id.clone(),
+            },
+            None => SkillScope::Global,
+        };
         let ctx = Ctx {
             tool: Tool::Claude,
-            scope: &global,
+            scope: &scope,
             kind: SkillKind::Plugin,
-            plugin: Some(&key),
+            plugin: Some(&inst.key),
         };
-        scan_children(&install.join("skills"), &[], &ctx, &mut out);
+        scan_children(&inst.path.join("skills"), &[], &ctx, &mut out);
     }
 
     // Codex built-in.
@@ -128,9 +143,15 @@ pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec
     out
 }
 
-/// Reads `installed_plugins.json` and returns `(plugin key, installPath)` pairs.
-/// A missing or malformed file yields nothing.
-fn plugin_installs(claude_home: &Path) -> Vec<(String, PathBuf)> {
+struct PluginInstall {
+    key: String,
+    path: PathBuf,
+    /// Set for project-scoped installs that carry a `projectPath`.
+    project_id: Option<String>,
+}
+
+/// Reads `installed_plugins.json`. A missing or malformed file yields nothing.
+fn plugin_installs(claude_home: &Path) -> Vec<PluginInstall> {
     let Ok(text) = fs::read_to_string(claude_home.join("plugins").join("installed_plugins.json"))
     else {
         return Vec::new();
@@ -147,9 +168,22 @@ fn plugin_installs(claude_home: &Path) -> Vec<(String, PathBuf)> {
             continue;
         };
         for inst in arr {
-            if let Some(p) = inst.get("installPath").and_then(|v| v.as_str()) {
-                out.push((key.clone(), PathBuf::from(p)));
-            }
+            let Some(p) = inst.get("installPath").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let project_id = if inst.get("scope").and_then(|v| v.as_str()) == Some("project") {
+                inst.get("projectPath")
+                    .and_then(|v| v.as_str())
+                    .filter(|p| !p.is_empty())
+                    .map(normalize_path)
+            } else {
+                None
+            };
+            out.push(PluginInstall {
+                key: key.clone(),
+                path: PathBuf::from(p),
+                project_id,
+            });
         }
     }
     out
@@ -184,9 +218,7 @@ fn push_skill(dir: &Path, ctx: &Ctx, out: &mut Vec<SkillEntry>) {
     let link_meta = fs::symlink_metadata(dir).ok();
     let is_symlink = link_meta.is_some_and(|m| m.file_type().is_symlink());
     let symlink_target = if is_symlink {
-        fs::read_link(dir)
-            .ok()
-            .map(|t| t.to_string_lossy().to_string())
+        resolve_link_target(dir)
     } else {
         None
     };
@@ -216,18 +248,40 @@ fn push_skill(dir: &Path, ctx: &Ctx, out: &mut Vec<SkillEntry>) {
     });
 }
 
-/// Files and bytes under `dir` (following symlinks), excluding `.git`.
+/// Absolute, canonical target of the symlink at `dir`. Relative targets are
+/// resolved against the link's parent; a broken link keeps the joined path.
+fn resolve_link_target(dir: &Path) -> Option<String> {
+    let raw = fs::read_link(dir).ok()?;
+    let joined = if raw.is_absolute() {
+        raw
+    } else {
+        dir.parent().map(|p| p.join(&raw)).unwrap_or(raw)
+    };
+    let resolved = fs::canonicalize(&joined).unwrap_or(joined);
+    let s = resolved.to_string_lossy().to_string();
+    Some(s.strip_prefix("\\\\?\\").map(str::to_string).unwrap_or(s))
+}
+
+const STATS_MAX_FILES: u32 = 5000;
+
+/// Files and bytes under `dir` (following symlinks), excluding `.git` and
+/// `node_modules`. Counting stops after `STATS_MAX_FILES` files.
 fn dir_stats(dir: &Path) -> (u32, u64) {
     let mut count = 0u32;
     let mut size = 0u64;
     let walker = WalkDir::new(dir)
         .follow_links(true)
         .into_iter()
-        .filter_entry(|e| e.depth() == 0 || e.file_name() != ".git");
+        .filter_entry(|e| {
+            e.depth() == 0 || (e.file_name() != ".git" && e.file_name() != "node_modules")
+        });
     for entry in walker.flatten() {
         if entry.file_type().is_file() {
             count += 1;
             size += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if count >= STATS_MAX_FILES {
+                break;
+            }
         }
     }
     (count, size)
@@ -463,10 +517,122 @@ mod tests {
         let out = scan_skills(&paths, tmp.path(), &[]);
         let s = out.iter().find(|s| s.name == "ego").unwrap();
         assert!(s.is_symlink);
+        let canon = fs::canonicalize(&real).unwrap();
         assert_eq!(
             s.symlink_target.as_deref(),
-            Some(real.to_string_lossy().as_ref())
+            Some(canon.to_string_lossy().as_ref())
         );
         assert_eq!(s.file_count, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_symlink_target_is_resolved() {
+        let (tmp, paths) = setup();
+        let real = tmp.path().join("share/rel-skill");
+        skill(&real, "rel", "d");
+        fs::create_dir_all(paths.claude_home.join("skills")).unwrap();
+        std::os::unix::fs::symlink(
+            "../../share/rel-skill",
+            paths.claude_home.join("skills/rel-link"),
+        )
+        .unwrap();
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        let s = out.iter().find(|s| s.name == "rel").unwrap();
+        let canon = fs::canonicalize(&real).unwrap();
+        assert_eq!(
+            s.symlink_target.as_deref(),
+            Some(canon.to_string_lossy().as_ref())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_symlink_target_is_absolute() {
+        let (tmp, paths) = setup();
+        let real = tmp.path().join("share").join("win-skill");
+        skill(&real, "win", "d");
+        fs::create_dir_all(paths.claude_home.join("skills")).unwrap();
+        let link = paths.claude_home.join("skills").join("win-link");
+        // Relative target; skip when symlink privilege is missing.
+        if std::os::windows::fs::symlink_dir("..\\..\\share\\win-skill", &link).is_err() {
+            eprintln!("skipping: cannot create symlink without privilege");
+            return;
+        }
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        let s = out.iter().find(|s| s.name == "win").unwrap();
+        assert!(s.is_symlink);
+        let target = s.symlink_target.as_deref().unwrap();
+        assert!(!target.starts_with("\\\\?\\"));
+        assert_eq!(
+            normalize_path(target),
+            normalize_path(&real.to_string_lossy())
+        );
+    }
+
+    #[test]
+    fn project_scoped_plugin_install_gets_project_scope() {
+        let (tmp, paths) = setup();
+        let install = tmp.path().join("cache/p/1.0.0");
+        skill(&install.join("skills/ps"), "ps", "d");
+        let proj = tmp.path().join("work").join("pp");
+        let json = serde_json::json!({
+            "version": 2,
+            "plugins": { "p@m": [
+                { "scope": "project", "projectPath": proj.to_string_lossy(), "installPath": install.to_string_lossy() }
+            ]}
+        });
+        write(
+            &paths.claude_home.join("plugins/installed_plugins.json"),
+            &json.to_string(),
+        );
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].scope,
+            SkillScope::Project {
+                project_id: normalize_path(&proj.to_string_lossy())
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_duplicate_installs_are_deduped() {
+        let (tmp, paths) = setup();
+        let install = tmp.path().join("cache/d/1.0.0");
+        skill(&install.join("skills/ds"), "ds", "d");
+        let p = install.to_string_lossy();
+        let json = serde_json::json!({
+            "version": 2,
+            "plugins": {
+                "d@m": [
+                    { "scope": "user", "installPath": p },
+                    { "scope": "user", "installPath": p }
+                ],
+                "d@other": [ { "scope": "user", "installPath": p } ]
+            }
+        });
+        write(
+            &paths.claude_home.join("plugins/installed_plugins.json"),
+            &json.to_string(),
+        );
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn stats_skip_node_modules_and_cap_files() {
+        let (tmp, paths) = setup();
+        let dir = paths.claude_home.join("skills/big");
+        skill(&dir, "big", "d");
+        write(&dir.join("node_modules/pkg/index.js"), "x");
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        assert_eq!(out[0].file_count, 1);
+
+        for i in 0..5100 {
+            fs::write(dir.join(format!("f{i}.txt")), "a").unwrap();
+        }
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        assert_eq!(out[0].file_count, STATS_MAX_FILES);
     }
 }

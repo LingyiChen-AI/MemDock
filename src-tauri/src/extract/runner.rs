@@ -39,6 +39,10 @@ pub enum RunError {
 pub trait CliRunner: Send + Sync {
     fn tool(&self) -> Tool;
     fn available(&self) -> bool;
+    /// Path of the CLI program, when known (shown in settings).
+    fn program(&self) -> Option<String> {
+        None
+    }
     /// Sends `prompt` (stdin) and returns the raw model output (JSON text).
     fn run(
         &self,
@@ -249,6 +253,10 @@ impl CliRunner for ClaudeCli {
         program_exists(&self.program)
     }
 
+    fn program(&self) -> Option<String> {
+        Some(self.program.to_string_lossy().into_owned())
+    }
+
     fn run(
         &self,
         prompt: &str,
@@ -325,6 +333,10 @@ impl CliRunner for CodexCli {
 
     fn available(&self) -> bool {
         program_exists(&self.program)
+    }
+
+    fn program(&self) -> Option<String> {
+        Some(self.program.to_string_lossy().into_owned())
     }
 
     fn run(

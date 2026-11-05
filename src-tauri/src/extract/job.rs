@@ -86,7 +86,16 @@ pub struct ExtractCtx {
     pub turns: TurnSource,
     /// Shared cancel flag for scheduled runs (and for UI-triggered cancel).
     pub cancel: Arc<AtomicBool>,
+    hooks: Mutex<Hooks>,
     running: Mutex<Option<String>>,
+}
+
+/// Observers of runs started through `start_run` / `start_run_with` (manual and
+/// scheduled alike); the app uses them to emit UI events.
+#[derive(Clone, Default)]
+pub struct Hooks {
+    pub on_progress: Option<Arc<dyn Fn(&Progress) + Send + Sync>>,
+    pub on_finished: Option<Arc<dyn Fn(&RunRecord) + Send + Sync>>,
 }
 
 fn system_now_ms() -> i64 {
@@ -128,8 +137,13 @@ impl ExtractCtx {
             index,
             turns,
             cancel: Arc::new(AtomicBool::new(false)),
+            hooks: Mutex::new(Hooks::default()),
             running: Mutex::new(None),
         }
+    }
+
+    pub fn set_hooks(&self, hooks: Hooks) {
+        *lock(&self.hooks) = hooks;
     }
 
     pub fn is_running(&self) -> bool {
@@ -169,9 +183,33 @@ pub fn start_run(
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
 ) -> Result<RunRecord, ExtractError> {
+    start_run_with(ctx, trigger, cancel, progress, &|_| {})
+}
+
+/// Like `start_run`; `started` is called with the Running record as soon as it
+/// is stored (the lock is held). The ctx hooks see progress and the final record.
+pub fn start_run_with(
+    ctx: &ExtractCtx,
+    trigger: RunTrigger,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+    started: &dyn Fn(&RunRecord),
+) -> Result<RunRecord, ExtractError> {
     let id = uuid::Uuid::new_v4().to_string();
-    let _guard = ctx.try_lock(&id)?;
-    Ok(execute(ctx, id, trigger, cancel, progress))
+    let guard = ctx.try_lock(&id)?;
+    let hooks = lock(&ctx.hooks).clone();
+    let wrapped = |p: Progress| {
+        if let Some(h) = &hooks.on_progress {
+            h(&p);
+        }
+        progress(p);
+    };
+    let rec = execute(ctx, id, trigger, cancel, &wrapped, started);
+    drop(guard);
+    if let Some(h) = &hooks.on_finished {
+        h(&rec);
+    }
+    Ok(rec)
 }
 
 /// Performs a run without taking the lock (use `start_run` unless the caller
@@ -182,7 +220,7 @@ pub fn run_extraction(
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
 ) -> RunRecord {
-    execute(ctx, uuid::Uuid::new_v4().to_string(), trigger, cancel, progress)
+    execute(ctx, uuid::Uuid::new_v4().to_string(), trigger, cancel, progress, &|_| {})
 }
 
 // ----------------------------------------------------------------- helpers
@@ -197,7 +235,7 @@ fn describe(e: &RunError) -> String {
     }
 }
 
-fn choose_runner(ctx: &ExtractCtx, want: Option<Tool>) -> Option<Arc<dyn CliRunner>> {
+pub fn choose_runner(ctx: &ExtractCtx, want: Option<Tool>) -> Option<Arc<dyn CliRunner>> {
     let pick = |t: Tool| ctx.runners.iter().find(|r| r.tool() == t && r.available()).cloned();
     match want {
         Some(t) => pick(t),
@@ -340,6 +378,7 @@ fn execute(
     trigger: RunTrigger,
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
+    started: &dyn Fn(&RunRecord),
 ) -> RunRecord {
     let now = (ctx.clock)();
     let cfg = lock(&ctx.store).config().clone();
@@ -365,6 +404,7 @@ fn execute(
         }
     }
     let mut guard = PanicGuard { ctx, id: rec.id.clone(), armed: true };
+    started(&rec);
 
     let Some(runner) = runner else {
         rec.status = RunStatus::Failed;

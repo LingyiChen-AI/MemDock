@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod commands_extract;
 pub mod commands_skills;
 pub mod extract;
 pub mod fsutil;
@@ -72,8 +73,12 @@ pub fn run() {
             let cleanup_state = state.clone();
             std::thread::spawn(move || commands_skills::startup_cleanup(&cleanup_state));
             let handle = watcher::start(app.handle().clone(), state.clone());
+            let extract = Arc::new(commands_extract::ExtractState::new(state.clone()));
+            extract.attach(app.handle().clone());
+            extract.start_scheduler();
             app.manage(state);
             app.manage(handle);
+            app.manage(extract);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -89,6 +94,18 @@ pub fn run() {
             commands::remove_manual_project,
             commands::get_settings,
             commands::update_ui_prefs,
+            commands_extract::get_extract_config,
+            commands_extract::set_extract_config,
+            commands_extract::extract_runners,
+            commands_extract::start_extraction,
+            commands_extract::cancel_extraction,
+            commands_extract::list_extract_runs,
+            commands_extract::list_suggestions,
+            commands_extract::pending_summary,
+            commands_extract::apply_suggestion,
+            commands_extract::reject_suggestion,
+            commands_extract::accept_suggestions,
+            commands_extract::suggestion_context,
             commands_skills::list_skills,
             commands_skills::git_available,
             commands_skills::inspect_git_source,
@@ -108,6 +125,14 @@ pub fn run() {
             commands_skills::read_skill_backup_file,
             commands_skills::write_skill_file,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Stop the scheduler and cancel a running extraction (kills the CLI).
+                if let Some(es) = app.try_state::<Arc<commands_extract::ExtractState>>() {
+                    es.shutdown();
+                }
+            }
+        });
 }

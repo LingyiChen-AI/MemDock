@@ -70,7 +70,14 @@ export type CommandErrorCode =
   | "read_only"
   | "git_unavailable"
   | "git_failed"
-  | "local_changes";
+  | "local_changes"
+  // Memory extraction
+  | "already_running"
+  | "not_installed"
+  | "not_logged_in"
+  | "stale"
+  | "not_found"
+  | "not_pending";
 
 /** Error thrown by failing commands. `current_hash` is set for `disk_changed`. */
 export interface CommandError {
@@ -258,4 +265,115 @@ export interface SkillFileDto {
 
 export interface SkillsChangedPayload {
   paths: string[];
+}
+
+// ---- Memory extraction and review (mirror the Rust serde names exactly)
+
+/** `weekday` 0 = Sunday .. 6 = Saturday. */
+export type ExtractSchedule =
+  | { kind: "off" }
+  | { kind: "daily"; hh: number; mm: number }
+  | { kind: "weekly"; weekday: number; hh: number; mm: number };
+
+export type ExtractProjectFilter = { kind: "all" } | { kind: "selected"; ids: string[] };
+
+export interface ExtractConfig {
+  /** null = automatic (prefer claude). */
+  tool: Tool | null;
+  schedule: ExtractSchedule;
+  projects: ExtractProjectFilter;
+  include_global: boolean;
+  /** 1..=90. */
+  lookback_days: number;
+  lang: string | null;
+}
+
+export interface RunnerInfo {
+  tool: Tool;
+  available: boolean;
+  program?: string;
+}
+
+export type RunTrigger = "manual" | "scheduled";
+export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+
+export interface RunRecord {
+  id: string;
+  started_at: number;
+  finished_at: number | null;
+  trigger: RunTrigger;
+  tool: Tool;
+  status: RunStatus;
+  sessions_read: number;
+  projects: number;
+  suggestions_new: number;
+  warnings: string[];
+  error: string | null;
+}
+
+export interface ExtractProgress {
+  project: string;
+  /** 1-based. */
+  index: number;
+  total: number;
+}
+
+export type SuggestionKind = "add" | "modify" | "obsolete";
+export type SuggestionStatus = "pending" | "accepted" | "rejected" | "stale";
+
+export interface SuggestionEvidence {
+  tool: Tool;
+  session_id: string;
+  ts: number;
+  quote: string;
+}
+
+export interface Suggestion {
+  id: string;
+  fingerprint: string;
+  kind: SuggestionKind;
+  file_id: string;
+  path: string;
+  tool_of_file: Tool;
+  old_text: string | null;
+  new_text: string | null;
+  reason: string;
+  evidence: SuggestionEvidence[];
+  source_tool: Tool;
+  created_at: number;
+  base_hash: string;
+  status: SuggestionStatus;
+}
+
+/** Keys of `by_project` are project ids; `__global__` for files outside any project. */
+export interface PendingSummary {
+  total: number;
+  by_project: Record<string, number>;
+}
+
+export type ApplyOutcome =
+  /** `saved: false`: written, but the status could not be persisted. */
+  | { kind: "applied"; hash: string; saved: boolean }
+  | { kind: "needs_confirm"; reason: string }
+  | { kind: "stale" }
+  | { kind: "already_applied" };
+
+export interface AcceptResult {
+  id: string;
+  outcome?: ApplyOutcome;
+  error?: CommandError;
+}
+
+export interface ContextTurn {
+  tool: Tool;
+  session_id: string;
+  project_id: string | null;
+  ts: number;
+  role: "user" | "assistant";
+  text: string;
+}
+
+export interface SuggestionContext {
+  evidence: SuggestionEvidence;
+  turns: ContextTurn[];
 }

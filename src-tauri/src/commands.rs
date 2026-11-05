@@ -35,7 +35,8 @@ pub struct AppState {
     /// Serializes load-modify-save cycles on settings.json.
     settings_lock: Mutex<()>,
     /// Serializes writes so two concurrent writes cannot both pass the hash check.
-    write_lock: Mutex<()>,
+    /// Shared with the extraction apply path so editor saves and suggestion applies serialize.
+    pub write_lock: Arc<Mutex<()>>,
     /// App data directory (skill backups, git cache, registry live below it).
     pub data_dir: PathBuf,
     /// Git access for skill install / update; tests may replace it.
@@ -69,7 +70,7 @@ impl AppState {
                 projects: vec![],
             }),
             settings_lock: Mutex::new(()),
-            write_lock: Mutex::new(()),
+            write_lock: Arc::new(Mutex::new(())),
         };
         state.rescan();
         state

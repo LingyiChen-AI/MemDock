@@ -1,5 +1,6 @@
 pub mod frontmatter;
 pub mod git;
+pub mod git_cache;
 pub mod model;
 pub mod registry;
 pub mod scan;

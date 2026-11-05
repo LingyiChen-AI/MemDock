@@ -13,6 +13,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { memdockCmTheme } from "./cmTheme";
 import { rehypeSourceLine } from "./rehypeSourceLine";
 import { useScrollSync } from "./useScrollSync";
+import { useFontRemeasure } from "./useFontRemeasure";
 import { HistoryDrawer } from "./HistoryDrawer";
 import { CodexDbView } from "./CodexDbView";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -204,6 +205,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
     }
   }, [base, saving, text, file.path, m]);
 
+  useFontRemeasure(view);
   const { leadEditor } = useScrollSync({ enabled: mode === "split" && syncOn, view, previewRef });
 
   // Jump to the requested line (search results). Waits until the editor exists and has the text.

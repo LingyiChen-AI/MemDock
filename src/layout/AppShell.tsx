@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   BarChart3,
   BookOpen,
-  Lightbulb,
   ListChecks,
   Package,
   Palette,
@@ -31,6 +30,7 @@ import { AppearanceControls } from "@/components/appearance/AppearanceControls";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Placeholder } from "@/pages/Placeholder";
+import logoUrl from "@/assets/memdock-logo.svg";
 
 export type NavKey = "memory" | "review" | "extract" | "skills" | "usage" | "settings";
 
@@ -110,10 +110,8 @@ export function AppShell({ current, onNavigate, badges, status, children }: AppS
       <Sidebar collapsible="icon" aria-label={t.shell.mainNav}>
         <SidebarHeader className="px-2 pt-3 pb-3.5">
           <div className="flex items-center gap-2 px-2 py-1 text-[15px] font-semibold group-data-[collapsible=icon]:px-0">
-            <span className="grid size-6 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground group-data-[collapsible=icon]:mx-auto">
-              <Lightbulb className="size-3.5" aria-hidden="true" />
-            </span>
-            <span className="group-data-[collapsible=icon]:hidden">Memdock</span>
+            <img src={logoUrl} alt="MemDock" width={24} height={24} className="size-6 shrink-0 group-data-[collapsible=icon]:mx-auto" />
+            <span aria-hidden="true" className="group-data-[collapsible=icon]:hidden">MemDock</span>
           </div>
         </SidebarHeader>
         <SidebarContent className="px-2">

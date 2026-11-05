@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { FileContentDto, MemoryChangedPayload } from "@/api/types";
@@ -31,7 +31,7 @@ vi.mock("@uiw/react-codemirror", () => ({
 
 import { listSnapshots, onMemoryChanged, readCodexDb, readMemoryFile, readSnapshot, writeMemoryFile } from "@/api/memory";
 import { renderApp, globalClaude, globalAgents, globalDb, sampleIndex } from "@/test/fixtures";
-import { MemoryEditor } from "./MemoryEditor";
+import { MemoryEditor, Preview } from "./MemoryEditor";
 
 const dto = (over: Partial<FileContentDto> = {}): FileContentDto => ({
   text: "hello",
@@ -212,5 +212,16 @@ describe("MemoryEditor", () => {
     await waitFor(() => expect(writeMemoryFile).toHaveBeenCalledWith(globalClaude.path, "older", "h1"));
     await waitFor(() => expect(screen.getByLabelText("editor")).toHaveValue("older"));
     expect(screen.queryByTitle("未保存")).not.toBeInTheDocument();
+  });
+});
+
+describe("Preview", () => {
+  it("never renders an <img> for remote images (zero network egress)", () => {
+    const { container } = render(
+      <Preview text={"![logo](https://example.com/x.png) and ![](http://a.b/c.gif) ![d](data:image/png;base64,AAAA)"} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("logo")).toBeInTheDocument();
+    expect(screen.getByText("http://a.b/c.gif")).toBeInTheDocument();
   });
 });

@@ -25,6 +25,9 @@ const SEARCH_LIMIT: usize = 200;
 /// Shared application state.
 pub struct AppState {
     pub paths: AgentPaths,
+    /// The user's real home directory (used to resolve `@~/` imports); not
+    /// derived from `claude_home`, which `CLAUDE_CONFIG_DIR` can relocate.
+    pub home: PathBuf,
     pub settings_path: PathBuf,
     pub snapshots: SnapshotStore,
     pub index: Mutex<MemoryIndex>,
@@ -38,8 +41,14 @@ impl AppState {
     /// Builds the state with settings at `data_dir/settings.json` and snapshots
     /// at `data_dir/snapshots`, then scans once.
     pub fn new(paths: AgentPaths, data_dir: PathBuf) -> Self {
+        Self::with_home(paths, data_dir, dirs::home_dir().unwrap_or_default())
+    }
+
+    /// Like `new`, with an explicit home directory (tests inject a temp one).
+    pub fn with_home(paths: AgentPaths, data_dir: PathBuf, home: PathBuf) -> Self {
         let state = Self {
             paths,
+            home,
             settings_path: data_dir.join("settings.json"),
             snapshots: SnapshotStore::new(data_dir.join("snapshots")),
             index: Mutex::new(MemoryIndex {
@@ -66,12 +75,7 @@ impl AppState {
     }
 
     fn home(&self) -> PathBuf {
-        self.paths
-            .claude_home
-            .parent()
-            .map(Path::to_path_buf)
-            .or_else(dirs::home_dir)
-            .unwrap_or_default()
+        self.home.clone()
     }
 
     /// Path of the indexed, non-Codex-DB memory file matching `path`, if any.
@@ -397,7 +401,7 @@ mod tests {
         let paths = AgentPaths::from_home(&tmp.join("home"));
         fs::create_dir_all(&paths.claude_home).unwrap();
         fs::create_dir_all(&paths.codex_home).unwrap();
-        AppState::new(paths, tmp.join("data"))
+        AppState::with_home(paths, tmp.join("data"), tmp.join("home"))
     }
 
     #[test]
@@ -582,5 +586,28 @@ mod tests {
         let err = update_ui_prefs_impl(&st, None, Some("neon".into()), None).unwrap_err();
         assert_eq!(err.code, "invalid");
         assert_eq!(get_settings_impl(&st).theme.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn imports_resolve_against_real_home_not_claude_home_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("realhome");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("shared.md"), "x").unwrap();
+        // claude_home lives elsewhere (as with CLAUDE_CONFIG_DIR).
+        let paths = AgentPaths {
+            claude_home: tmp.path().join("elsewhere").join("cfg"),
+            codex_home: tmp.path().join("codex"),
+        };
+        fs::create_dir_all(&paths.claude_home).unwrap();
+        fs::create_dir_all(&paths.codex_home).unwrap();
+        let md = paths.claude_home.join("CLAUDE.md");
+        fs::write(&md, "@~/shared.md
+").unwrap();
+        let st = AppState::with_home(paths, tmp.path().join("data"), home.clone());
+        let dto = read_memory_file_impl(&st, &md.to_string_lossy()).unwrap();
+        assert_eq!(dto.imports.len(), 1);
+        assert!(dto.imports[0].exists, "{:?}", dto.imports[0]);
+        assert!(dto.imports[0].resolved.contains("realhome"));
     }
 }

@@ -40,10 +40,17 @@ impl SnapshotStore {
         let meta = serde_json::json!({ "path": path.to_string_lossy() });
         fs::write(dir.join("meta.json"), meta.to_string())?;
 
-        let mut id = SystemTime::now()
+        // Ids must be strictly increasing even if the wall clock went backwards.
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+        let max_existing = self
+            .list(path)?
+            .first()
+            .map(|s| s.created_at)
+            .unwrap_or(i64::MIN);
+        let mut id = now.max(max_existing.saturating_add(1));
         loop {
             // create_new makes the uniqueness check atomic.
             match OpenOptions::new()
@@ -137,6 +144,26 @@ mod tests {
         assert_eq!(store.read(p, &list[49].id).unwrap(), b"v5");
         let ids: Vec<i64> = list.iter().map(|s| s.id.parse().unwrap()).collect();
         assert!(ids.windows(2).all(|w| w[0] > w[1]));
+    }
+
+    #[test]
+    fn save_after_clock_skew_gets_newest_id_and_survives_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::new(dir.path().join("snaps"));
+        let p = Path::new("/proj/CLAUDE.md");
+        let snap_dir = store.dir_for(p);
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        let far_future: i64 = 99_999_999_999_999;
+        for i in 0..MAX_SNAPSHOTS as i64 {
+            std::fs::write(snap_dir.join(format!("{}.bak", far_future + i)), "old").unwrap();
+        }
+        let info = store.save(p, b"new").unwrap();
+        let id: i64 = info.id.parse().unwrap();
+        assert_eq!(id, far_future + MAX_SNAPSHOTS as i64);
+        let list = store.list(p).unwrap();
+        assert_eq!(list.len(), MAX_SNAPSHOTS);
+        assert_eq!(list[0].id, info.id);
+        assert_eq!(store.read(p, &info.id).unwrap(), b"new");
     }
 
     #[test]

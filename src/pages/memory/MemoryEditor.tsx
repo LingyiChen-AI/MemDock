@@ -4,7 +4,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, History, Info, Link2, Save, TriangleAlert } from "lucide-react";
+import { Check, Copy, History, ImageOff, Info, Link2, Save, TriangleAlert } from "lucide-react";
 import { onMemoryChanged, readMemoryFile, writeMemoryFile } from "@/api/memory";
 import type { CommandError, FileContentDto, MemoryFile, MemoryIndex } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -445,7 +445,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
   );
 }
 
-function Preview({ text }: { text: string }) {
+export function Preview({ text }: { text: string }) {
   return (
     <div className="max-w-[72ch] text-base leading-6">
       <ReactMarkdown
@@ -472,6 +472,14 @@ function Preview({ text }: { text: string }) {
           // Links must never navigate the app webview.
           a: ({ children }) => (
             <span className="cursor-pointer text-accent-text hover:underline">{children}</span>
+          ),
+          // Zero network egress: never load images (remote, relative or data:);
+          // show a muted placeholder instead.
+          img: ({ alt, src }) => (
+            <span className="inline-flex items-center gap-1 align-middle text-[12px] text-muted-foreground">
+              <ImageOff size={14} aria-hidden />
+              {alt || (typeof src === "string" ? src : "")}
+            </span>
           ),
           pre: (p) => (
             <pre

@@ -75,16 +75,16 @@ impl AppState {
     }
 
     /// Path of the indexed, non-Codex-DB memory file matching `path`, if any.
-    /// Returns the path and whether its project exists (always true for global files).
+    /// Returns the path and whether it is a project-scoped file.
     fn find_allowed(&self, path: &str) -> Option<(PathBuf, bool)> {
         let id = normalize_path(path);
         let idx = lock(&self.index);
         if let Some(p) = find_in(idx.global.iter(), &id) {
-            return Some((p, true));
+            return Some((p, false));
         }
         idx.projects
             .iter()
-            .find_map(|pm| find_in(pm.files.iter(), &id).map(|p| (p, pm.project.exists)))
+            .find_map(|pm| find_in(pm.files.iter(), &id).map(|p| (p, true)))
     }
 
     fn authorize(&self, path: &str, for_write: bool) -> Result<PathBuf, CommandError> {
@@ -98,10 +98,10 @@ impl AppState {
                 "forbidden",
                 "path is not a known memory file",
             )),
-            Some((_, false)) if for_write => Err(CommandError::new(
-                "invalid",
-                "project directory does not exist",
-            )),
+            // Never recreate a deleted project directory.
+            Some((p, true)) if for_write && !p.parent().is_some_and(|d| d.exists()) => {
+                Err(CommandError::new("invalid", "parent directory does not exist"))
+            }
             Some((p, _)) => Ok(p),
         }
     }
@@ -478,30 +478,52 @@ mod tests {
         assert_eq!(text, "a\nb\n");
     }
 
-    #[test]
-    fn write_to_missing_project_is_invalid() {
-        let tmp = tempfile::tempdir().unwrap();
-        let st = state(tmp.path());
-        let proj = tmp.path().join("gone");
+    fn missing_project_with_auto_memory(st: &AppState, base: &std::path::Path) -> (PathBuf, PathBuf) {
+        let proj = base.join("gone");
         let enc = st.paths.claude_home.join("projects").join("enc");
         fs::create_dir_all(enc.join("memory")).unwrap();
         let cwd = proj.to_string_lossy().replace('\\', "/");
         fs::write(
             enc.join("s.jsonl"),
-            format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}
-"),
+            format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n"),
         )
         .unwrap();
         let target = enc.join("memory").join("MEMORY.md");
         fs::write(&target, "m").unwrap();
+        (proj, target)
+    }
+
+    #[test]
+    fn auto_memory_of_missing_project_is_writable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let (_proj, target) = missing_project_with_auto_memory(&st, tmp.path());
         let idx = refresh_memories_impl(&st);
         assert!(idx.projects.iter().any(|p| !p.project.exists && !p.files.is_empty()));
-        let err = write_memory_file_impl(&st, target.to_str().unwrap(), "x", "").unwrap_err();
+        let c = read_memory_file_impl(&st, target.to_str().unwrap()).unwrap();
+        write_memory_file_impl(&st, target.to_str().unwrap(), "new", &c.hash).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
+    fn project_file_with_missing_parent_is_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let (proj, _target) = missing_project_with_auto_memory(&st, tmp.path());
+        refresh_memories_impl(&st);
+        // Inject an entry for <missing project>/CLAUDE.md (scan does not list it).
+        let file = proj.join("CLAUDE.md");
+        {
+            let mut idx = st.index.lock().unwrap();
+            let mut f = idx.projects[0].files[0].clone();
+            f.id = crate::projects::normalize_path(file.to_str().unwrap());
+            f.path = file.to_string_lossy().into_owned();
+            f.kind = MemoryKind::ClaudeInstructions;
+            idx.projects[0].files.push(f);
+        }
+        let err = write_memory_file_impl(&st, file.to_str().unwrap(), "x", "").unwrap_err();
         assert_eq!(err.code, "invalid");
-        assert_eq!(fs::read_to_string(&target).unwrap(), "m");
-        // Global files are unaffected.
-        let g = st.paths.claude_home.join("CLAUDE.md");
-        assert!(write_memory_file_impl(&st, g.to_str().unwrap(), "x", "").is_ok());
+        assert!(!proj.exists());
     }
 
     #[test]

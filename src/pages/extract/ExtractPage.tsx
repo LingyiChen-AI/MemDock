@@ -19,14 +19,17 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
-import { ExtractConfigForm } from "./ExtractConfigForm";
+import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
+import { ExtractConfigForm, type DraftState } from "./ExtractConfigForm";
 import { RunsTable } from "./RunsTable";
 
 export interface ExtractPageProps {
   onNavigate?: (key: NavKey) => void;
+  /** Reports unsaved config edits so the app can confirm before leaving the page. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function ExtractPage({ onNavigate }: ExtractPageProps) {
+export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
   const { t } = useI18n();
   const x = t.extract;
   const [config, setConfig] = React.useState<ExtractConfig | null>(null);
@@ -38,11 +41,29 @@ export function ExtractPage({ onNavigate }: ExtractPageProps) {
   const [starting, setStarting] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(false);
   const [progress, setProgress] = React.useState<ExtractProgress | null>(null);
+  const [draft, setDraft] = React.useState<DraftState | null>(null);
+  const [confirmRun, setConfirmRun] = React.useState(false);
   const { toasts, push, dismiss } = useToasts();
   const xRef = React.useRef(x);
   xRef.current = x;
 
   const running = starting || (runs ?? []).some((r) => r.status === "running");
+  const runningRef = React.useRef(running);
+  runningRef.current = running;
+
+  const dirty = draft?.dirty ?? false;
+  const dirtyCb = React.useRef(onDirtyChange);
+  dirtyCb.current = onDirtyChange;
+  React.useEffect(() => {
+    dirtyCb.current?.(dirty);
+  }, [dirty]);
+  React.useEffect(() => () => dirtyCb.current?.(false), []);
+
+  // The tool that would run: the draft's choice when there are edits, else the saved one.
+  const effTool = draft ? draft.config.tool : (config?.tool ?? null);
+  const runnable = effTool ? (runners.find((r) => r.tool === effTool)?.available ?? false) : runners.some((r) => r.available);
+  const draftValid = draft?.valid ?? true;
+  const blockReason = !draftValid ? x.runInvalid : !runnable && config ? x.runNoRunner : null;
 
   const load = React.useCallback(async () => {
     setLoadError(null);
@@ -66,7 +87,17 @@ export function ExtractPage({ onNavigate }: ExtractPageProps) {
     const unlisten: Array<() => void> = [];
     const keep = (p: Promise<() => void>) =>
       void p.then((u) => (alive ? unlisten.push(u) : u())).catch(() => {});
-    keep(onExtractProgress((p) => alive && setProgress(p)));
+    keep(
+      onExtractProgress((p) => {
+        if (!alive) return;
+        setProgress(p);
+        // A run this page did not start (e.g. scheduled): pick up its record.
+        if (!runningRef.current)
+          listExtractRuns()
+            .then((rs) => alive && setRuns(rs))
+            .catch(() => {});
+      }),
+    );
     keep(
       onExtractFinished((r) => {
         if (!alive) return;
@@ -101,6 +132,26 @@ export function ExtractPage({ onNavigate }: ExtractPageProps) {
     } finally {
       setSaving(false);
     }
+  };
+
+  const onRunClick = () => {
+    if (dirty) setConfirmRun(true);
+    else void run();
+  };
+
+  const saveAndRun = async () => {
+    setConfirmRun(false);
+    if (!draft) return;
+    setSaving(true);
+    try {
+      setConfig(await setExtractConfig(draft.config));
+    } catch (e) {
+      push("error", fmt(x.saveFailed, { message: errorMessage(e) }));
+      return;
+    } finally {
+      setSaving(false);
+    }
+    await run();
   };
 
   const run = async () => {
@@ -156,12 +207,18 @@ export function ExtractPage({ onNavigate }: ExtractPageProps) {
               </Button>
             </div>
           ) : (
-            <Button type="button" disabled={!config} onClick={() => void run()} className="h-8 cursor-pointer px-3 text-sm font-semibold">
+            <Button type="button" disabled={!config || !!blockReason || saving} title={blockReason ?? undefined} onClick={onRunClick} className="h-8 cursor-pointer px-3 text-sm font-semibold">
               <Play className="size-4" aria-hidden="true" />
               {x.runNow}
             </Button>
           )}
         </header>
+
+        {!running && blockReason ? (
+          <p role="note" className="-mt-2 text-right text-xs text-warning">
+            {blockReason}
+          </p>
+        ) : null}
 
         {loadError ? (
           <div className="flex flex-col items-center gap-3 py-16">
@@ -177,7 +234,7 @@ export function ExtractPage({ onNavigate }: ExtractPageProps) {
             <section aria-label={x.configTitle} className="rounded-lg border border-border bg-card p-4">
               <h2 className="mb-1 text-sm font-semibold">{x.configTitle}</h2>
               {config ? (
-                <ExtractConfigForm config={config} runners={runners} projects={projects} saving={saving} onSave={(c) => void save(c)} />
+                <ExtractConfigForm config={config} runners={runners} projects={projects} saving={saving} onSave={(c) => void save(c)} onDraftChange={setDraft} />
               ) : (
                 <div aria-label={x.loading} className="space-y-3 py-3">
                   <Skeleton className="h-8 w-60" />
@@ -207,6 +264,15 @@ export function ExtractPage({ onNavigate }: ExtractPageProps) {
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmRun}
+        title={x.runUnsavedTitle}
+        body={x.runUnsavedBody}
+        confirmLabel={x.runUnsavedConfirm}
+        cancelLabel={x.runUnsavedCancel}
+        onConfirm={() => void saveAndRun()}
+        onCancel={() => setConfirmRun(false)}
+      />
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </div>
   );

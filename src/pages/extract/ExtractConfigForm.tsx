@@ -53,15 +53,42 @@ function Row({ label, children, htmlFor }: { label: string; children: React.Reac
   );
 }
 
+/** Canonical form for structural comparison (key order and id order do not matter). */
+function normalize(c: ExtractConfig) {
+  const sch = c.schedule;
+  return {
+    tool: c.tool,
+    schedule:
+      sch.kind === "off"
+        ? { kind: "off" }
+        : sch.kind === "daily"
+          ? { kind: "daily", hh: sch.hh, mm: sch.mm }
+          : { kind: "weekly", weekday: sch.weekday, hh: sch.hh, mm: sch.mm },
+    projects: c.projects.kind === "all" ? { kind: "all" } : { kind: "selected", ids: [...c.projects.ids].sort() },
+    include_global: c.include_global,
+    lookback_days: c.lookback_days,
+    lang: c.lang,
+  };
+}
+const sameConfig = (a: ExtractConfig, b: ExtractConfig) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
+
+export interface DraftState {
+  config: ExtractConfig;
+  dirty: boolean;
+  valid: boolean;
+}
+
 export interface ExtractConfigFormProps {
   config: ExtractConfig;
   runners: RunnerInfo[];
   projects: Project[];
   saving: boolean;
   onSave: (config: ExtractConfig) => void;
+  /** Reports the current draft (including unsaved edits) whenever it changes. */
+  onDraftChange?: (state: DraftState) => void;
 }
 
-export function ExtractConfigForm({ config, runners, projects, saving, onSave }: ExtractConfigFormProps) {
+export function ExtractConfigForm({ config, runners, projects, saving, onSave, onDraftChange }: ExtractConfigFormProps) {
   const { t } = useI18n();
   const x = t.extract;
   const [draft, setDraft] = React.useState(config);
@@ -73,7 +100,16 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave }:
 
   const lookbackOk = /^\d+$/.test(lookbackText) && Number(lookbackText) >= 1 && Number(lookbackText) <= 90;
   const effective: ExtractConfig = { ...draft, lookback_days: lookbackOk ? Number(lookbackText) : draft.lookback_days };
-  const dirty = JSON.stringify(effective) !== JSON.stringify(config) || (!lookbackOk && lookbackText !== String(config.lookback_days));
+  const dirty = !sameConfig(effective, config) || (!lookbackOk && lookbackText !== String(config.lookback_days));
+  const noneSelected = draft.projects.kind === "selected" && draft.projects.ids.length === 0;
+  const valid = lookbackOk && !noneSelected;
+  const known = new Set(projects.map((p) => p.id));
+  const stale = draft.projects.kind === "selected" ? draft.projects.ids.filter((id) => !known.has(id)) : [];
+
+  React.useEffect(() => {
+    onDraftChange?.({ config: effective, dirty, valid });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(normalize(effective)), dirty, valid]);
 
   const set = (patch: Partial<ExtractConfig>) => setDraft((d) => ({ ...d, ...patch }));
   const runner = (tool: Tool) => runners.find((r) => r.tool === tool);
@@ -124,7 +160,7 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave }:
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (dirty && lookbackOk) onSave(effective);
+        if (dirty && valid) onSave(effective);
       }}
     >
       <div className="divide-y divide-border">
@@ -181,7 +217,7 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave }:
             onChange={(k) => set({ projects: k === "all" ? { kind: "all" } : { kind: "selected", ids: selectedIds } })}
           />
           {draft.projects.kind === "selected" ? (
-            projects.length === 0 ? (
+            projects.length === 0 && stale.length === 0 ? (
               <p className="mt-2 text-sm text-muted-foreground">{x.noProjects}</p>
             ) : (
               <ul aria-label={x.projectList} className="mt-2 max-h-44 overflow-y-auto rounded-md border border-border">
@@ -199,8 +235,22 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave }:
                     </label>
                   </li>
                 ))}
+                {stale.map((id) => (
+                  <li key={id} className="border-b border-border last:border-b-0">
+                    <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-muted/50">
+                      <input type="checkbox" checked onChange={() => toggleProject(id)} className="size-4 shrink-0 cursor-pointer accent-primary" />
+                      <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{id}</span>
+                      <span className="shrink-0 text-xs text-warning">{x.projectGone}</span>
+                    </label>
+                  </li>
+                ))}
               </ul>
             )
+          ) : null}
+          {noneSelected ? (
+            <p role="alert" className="mt-2 text-xs text-destructive">
+              {x.noneSelected}
+            </p>
           ) : null}
         </Row>
 
@@ -238,7 +288,7 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave }:
       </div>
 
       <div className="flex justify-end pt-3">
-        <Button type="submit" disabled={!dirty || !lookbackOk || saving} className="h-8 cursor-pointer px-3 text-sm font-semibold">
+        <Button type="submit" disabled={!dirty || !valid || saving} className="h-8 cursor-pointer px-3 text-sm font-semibold">
           {saving ? x.saving : x.save}
         </Button>
       </div>

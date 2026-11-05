@@ -522,3 +522,16 @@ if (params.get("expand")) {
     } else if (++tries > 100) clearInterval(timer);
   }, 100);
 }
+
+// `?dirty=1` toggles "包含全局记忆" and clicks 立即运行 to show the unsaved-changes confirmation.
+if (params.get("dirty")) {
+  let tries = 0;
+  const timer = setInterval(() => {
+    const box = document.getElementById("extract-global") as HTMLInputElement | null;
+    if (box) {
+      clearInterval(timer);
+      box.click();
+      setTimeout(() => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "立即运行")?.click(), 300);
+    } else if (++tries > 100) clearInterval(timer);
+  }, 100);
+}

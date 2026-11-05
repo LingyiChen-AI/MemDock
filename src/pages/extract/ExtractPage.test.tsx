@@ -184,3 +184,110 @@ describe("ExtractPage", () => {
     expect(await screen.findByText("还没有运行记录")).toBeInTheDocument();
   });
 });
+
+describe("ExtractPage fix round 1", () => {
+  it("dirty draft: run now asks to save first, saves then starts", async () => {
+    (startExtraction as Mock).mockResolvedValue(run({ id: "r9", status: "running", finished_at: null }));
+    const onDirtyChange = vi.fn();
+    renderApp(<ExtractPage onDirtyChange={onDirtyChange} />);
+    await screen.findByRole("button", { name: "保存配置" });
+    await userEvent.click(screen.getByLabelText("包含全局记忆"));
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    await userEvent.click(screen.getByRole("button", { name: "立即运行" }));
+    expect(startExtraction).not.toHaveBeenCalled();
+    const dlg = await screen.findByRole("alertdialog");
+    expect(within(dlg).getByText("配置有未保存的修改，保存并运行？")).toBeInTheDocument();
+    await userEvent.click(within(dlg).getByRole("button", { name: "保存并运行" }));
+    await waitFor(() => expect(startExtraction).toHaveBeenCalled());
+    expect(setExtractConfig).toHaveBeenCalledWith({ ...config, include_global: false });
+    expect((setExtractConfig as Mock).mock.invocationCallOrder[0]).toBeLessThan((startExtraction as Mock).mock.invocationCallOrder[0]);
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it("dirty draft: cancelling the dialog does nothing", async () => {
+    renderApp(<ExtractPage />);
+    await screen.findByRole("button", { name: "保存配置" });
+    await userEvent.click(screen.getByLabelText("包含全局记忆"));
+    await userEvent.click(screen.getByRole("button", { name: "立即运行" }));
+    const dlg = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dlg).getByRole("button", { name: "取消" }));
+    expect(setExtractConfig).not.toHaveBeenCalled();
+    expect(startExtraction).not.toHaveBeenCalled();
+  });
+
+  it("invalid lookback disables save and run now", async () => {
+    renderApp(<ExtractPage />);
+    await screen.findByRole("button", { name: "保存配置" });
+    fireEvent.change(screen.getByLabelText("回看天数"), { target: { value: "91" } });
+    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "立即运行" })).toBeDisabled();
+    expect(screen.getAllByText("请输入 1 到 90 的整数").length).toBeGreaterThan(0);
+  });
+
+  it("weekday labels map to 0 (Sunday) and 6 (Saturday)", async () => {
+    renderApp(<ExtractPage />);
+    await screen.findByRole("button", { name: "保存配置" });
+    await userEvent.selectOptions(screen.getByLabelText("定时"), "weekly");
+    await userEvent.selectOptions(screen.getByLabelText("星期"), "周日");
+    await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() =>
+      expect(setExtractConfig).toHaveBeenLastCalledWith({ ...config, schedule: { kind: "weekly", weekday: 0, hh: 9, mm: 0 } }),
+    );
+    await userEvent.selectOptions(screen.getByLabelText("星期"), "周六");
+    await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() =>
+      expect(setExtractConfig).toHaveBeenLastCalledWith({ ...config, schedule: { kind: "weekly", weekday: 6, hh: 9, mm: 0 } }),
+    );
+  });
+
+  it("selected projects with none checked cannot be saved", async () => {
+    renderApp(<ExtractPage />);
+    await screen.findByRole("button", { name: "保存配置" });
+    await userEvent.click(screen.getByRole("radio", { name: "选择项目" }));
+    expect(screen.getByText("请至少选择一个项目")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
+  });
+
+  it("stale saved project ids are marked and removable", async () => {
+    (getExtractConfig as Mock).mockResolvedValue({ ...config, projects: { kind: "selected", ids: ["/work/a", "/gone"] } });
+    renderApp(<ExtractPage />);
+    expect(await screen.findByText("已不存在")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: /已不存在/ }));
+    await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() =>
+      expect(setExtractConfig).toHaveBeenCalledWith({ ...config, projects: { kind: "selected", ids: ["/work/a"] } }),
+    );
+  });
+
+  it("run now disabled with a hint when the configured tool is not available", async () => {
+    (getExtractConfig as Mock).mockResolvedValue({ ...config, tool: "codex" });
+    renderApp(<ExtractPage />);
+    expect(await screen.findByText("所选工具未检测到，无法运行")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即运行" })).toBeDisabled();
+  });
+
+  it("shows an error toast when starting fails", async () => {
+    (startExtraction as Mock).mockRejectedValue({ code: "io", message: "磁盘错误" });
+    renderApp(<ExtractPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "立即运行" }));
+    expect(await screen.findByText("启动失败：磁盘错误")).toBeInTheDocument();
+  });
+
+  it("a progress event while idle refreshes the runs", async () => {
+    renderApp(<ExtractPage />);
+    await screen.findByText("还没有运行记录");
+    (listExtractRuns as Mock).mockResolvedValue([run({ id: "s1", status: "running", finished_at: null, trigger: "scheduled" })]);
+    act(() => progressCb({ project: "alpha", index: 1, total: 3 }));
+    expect(await screen.findByText("运行中… 第 1 / 3 个项目")).toBeInTheDocument();
+  });
+
+  it("removes its listeners on unmount", async () => {
+    const un = vi.fn();
+    (onExtractProgress as Mock).mockResolvedValue(un);
+    (onExtractFinished as Mock).mockResolvedValue(un);
+    const { unmount } = renderApp(<ExtractPage />);
+    await screen.findByText("还没有运行记录");
+    unmount();
+    await waitFor(() => expect(un).toHaveBeenCalledTimes(2));
+  });
+});

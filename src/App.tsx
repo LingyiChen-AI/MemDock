@@ -26,7 +26,7 @@ function Shell() {
       <AppShell
         current={current}
         onNavigate={navigate}
-        pages={{ extract: <ExtractPage onNavigate={navigate} />, skills: <SkillsPage onDirtyChange={onDirty} /> }}
+        pages={{ extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />, skills: <SkillsPage onDirtyChange={onDirty} /> }}
       >
         <MemoryPage onDirtyChange={onDirty} />
       </AppShell>

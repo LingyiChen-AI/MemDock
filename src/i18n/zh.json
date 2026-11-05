@@ -399,6 +399,14 @@
     "loading": "加载中",
     "loadFailed": "读取失败：{message}",
     "retry": "重试",
-    "openReview": "查看待审核建议"
+    "openReview": "查看待审核建议",
+    "projectGone": "已不存在",
+    "noneSelected": "请至少选择一个项目",
+    "runUnsavedTitle": "配置有未保存的修改，保存并运行？",
+    "runUnsavedBody": "将先保存当前配置，再按新配置开始提取。",
+    "runUnsavedConfirm": "保存并运行",
+    "runUnsavedCancel": "取消",
+    "runInvalid": "配置无效，请先修正",
+    "runNoRunner": "所选工具未检测到，无法运行"
   }
 }

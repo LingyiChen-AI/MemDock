@@ -399,6 +399,14 @@
     "loading": "Loading",
     "loadFailed": "Failed to load: {message}",
     "retry": "Retry",
-    "openReview": "Open pending suggestions"
+    "openReview": "Open pending suggestions",
+    "projectGone": "No longer exists",
+    "noneSelected": "Select at least one project",
+    "runUnsavedTitle": "Unsaved changes. Save and run?",
+    "runUnsavedBody": "The current settings are saved first, then extraction starts with them.",
+    "runUnsavedConfirm": "Save and run",
+    "runUnsavedCancel": "Cancel",
+    "runInvalid": "Settings are invalid, fix them first",
+    "runNoRunner": "The selected tool was not detected, cannot run"
   }
 }

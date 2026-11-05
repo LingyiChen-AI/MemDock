@@ -118,7 +118,7 @@ export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenRev
                       {r.error ? (
                         <div className="mb-2">
                           <p className="mb-1 text-xs font-medium text-muted-foreground">{x.errorLabel}</p>
-                          <p className="font-mono text-xs break-words whitespace-pre-wrap text-destructive">{r.error}</p>
+                          <p className="font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap text-destructive">{r.error}</p>
                         </div>
                       ) : null}
                       {r.warnings.length > 0 ? (
@@ -128,7 +128,7 @@ export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenRev
                             {r.warnings.map((w, i) => (
                               <li key={i} className="flex items-start gap-1.5 text-xs">
                                 <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden="true" />
-                                <span className="break-words">{w}</span>
+                                <span className="[overflow-wrap:anywhere]">{w}</span>
                               </li>
                             ))}
                           </ul>

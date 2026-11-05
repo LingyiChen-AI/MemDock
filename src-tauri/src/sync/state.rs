@@ -1,5 +1,6 @@
 //! Persistent sync state (`<appdata>/sync/state.json`). Never holds the token.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 
@@ -40,6 +41,14 @@ pub struct SyncState {
     pub included_local: Vec<String>,
     #[serde(default)]
     pub synced_projects: Vec<SyncedProject>,
+    /// Repo paths left out of the last sync (skipped): their base is not
+    /// trusted, so they can only be pulled or conflict, never deleted.
+    #[serde(default)]
+    pub unsynced_paths: BTreeSet<String>,
+    /// Project keys whose memory files were all deleted locally and are held
+    /// until the user decides (no deletion of their synced files is pushed).
+    #[serde(default)]
+    pub held_projects: BTreeSet<String>,
 }
 
 impl Default for SyncState {
@@ -54,6 +63,8 @@ impl Default for SyncState {
             public_ack: false,
             included_local: Vec::new(),
             synced_projects: Vec::new(),
+            unsynced_paths: BTreeSet::new(),
+            held_projects: BTreeSet::new(),
         }
     }
 }
@@ -93,6 +104,8 @@ mod tests {
                 key: "k1".into(),
                 dir: "c:/w/p".into(),
             }],
+            unsynced_paths: BTreeSet::from(["projects/k1/claude/CLAUDE.md".to_string()]),
+            held_projects: BTreeSet::from(["k1".to_string()]),
             ..SyncState::default()
         };
         save_state(&p, &s).unwrap();

@@ -32,7 +32,7 @@ use crate::sync::layout::{
     dir_key, expected_local_path, normalize_text, project_key, safe_key, Machine, SyncFile,
 };
 use crate::sync::manifest::{self, Manifest, ManifestSkill};
-use crate::sync::repo::{blob_id, Auth, CommitInfo, SyncGit, SyncGitError, TreeBlob};
+use crate::sync::repo::{blob_id, Auth, CommitInfo, SyncGit, SyncGitError, TreeBlob, TreeEntry};
 use crate::sync::state::SyncedProject;
 
 /// Author and committer of every sync commit.
@@ -57,6 +57,10 @@ pub struct SyncCtx<'a> {
     /// `SyncState.synced_projects`: the base is only valid for these projects
     /// while their directory is unchanged.
     pub synced_projects: Vec<SyncedProject>,
+    /// `SyncState.unsynced_paths`.
+    pub unsynced_paths: BTreeSet<String>,
+    /// `SyncState.held_projects`.
+    pub held_projects: BTreeSet<String>,
     pub paths: &'a AgentPaths,
     pub machine: &'a Machine,
     /// `manifest::local_entries(..)` of this machine; `None` when the skill
@@ -111,6 +115,22 @@ pub struct SyncBase {
     pub commit: Option<String>,
     /// New `synced_projects`.
     pub synced_projects: Vec<SyncedProject>,
+    /// New `unsynced_paths`.
+    pub unsynced_paths: BTreeSet<String>,
+    /// New `held_projects`.
+    pub held_projects: BTreeSet<String>,
+}
+
+impl SyncBase {
+    /// The base recorded in `ctx` (sync state as loaded).
+    pub fn of(ctx: &SyncCtx) -> SyncBase {
+        SyncBase {
+            commit: ctx.base_commit.clone(),
+            synced_projects: ctx.synced_projects.clone(),
+            unsynced_paths: ctx.unsynced_paths.clone(),
+            held_projects: ctx.held_projects.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +239,7 @@ enum Action {
 struct Entry {
     repo_path: String,
     local_path: PathBuf,
+    key: Option<String>,
     /// sha256 of the raw local bytes at prepare time, "" when missing.
     local_hash: String,
     local: Option<String>,
@@ -250,10 +271,16 @@ pub struct SyncPlan {
     entries: Vec<Entry>,
     /// `path -> blob id` of the remote head.
     #[serde(skip)]
-    remote_tree: BTreeMap<String, String>,
+    remote_tree: BTreeMap<String, TreeEntry>,
     /// New `skills.json` text; `None` keeps the remote file unchanged.
     #[serde(skip)]
     manifest_json: Option<String>,
+    /// `unsynced_paths` once this plan is applied.
+    #[serde(skip)]
+    unsynced_after: BTreeSet<String>,
+    /// `held_projects` once this plan is applied with no choices made.
+    #[serde(skip)]
+    held_after: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -283,6 +310,10 @@ pub struct SyncSummary {
     pub merged: usize,
     /// Store as `SyncState.synced_projects`.
     pub synced_projects: Vec<SyncedProject>,
+    /// Store as `SyncState.unsynced_paths`.
+    pub unsynced_paths: BTreeSet<String>,
+    /// Store as `SyncState.held_projects`.
+    pub held_projects: BTreeSet<String>,
 }
 
 // ---------------------------------------------------------------- helpers
@@ -484,6 +515,70 @@ fn after_writes(e: SyncError, base: Option<SyncBase>) -> SyncError {
     }
 }
 
+/// `held_projects` after applying `resolutions`: a held project is released
+/// once every one of its held files got `DeleteRemote` or `KeepRemote`.
+fn held_after_choices(
+    plan: &SyncPlan,
+    resolutions: &BTreeMap<String, Resolution>,
+) -> BTreeSet<String> {
+    let mut held = plan.held_after.clone();
+    let mut open: BTreeSet<&str> = BTreeSet::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for e in &plan.entries {
+        if e.action != Action::LocalAllDeleted {
+            continue;
+        }
+        let Some(k) = e.key.as_deref() else { continue };
+        seen.insert(k);
+        let decided = matches!(
+            resolutions.get(&e.repo_path),
+            Some(Resolution::DeleteRemote | Resolution::KeepRemote)
+        );
+        if !decided {
+            open.insert(k);
+        }
+    }
+    for k in seen.difference(&open) {
+        held.remove(*k);
+    }
+    held
+}
+
+/// Resolutions for the retry plan: a choice carries over only to an entry of
+/// the same kind with the same local and remote content. `None` when a choice
+/// no longer applies or the new plan needs a decision the user never made.
+fn carry_resolutions(
+    old: &SyncPlan,
+    new: &SyncPlan,
+    resolutions: &BTreeMap<String, Resolution>,
+) -> Option<BTreeMap<String, Resolution>> {
+    let mut out = BTreeMap::new();
+    for e in &new.entries {
+        if !matches!(
+            e.action,
+            Action::Conflict | Action::RemoteDeleted | Action::LocalAllDeleted
+        ) {
+            continue;
+        }
+        match resolutions.get(&e.repo_path) {
+            Some(r) => {
+                let o = old.entries.iter().find(|o| o.repo_path == e.repo_path)?;
+                let same = std::mem::discriminant(&o.action) == std::mem::discriminant(&e.action)
+                    && o.r_sha == e.r_sha
+                    && o.l_sha == e.l_sha;
+                if !same {
+                    return None;
+                }
+                out.insert(e.repo_path.clone(), r.clone());
+            }
+            // holding is the default and needs no decision
+            None if e.action == Action::LocalAllDeleted => {}
+            None => return None,
+        }
+    }
+    Some(out)
+}
+
 /// Repo paths pulled / merged so far (a retry does not count a file twice).
 #[derive(Default, Clone)]
 struct Counts {
@@ -520,7 +615,7 @@ fn run(
         }
     }
     if let Some(json) = &plan.manifest_json {
-        if Some(blob_id(json.as_bytes())) != plan.remote_tree.get(SKILLS_JSON).cloned() {
+        if Some(blob_id(json.as_bytes())) != plan.remote_tree.get(SKILLS_JSON).map(|e| e.sha.clone()) {
             scan_into(SKILLS_JSON, json, &mut hits);
         }
     }
@@ -539,9 +634,12 @@ fn run(
     // From here on local files equal the remote head plus this sync's changes:
     // the remote head is the base for every current project.
     let synced_projects = current_synced(ctx);
+    let held_projects = held_after_choices(plan, resolutions);
     let written = Some(SyncBase {
         commit: plan.remote_commit.clone(),
         synced_projects: synced_projects.clone(),
+        unsynced_paths: plan.unsynced_after.clone(),
+        held_projects: held_projects.clone(),
     });
     for o in &outs {
         match o.entry.action {
@@ -561,7 +659,7 @@ fn run(
     let mut tree: BTreeMap<String, TreeBlob> = plan
         .remote_tree
         .iter()
-        .map(|(p, s)| (p.clone(), TreeBlob::Sha(s.clone())))
+        .map(|(p, e)| (p.clone(), TreeBlob::Existing(e.clone())))
         .collect();
     let mut pushed = 0;
     for o in &outs {
@@ -581,7 +679,7 @@ fn run(
     let mut manifest_changed = false;
     if let Some(json) = &plan.manifest_json {
         manifest_changed =
-            Some(blob_id(json.as_bytes())) != plan.remote_tree.get(SKILLS_JSON).cloned();
+            Some(blob_id(json.as_bytes())) != plan.remote_tree.get(SKILLS_JSON).map(|e| e.sha.clone());
         if manifest_changed {
             tree.insert(SKILLS_JSON.to_string(), TreeBlob::Data(json.clone().into_bytes()));
         }
@@ -593,6 +691,8 @@ fn run(
         pushed,
         merged: counts.merged.len(),
         synced_projects: synced_projects.clone(),
+        unsynced_paths: plan.unsynced_after.clone(),
+        held_projects: held_projects.clone(),
     };
     if pushed == 0 && !manifest_changed {
         return Ok(summary(plan.remote_commit.clone(), false, 0));
@@ -619,9 +719,7 @@ fn run(
                 .git
                 .fetch(ctx.repo_dir, &ctx.auth)
                 .map_err(SyncError::from)
-                .and_then(|r| {
-                    build_plan(ctx, r, plan.remote_commit.as_deref(), &base.synced_projects)
-                })
+                .and_then(|r| build_plan(ctx, r, &base))
                 .map_err(|e| after_writes(e, written.clone()))?;
             if !again.secret_hits.is_empty() {
                 return Err(SyncError::Secrets {
@@ -629,10 +727,12 @@ fn run(
                     base: written,
                 });
             }
-            if !again.conflicts.is_empty() || !again.remote_deleted.is_empty() {
+            // The user's choices carry over only where they still mean the
+            // same thing; otherwise stop rather than drop a choice.
+            let Some(carried) = carry_resolutions(plan, &again, resolutions) else {
                 return Err(SyncError::RemoteMoved { base });
-            }
-            run(ctx, &again, &BTreeMap::new(), false, written, counts)
+            };
+            run(ctx, &again, &carried, false, written, counts)
         }
         Err(SyncGitError::Rejected) => Err(SyncError::RemoteMoved {
             base: written.expect("set after local writes"),
@@ -659,11 +759,14 @@ pub fn pending_local(ctx: &SyncCtx) -> Result<usize, SyncError> {
     let base_paths: Vec<&String> = tree
         .keys()
         .filter(|p| base_valid(p, project_of(p, &ctx.projects), &trusted))
+        .filter(|p| !ctx.unsynced_paths.contains(*p))
         .collect();
     let mut n = 0;
-    for c in candidates(ctx, base_paths.into_iter(), std::iter::empty()).0 {
+    for c in candidates(ctx, base_paths.into_iter(), std::iter::empty()).list {
         let l = read_opt(&c.local_path)?.map(|b| blob_id(normalize_text(&b).as_bytes()));
-        let b = if base_valid(&c.repo_path, c.key.as_deref(), &trusted) {
+        let b = if base_valid(&c.repo_path, c.key.as_deref(), &trusted)
+            && !ctx.unsynced_paths.contains(&c.repo_path)
+        {
             tree.get(&c.repo_path).cloned()
         } else {
             None

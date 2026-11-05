@@ -1,5 +1,5 @@
 //! Plan building for the sync engine: which files to compare, blob-id
-//! classification, the local-all-deleted guard and the batched blob reads.
+//! classification, held projects and the batched blob reads.
 
 use super::*;
 
@@ -28,8 +28,8 @@ pub(super) fn base_valid(repo_path: &str, key: Option<&str>, trusted: &HashSet<S
     GLOBAL_PATHS.contains(&repo_path) || key.is_some_and(|k| trusted.contains(k))
 }
 
-/// `path -> blob id` of the base commit; `None` without a usable base (no
-/// previous sync, or the commit object is missing from this clone).
+/// `path -> blob id` of the regular files of the base commit; `None` without
+/// a usable base (no previous sync, or the commit object is missing here).
 pub(super) fn base_tree(
     ctx: &SyncCtx,
     base: Option<&str>,
@@ -38,7 +38,13 @@ pub(super) fn base_tree(
     if !ctx.git.has_commit(ctx.repo_dir, b)? {
         return Ok(None);
     }
-    Ok(Some(ctx.git.tree_entries(ctx.repo_dir, b)?))
+    let tree = ctx.git.tree_entries(ctx.repo_dir, b)?;
+    Ok(Some(
+        tree.into_iter()
+            .filter(|(_, e)| e.is_regular())
+            .map(|(p, e)| (p, e.sha))
+            .collect(),
+    ))
 }
 
 /// One repo path to compare and the local file it maps to.
@@ -48,14 +54,21 @@ pub(super) struct Candidate {
     pub(super) key: Option<String>,
 }
 
+/// Candidates plus the repo paths that cannot be synced: `(path, reason)`.
+pub(super) struct Candidates {
+    pub(super) list: Vec<Candidate>,
+    pub(super) rejected: Vec<(String, &'static str)>,
+}
+
 /// `union(local files, base paths, remote paths)` restricted to files that map
 /// to this machine. Repo files of projects absent here are not included.
-/// Repo paths that differ only by case are returned separately and left out.
+/// Repo paths differing only by case, or mapping onto a local file another
+/// repo path already maps to, are rejected.
 pub(super) fn candidates<'s>(
     ctx: &SyncCtx,
     base: impl Iterator<Item = &'s String>,
     remote: impl Iterator<Item = &'s String>,
-) -> (Vec<Candidate>, Vec<String>) {
+) -> Candidates {
     let mut all: Vec<Candidate> = Vec::new();
     let mut seen_repo: HashSet<String> = HashSet::new();
     for f in &ctx.files {
@@ -86,21 +99,23 @@ pub(super) fn candidates<'s>(
     for c in &all {
         *by_lower.entry(c.repo_path.to_lowercase()).or_default() += 1;
     }
-    let mut out = Vec::new();
-    let mut collided = Vec::new();
+    let mut out = Candidates {
+        list: Vec::new(),
+        rejected: Vec::new(),
+    };
     // normalize_path is case-insensitive on Windows only
     let mut seen_local: HashSet<String> = HashSet::new();
     for c in all {
         if by_lower[&c.repo_path.to_lowercase()] > 1 {
-            collided.push(c.repo_path);
-            continue;
-        }
-        // Two repo paths must never write the same local file.
-        if seen_local.insert(normalize_path(&c.local_path.to_string_lossy())) {
-            out.push(c);
+            out.rejected.push((c.repo_path, "case_collision"));
+        } else if !seen_local.insert(normalize_path(&c.local_path.to_string_lossy())) {
+            // Two repo paths must never write the same local file.
+            out.rejected.push((c.repo_path, "duplicate_local"));
+        } else {
+            out.list.push(c);
         }
     }
-    (out, collided)
+    out
 }
 
 // ---------------------------------------------------------------- prepare
@@ -108,7 +123,7 @@ pub(super) fn candidates<'s>(
 /// Fetches and builds the plan. Writes nothing locally or to the repository.
 pub fn prepare(ctx: &SyncCtx) -> Result<SyncPlan, SyncError> {
     let remote = ctx.git.fetch(ctx.repo_dir, &ctx.auth)?;
-    build_plan(ctx, remote, ctx.base_commit.as_deref(), &ctx.synced_projects)
+    build_plan(ctx, remote, &SyncBase::of(ctx))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -128,26 +143,35 @@ struct Pre {
     b_sha: Option<String>,
     r_sha: Option<String>,
     kind: Kind,
-    all_deleted: bool,
+    held: bool,
 }
 
 pub(super) fn build_plan(
     ctx: &SyncCtx,
     remote: Option<String>,
-    base: Option<&str>,
-    synced: &[SyncedProject],
+    base: &SyncBase,
 ) -> Result<SyncPlan, SyncError> {
     let git = ctx.git;
     let repo = ctx.repo_dir;
-    let remote_tree = match &remote {
+    let remote_full = match &remote {
         Some(r) => git.tree_entries(repo, r)?,
         None => BTreeMap::new(),
     };
-    let base_tree = base_tree(ctx, base)?.unwrap_or_default();
-    let trusted = trusted_keys(ctx, synced);
+    let remote_tree: BTreeMap<String, String> = remote_full
+        .iter()
+        .filter(|(_, e)| e.is_regular())
+        .map(|(p, e)| (p.clone(), e.sha.clone()))
+        .collect();
+    let base_tree = base_tree(ctx, base.commit.as_deref())?.unwrap_or_default();
+    let trusted = trusted_keys(ctx, &base.synced_projects);
+    let unsynced = &base.unsynced_paths;
+    // Paths skipped last time have no trusted base: pull or conflict only.
+    let base_ok = |path: &str, key: Option<&str>| {
+        base_valid(path, key, &trusted) && !unsynced.contains(path)
+    };
     let base_paths: Vec<&String> = base_tree
         .keys()
-        .filter(|p| base_valid(p, project_of(p, &ctx.projects), &trusted))
+        .filter(|p| base_ok(p, project_of(p, &ctx.projects)))
         .collect();
 
     let mut plan = SyncPlan {
@@ -166,6 +190,8 @@ pub(super) fn build_plan(
         entries: Vec::new(),
         remote_tree: BTreeMap::new(),
         manifest_json: None,
+        unsynced_after: BTreeSet::new(),
+        held_after: BTreeSet::new(),
     };
     let skip = |plan: &mut SyncPlan, path: &str, reason: &str| {
         plan.skipped.push(SkippedFile {
@@ -174,15 +200,22 @@ pub(super) fn build_plan(
         })
     };
 
-    let (cands, collided) = candidates(ctx, base_paths.into_iter(), remote_tree.keys());
-    for p in &collided {
-        skip(&mut plan, p, "case_collision");
+    let cands = candidates(ctx, base_paths.into_iter(), remote_full.keys());
+    for (p, reason) in &cands.rejected {
+        skip(&mut plan, p, reason);
     }
+    let mut considered: BTreeSet<String> = BTreeSet::new();
 
     // Pass 1: compare blob ids.
     let mut pres: Vec<Pre> = Vec::new();
     let mut has_local: HashSet<String> = HashSet::new();
-    for c in cands {
+    for c in cands.list {
+        considered.insert(c.repo_path.clone());
+        // symlinks / gitlinks at a memory path are never touched
+        if remote_full.get(&c.repo_path).is_some_and(|e| !e.is_regular()) {
+            skip(&mut plan, &c.repo_path, "not_regular_file");
+            continue;
+        }
         let lbytes = read_opt(&c.local_path)?;
         let local_hash = lbytes.as_deref().map(sha256_hex).unwrap_or_default();
         let local = match &lbytes {
@@ -202,7 +235,7 @@ pub(super) fn build_plan(
         }
         let l_sha = local.as_deref().map(|t| blob_id(t.as_bytes()));
         let r_sha = remote_tree.get(&c.repo_path).cloned();
-        let b_sha = if base_valid(&c.repo_path, c.key.as_deref(), &trusted) {
+        let b_sha = if base_ok(&c.repo_path, c.key.as_deref()) {
             base_tree.get(&c.repo_path).cloned()
         } else {
             None
@@ -229,35 +262,37 @@ pub(super) fn build_plan(
             b_sha,
             r_sha,
             kind,
-            all_deleted: false,
+            held: false,
         });
     }
 
-    // Guard: a synced project whose memory files are all gone locally is not
-    // turned into a mass deletion of the remote copy.
-    let gone: HashSet<String> = pres
+    // Held projects: previously held ones, plus synced projects whose memory
+    // files are all gone locally while the remote still has them. Remote files
+    // missing locally in a held project are never deleted by default.
+    let present: HashSet<&str> = ctx.projects.iter().map(|(k, _)| k.as_str()).collect();
+    let mut held: HashSet<String> = base
+        .held_projects
         .iter()
-        .filter(|p| p.kind == Kind::Push && p.local.is_none())
-        .filter_map(|p| p.c.key.clone())
-        .filter(|k| trusted.contains(k) && !has_local.contains(k))
+        .filter(|k| present.contains(k.as_str()))
+        .cloned()
         .collect();
+    held.extend(
+        pres.iter()
+            .filter(|p| p.kind == Kind::Push && p.local.is_none())
+            .filter_map(|p| p.c.key.clone())
+            .filter(|k| trusted.contains(k) && !has_local.contains(k)),
+    );
     for p in &mut pres {
-        if p.c.key.as_ref().is_some_and(|k| gone.contains(k)) {
-            p.all_deleted = true;
-        }
+        let in_held = p.c.key.as_ref().is_some_and(|k| held.contains(k));
+        p.held = in_held && p.local.is_none() && p.r_sha.is_some();
     }
 
-    // Pass 2: read the blobs that are needed, in one batch.
+    // Pass 2: read every remote / base blob involved, in one batch, so a
+    // non-UTF-8 file is never pushed over, deleted or merged.
     let mut need: Vec<String> = Vec::new();
     for p in &pres {
-        match (p.kind, p.all_deleted) {
-            (_, true) | (Kind::Take, _) => need.extend(p.r_sha.clone()),
-            (Kind::Both, _) => {
-                need.extend(p.r_sha.clone());
-                need.extend(p.b_sha.clone());
-            }
-            _ => {}
-        }
+        need.extend(p.r_sha.clone());
+        need.extend(p.b_sha.clone());
     }
     let manifest_sha = remote_tree.get(SKILLS_JSON).cloned();
     if ctx.local_skills.is_some() {
@@ -273,23 +308,23 @@ pub(super) fn build_plan(
 
     for p in pres {
         let rp = p.c.repo_path.clone();
-        let mut remote_text: Option<String> = None;
-        let action = if p.all_deleted {
-            let Ok(r) = text_of(&p.r_sha) else {
-                skip(&mut plan, &rp, "not_utf8_remote");
-                continue;
-            };
-            remote_text = r;
+        let Ok(r) = text_of(&p.r_sha) else {
+            skip(&mut plan, &rp, "not_utf8_remote");
+            continue;
+        };
+        let Ok(b) = text_of(&p.b_sha) else {
+            skip(&mut plan, &rp, "not_utf8_base");
+            continue;
+        };
+        let action = if p.held {
             plan.local_all_deleted.push(rp.clone());
+            if let Some(k) = &p.c.key {
+                plan.held_after.insert(k.clone());
+            }
             Action::LocalAllDeleted
         } else {
             match p.kind {
                 Kind::Take => {
-                    let Ok(r) = text_of(&p.r_sha) else {
-                        skip(&mut plan, &rp, "not_utf8_remote");
-                        continue;
-                    };
-                    remote_text = r;
                     plan.take_remote.push(rp.clone());
                     Action::TakeRemote
                 }
@@ -308,21 +343,12 @@ pub(super) fn build_plan(
                     Action::PushLocal
                 }
                 Kind::Both => {
-                    let Ok(r) = text_of(&p.r_sha) else {
-                        skip(&mut plan, &rp, "not_utf8_remote");
-                        continue;
-                    };
-                    let Ok(b) = text_of(&p.b_sha) else {
-                        skip(&mut plan, &rp, "not_utf8_base");
-                        continue;
-                    };
                     let l = &p.local;
                     let m = git.merge3(
                         b.as_deref().unwrap_or(""),
                         l.as_deref().unwrap_or(""),
                         r.as_deref().unwrap_or(""),
                     )?;
-                    remote_text = r.clone();
                     if b.is_some() && l.is_some() && r.is_some() && m.conflicts == 0 {
                         plan.merged.push(rp.clone());
                         scan_into(&rp, &m.text, &mut plan.secret_hits);
@@ -332,8 +358,8 @@ pub(super) fn build_plan(
                             repo_path: rp.clone(),
                             local_path: p.c.local_path.to_string_lossy().into_owned(),
                             local: l.clone(),
-                            remote: r,
-                            base: b,
+                            remote: r.clone(),
+                            base: b.clone(),
                             merged: m.text,
                             conflicts: m.conflicts.max(1),
                         });
@@ -345,14 +371,32 @@ pub(super) fn build_plan(
         plan.entries.push(Entry {
             repo_path: rp,
             local_path: p.c.local_path,
+            key: p.c.key,
             local_hash: p.local_hash,
             local: p.local,
             l_sha: p.l_sha,
             r_sha: p.r_sha,
-            remote: remote_text,
+            remote: r,
             action,
         });
     }
+
+    // Held keys of projects not on this machine stay held.
+    plan.held_after.extend(
+        base.held_projects
+            .iter()
+            .filter(|k| !present.contains(k.as_str()))
+            .cloned(),
+    );
+    // Skipped paths keep an untrusted base until a sync handles them; paths
+    // handled normally leave the set; paths the remote no longer has drop out.
+    let skipped: BTreeSet<String> = plan.skipped.iter().map(|s| s.repo_path.clone()).collect();
+    plan.unsynced_after = unsynced
+        .iter()
+        .filter(|p| !considered.contains(*p) && remote_full.contains_key(*p))
+        .cloned()
+        .chain(skipped)
+        .collect();
 
     if let Some(local) = &ctx.local_skills {
         let remote_m = match &manifest_sha {
@@ -377,6 +421,6 @@ pub(super) fn build_plan(
         }
         plan.manifest_json = Some(json);
     }
-    plan.remote_tree = remote_tree;
+    plan.remote_tree = remote_full;
     Ok(plan)
 }

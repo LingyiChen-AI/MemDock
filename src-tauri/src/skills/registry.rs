@@ -24,6 +24,9 @@ pub struct InstallRecord {
 pub struct RegistryEntry {
     pub name: String,
     pub source: SkillSource,
+    /// Address used for network git calls; `source.url` stays the identity.
+    #[serde(default)]
+    pub clone_url: Option<String>,
     pub installs: Vec<InstallRecord>,
     /// Hash of the directory contents right after install / update.
     pub content_hash: String,
@@ -127,12 +130,12 @@ pub fn save_registry(path: &Path, r: &Registry) -> io::Result<()> {
 
 /// Deterministic content hash: files sorted by `/`-separated relative path,
 /// each contributing sha256(path + NUL + bytes); symlinks contribute
-/// `symlink:<target>` instead. `.git/`, `node_modules/` and `.DS_Store` are skipped.
+/// `symlink:<target>` instead. `.git/`, `node_modules/`, `.DS_Store` and `.memdock-complete` are skipped.
 pub fn dir_content_hash(dir: &Path) -> io::Result<String> {
     let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
     let walker = WalkDir::new(dir).into_iter().filter_entry(|e| {
         let n = e.file_name();
-        !(n == ".git" || n == ".DS_Store" || n == "node_modules")
+        !(n == ".git" || n == ".DS_Store" || n == "node_modules" || n == ".memdock-complete")
     });
     for item in walker {
         let item = item.map_err(io::Error::other)?;
@@ -222,6 +225,7 @@ pub fn register_manual(
         registry.skills.push(RegistryEntry {
             name: entry.name.clone(),
             source,
+            clone_url: None,
             installs: vec![install],
             content_hash: hash,
             installed_at: now,
@@ -266,6 +270,7 @@ mod tests {
                     skill_path: "skills/demo".into(),
                     origin: SourceOrigin::Registry,
                 },
+                clone_url: None,
                 installs: vec![InstallRecord {
                     tool: Tool::Codex,
                     scope: SkillScope::Project {
@@ -364,6 +369,7 @@ mod tests {
         fs::create_dir(b.path().join(".git")).unwrap();
         fs::write(b.path().join(".git").join("HEAD"), "ref").unwrap();
         fs::write(b.path().join(".DS_Store"), "junk").unwrap();
+        fs::write(b.path().join(".memdock-complete"), "abc").unwrap();
         let ha = dir_content_hash(a.path()).unwrap();
         assert_eq!(ha, dir_content_hash(b.path()).unwrap());
         fs::write(b.path().join("sub").join("f.txt"), "changed").unwrap();

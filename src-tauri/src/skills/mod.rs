@@ -1,7 +1,9 @@
 pub mod frontmatter;
+pub mod fsops;
 pub mod git;
 pub mod git_cache;
 pub mod model;
+pub mod ops;
 pub mod registry;
 pub mod scan;
 pub mod source;

@@ -322,6 +322,7 @@ mod tests {
                     skill_path: "p".into(),
                     origin: SourceOrigin::Manual,
                 },
+                clone_url: None,
                 installs: vec![InstallRecord {
                     tool: Tool::Claude,
                     scope: SkillScope::Global,

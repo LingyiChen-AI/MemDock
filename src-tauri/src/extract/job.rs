@@ -31,7 +31,9 @@ use std::time::Duration;
 use chrono::{Offset, TimeZone};
 use serde::Serialize;
 
-use super::prompt::{build_prompt, output_schema, parse_output, MemoryTarget};
+use super::prompt::{
+    build_prompt, chunk_turns, output_schema, parse_output_full, MemoryTarget, MAX_EXCERPT_CHARS,
+};
 use super::runner::{CliRunner, RunError};
 use super::sessions::{read_claude_turns, read_codex_turns, Turn};
 use super::store::{RunRecord, RunStatus, RunTrigger, Schedule, Store};
@@ -45,6 +47,8 @@ use crate::projects::{discover_projects, normalize_path};
 pub const GLOBAL_KEY: &str = "__global__";
 /// Projects processed per run (not counting the global batch).
 pub const MAX_PROJECTS: usize = 20;
+/// Excerpt chunks (CLI calls) per project per run.
+pub const MAX_CHUNKS: usize = 3;
 /// Timeout of one CLI call.
 pub const CLI_TIMEOUT: Duration = Duration::from_secs(180);
 /// Scheduler check interval.
@@ -80,6 +84,8 @@ pub struct ExtractCtx {
     pub clock: Clock,
     pub index: IndexProvider,
     pub turns: TurnSource,
+    /// Shared cancel flag for scheduled runs (and for UI-triggered cancel).
+    pub cancel: Arc<AtomicBool>,
     running: Mutex<Option<String>>,
 }
 
@@ -121,6 +127,7 @@ impl ExtractCtx {
             clock: Arc::new(system_now_ms),
             index,
             turns,
+            cancel: Arc::new(AtomicBool::new(false)),
             running: Mutex::new(None),
         }
     }
@@ -270,8 +277,10 @@ fn global_targets(ctx: &ExtractCtx, index: &MemoryIndex, warnings: &mut Vec<Stri
             content: String::new(),
             hash: String::new(),
         })
-        .unwrap_or_else(|| placeholder(&ctx.paths.claude_home.join("CLAUDE.md")));
-    collect_targets(&index.global, Some(fb), true, warnings)
+        .or_else(|| Some(placeholder(&ctx.paths.claude_home.join("CLAUDE.md"))))
+        // Only offer a missing global CLAUDE.md when the claude home exists.
+        .filter(|_| ctx.paths.claude_home.is_dir());
+    collect_targets(&index.global, fb, true, warnings)
 }
 
 struct Batch {
@@ -282,10 +291,45 @@ struct Batch {
     last_ts: i64,
 }
 
-fn finish(ctx: &ExtractCtx, rec: &RunRecord) {
+/// Writes the final record; a save failure is surfaced in the record itself.
+fn finish(ctx: &ExtractCtx, rec: &mut RunRecord) {
     let mut st = lock(&ctx.store);
     st.update_run(rec.clone());
-    let _ = st.save();
+    if let Err(e) = st.save() {
+        let m = format!("could not save run record: {e}");
+        rec.warnings.push(m.clone());
+        rec.error.get_or_insert(m);
+        st.update_run(rec.clone());
+    }
+}
+
+/// Marks the run Failed if `execute` unwinds (panic in runner / parsing).
+struct PanicGuard<'a> {
+    ctx: &'a ExtractCtx,
+    id: String,
+    armed: bool,
+}
+
+impl PanicGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PanicGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut st = lock(&self.ctx.store);
+        if let Some(mut r) = st.runs().iter().find(|r| r.id == self.id).cloned() {
+            r.status = RunStatus::Failed;
+            r.finished_at = Some((self.ctx.clock)());
+            r.error = Some("panicked during extraction".into());
+            st.update_run(r);
+            let _ = st.save();
+        }
+    }
 }
 
 // --------------------------------------------------------------- the run
@@ -316,14 +360,18 @@ fn execute(
     {
         let mut st = lock(&ctx.store);
         st.push_run(rec.clone());
-        let _ = st.save();
+        if let Err(e) = st.save() {
+            rec.warnings.push(format!("could not save run record: {e}"));
+        }
     }
+    let mut guard = PanicGuard { ctx, id: rec.id.clone(), armed: true };
 
     let Some(runner) = runner else {
         rec.status = RunStatus::Failed;
         rec.error = Some("not_installed".into());
         rec.finished_at = Some((ctx.clock)());
-        finish(ctx, &rec);
+        finish(ctx, &mut rec);
+        guard.disarm();
         return rec;
     };
 
@@ -414,6 +462,7 @@ fn execute(
     let mut attempted = 0u32;
     let mut ok = 0u32;
     let mut first_failure: Option<String> = None;
+    let mut save_error: Option<String> = None;
 
     for (i, b) in projects.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
@@ -446,57 +495,75 @@ fn execute(
             continue;
         }
 
-        // ---- call
+        // ---- chunks: oldest first, each fits the excerpt cap; at most
+        // MAX_CHUNKS per project per run, the rest waits for the next run.
         attempted += 1;
-        let refs: Vec<&Turn> = b.turns.iter().collect();
-        let prompt = build_prompt(&b.name, &targets, &refs, &lang);
-        let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
-            Ok(r) => r,
-            Err(RunError::Cancelled) => {
+        let all: Vec<&Turn> = b.turns.iter().collect();
+        let chunks = chunk_turns(&all, MAX_EXCERPT_CHARS);
+        let mut done_chunks = 0usize;
+        let mut project_failed = false;
+        for chunk in chunks.iter().take(MAX_CHUNKS) {
+            if cancel.load(Ordering::SeqCst) {
                 cancelled = true;
                 break;
             }
-            Err(e @ (RunError::NotInstalled | RunError::NotLoggedIn(_))) => {
-                fatal = Some(describe(&e));
-                break;
-            }
-            Err(e) => {
-                let m = format!("{}: {}", b.name, describe(&e));
+            let prompt = build_prompt(&b.name, &targets, chunk, &lang);
+            let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
+                Ok(r) => r,
+                Err(RunError::Cancelled) => {
+                    cancelled = true;
+                    break;
+                }
+                Err(e @ (RunError::NotInstalled | RunError::NotLoggedIn(_))) => {
+                    fatal = Some(describe(&e));
+                    break;
+                }
+                Err(e) => {
+                    let m = format!("{}: {}", b.name, describe(&e));
+                    first_failure.get_or_insert_with(|| m.clone());
+                    rec.warnings.push(m);
+                    project_failed = true;
+                    break;
+                }
+            };
+            let parsed = parse_output_full(&raw, &targets, runner.tool(), chunk);
+            rec.warnings.extend(parsed.warnings.into_iter().map(|w| format!("{}: {w}", b.name)));
+            if parsed.unusable {
+                let m = format!("{}: model output unusable", b.name);
                 first_failure.get_or_insert_with(|| m.clone());
                 rec.warnings.push(m);
-                continue;
+                project_failed = true;
+                break;
             }
-        };
-        let (sugs, warns) = parse_output(&raw, &targets, runner.tool(), &refs);
-        let unusable = sugs.is_empty()
-            && warns.iter().any(|w| {
-                w.starts_with("output is not valid JSON") || w.starts_with("`suggestions` is not an array")
-            });
-        rec.warnings.extend(warns.into_iter().map(|w| format!("{}: {w}", b.name)));
-        if unusable {
-            let m = format!("{}: model output unusable", b.name);
-            first_failure.get_or_insert_with(|| m.clone());
-            rec.warnings.push(m);
-            continue;
-        }
 
-        // ---- store + watermark (only on success)
-        {
+            // ---- store + watermark (only after this chunk succeeded)
             let mut st = lock(&ctx.store);
-            rec.suggestions_new += st.add_suggestions(sugs);
+            rec.suggestions_new += st.add_suggestions(parsed.suggestions);
             for tool in [Tool::Claude, Tool::Codex] {
-                if let Some(m) = b.turns.iter().filter(|t| t.tool == tool).map(|t| t.ts).max() {
+                if let Some(m) = chunk.iter().filter(|t| t.tool == tool).map(|t| t.ts).max() {
                     if m > st.watermark(&b.key, tool) {
                         st.set_watermark(&b.key, tool, m);
                     }
                 }
             }
             if let Err(e) = st.save() {
-                rec.warnings.push(format!("{}: could not save store: {e}", b.name));
+                let m = format!("{}: could not save store: {e}", b.name);
+                rec.warnings.push(m.clone());
+                save_error.get_or_insert(m);
             }
+            done_chunks += 1;
         }
-        ok += 1;
-        rec.projects += 1;
+        if done_chunks > 0 {
+            ok += 1;
+            rec.projects += 1;
+        }
+        if !cancelled && fatal.is_none() && !project_failed && done_chunks == MAX_CHUNKS && chunks.len() > MAX_CHUNKS {
+            let n: usize = chunks[MAX_CHUNKS..].iter().map(Vec::len).sum();
+            rec.warnings.push(format!("{}: {n} older turns deferred to the next run", b.name));
+        }
+        if cancelled || fatal.is_some() {
+            break;
+        }
     }
 
     rec.status = if cancelled {
@@ -511,7 +578,11 @@ fn execute(
         RunStatus::Succeeded
     };
     rec.finished_at = Some((ctx.clock)());
-    finish(ctx, &rec);
+    if rec.error.is_none() {
+        rec.error = save_error;
+    }
+    finish(ctx, &mut rec);
+    guard.disarm();
     rec
 }
 
@@ -531,7 +602,7 @@ fn local_offset_secs(now_ms: i64) -> i32 {
 pub struct Scheduler {
     ctx: Arc<ExtractCtx>,
     offset: OffsetFn,
-    /// Local minute (minutes since the epoch, local) of the last fired slot.
+    /// UTC minute of the last fired slot.
     last_slot: Mutex<Option<i64>>,
     stop: Arc<AtomicBool>,
     handle: Mutex<Option<JoinHandle<()>>>,
@@ -569,11 +640,16 @@ impl Scheduler {
         if !hit {
             return false;
         }
+        // Dedupe on the UTC minute, with a one-hour window, so a DST fall-back
+        // (the same local time twice) cannot fire a slot twice.
+        let utc_minute = now_ms.div_euclid(60_000);
         let mut last = lock(&self.last_slot);
-        if *last == Some(minute) {
-            return false;
+        if let Some(prev) = *last {
+            if utc_minute >= prev && utc_minute - prev < 120 {
+                return false;
+            }
         }
-        *last = Some(minute);
+        *last = Some(utc_minute);
         true
     }
 
@@ -583,8 +659,9 @@ impl Scheduler {
         if !self.due(now_ms) || self.ctx.is_running() {
             return None;
         }
-        let cancel = AtomicBool::new(false);
-        start_run(&self.ctx, RunTrigger::Scheduled, &cancel, &|_| {}).ok()
+        // Shared flag: cancel_extraction / stop() can interrupt scheduled runs.
+        self.ctx.cancel.store(false, Ordering::SeqCst);
+        start_run(&self.ctx, RunTrigger::Scheduled, &self.ctx.cancel, &|_| {}).ok()
     }
 
     /// Starts the background thread (every `TICK_INTERVAL`, real clock from ctx).
@@ -608,6 +685,7 @@ impl Scheduler {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.ctx.cancel.store(true, Ordering::SeqCst);
         if let Some(h) = lock(&self.handle).take() {
             let _ = h.join();
         }
@@ -634,6 +712,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         handler: Handler,
         cancel_on_call: bool,
+        /// Blocks (up to 10 s) until cancelled, then reports Cancelled.
+        slow: bool,
     }
 
     impl Fake {
@@ -644,6 +724,7 @@ mod tests {
                 calls: Mutex::new(vec![]),
                 handler: Box::new(|p| Ok(reply(p))),
                 cancel_on_call: false,
+                slow: false,
             }
         }
         fn with(handler: Handler) -> Self {
@@ -665,6 +746,13 @@ mod tests {
             self.calls.lock().unwrap().push(prompt.to_string());
             if self.cancel_on_call {
                 cancel.store(true, Ordering::SeqCst);
+            }
+            if self.slow {
+                let t0 = std::time::Instant::now();
+                while !cancel.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(10) {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                return Err(RunError::Cancelled);
             }
             (self.handler)(prompt)
         }
@@ -1078,4 +1166,152 @@ mod tests {
         s.stop();
     }
 
+    // ------------------------------------------------- chunking / fixes
+
+    /// One project with `n` large turns (ts ascending, 6000 chars each).
+    fn big(n: usize, fake: Fake) -> (Env, Vec<i64>) {
+        let t = tempfile::tempdir().unwrap();
+        let tp = t.path().to_path_buf();
+        let a = proj(&tp, "alpha", true);
+        let mut turns = vec![];
+        for i in 0..n {
+            let mut x = turn(&a, "sa", NOW - 1_000_000 + i as i64);
+            x.text = format!("always run tests {}", "y".repeat(6000));
+            turns.push(x);
+        }
+        let ts = turns.iter().map(|x| x.ts).collect();
+        (env_with(t, fake, vec![a], turns, None), ts)
+    }
+
+    fn prompt_ts(p: &str) -> Vec<i64> {
+        Regex::new(r#" ts="(\d+)""#).unwrap().captures_iter(p).map(|c| c[1].parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn oversized_batch_is_chunked_in_order() {
+        let (e, ts) = big(14, Fake::ok());
+        let rec = go(&e);
+        assert_eq!(rec.status, RunStatus::Succeeded, "{rec:?}");
+        let calls = e.fake.calls();
+        assert!(calls.len() >= 2 && calls.len() <= MAX_CHUNKS, "{}", calls.len());
+        let seen: Vec<i64> = calls.iter().flat_map(|c| prompt_ts(c)).collect();
+        assert_eq!(seen, ts, "every turn once, oldest first");
+        assert_eq!(wm(&e, &pid(&e, "alpha")), *ts.last().unwrap());
+        assert!(!rec.warnings.iter().any(|w| w.contains("deferred")));
+    }
+
+    #[test]
+    fn more_than_three_chunks_defer_and_nothing_is_skipped_across_runs() {
+        let (e, ts) = big(40, Fake::ok());
+        let rec = go(&e);
+        assert_eq!(e.fake.calls().len(), MAX_CHUNKS);
+        let first: Vec<i64> = e.fake.calls().iter().flat_map(|c| prompt_ts(c)).collect();
+        assert_eq!(wm(&e, &pid(&e, "alpha")), *first.last().unwrap(), "watermark = last processed chunk");
+        let left = ts.len() - first.len();
+        assert!(left > 0);
+        assert!(
+            rec.warnings.iter().any(|w| w.contains(&format!("{left} older turns deferred"))),
+            "{:?}",
+            rec.warnings
+        );
+        // keep running until nothing is left
+        for _ in 0..10 {
+            go(&e);
+        }
+        let all: Vec<i64> = e.fake.calls().iter().flat_map(|c| prompt_ts(c)).collect();
+        assert_eq!(all, ts, "each turn processed exactly once, in order");
+    }
+
+    #[test]
+    fn failed_chunk_stops_project_without_advancing_past_it() {
+        let n = Mutex::new(0);
+        let (e, ts) = big(14, Fake::with(Box::new(move |p| {
+            let mut c = n.lock().unwrap();
+            *c += 1;
+            if *c == 2 { Err(RunError::Timeout) } else { Ok(reply(p)) }
+        })));
+        let rec = go(&e);
+        assert_eq!(rec.status, RunStatus::Succeeded);
+        assert_eq!(e.fake.calls().len(), 2, "stopped after the failing chunk");
+        let first = prompt_ts(&e.fake.calls()[0]);
+        assert_eq!(wm(&e, &pid(&e, "alpha")), *first.last().unwrap());
+        assert!(*first.last().unwrap() < *ts.last().unwrap());
+        assert!(rec.warnings.iter().any(|w| w.contains("timed out")));
+    }
+
+    #[test]
+    fn panic_in_runner_marks_run_failed() {
+        let e = two_with(Fake::with(Box::new(|_| panic!("runner exploded"))));
+        let c = AtomicBool::new(false);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            start_run(&e.ctx, RunTrigger::Manual, &c, &|_| {})
+        }));
+        assert!(r.is_err());
+        assert!(!e.ctx.is_running());
+        let st = lock(&e.ctx.store);
+        let last = st.runs().last().unwrap();
+        assert_eq!(last.status, RunStatus::Failed);
+        assert!(last.finished_at.is_some());
+    }
+
+    #[test]
+    fn save_failure_is_surfaced() {
+        let e = two();
+        // Replace the data dir with a file so every save fails.
+        let data = e._tmp.path().join("data");
+        fs::remove_dir_all(&data).unwrap();
+        fs::write(&data, "x").unwrap();
+        let rec = go(&e);
+        assert!(rec.warnings.iter().any(|w| w.contains("could not save")), "{:?}", rec.warnings);
+        assert!(rec.error.is_some());
+    }
+
+    #[test]
+    fn global_placeholder_needs_claude_home() {
+        let t = tempfile::tempdir().unwrap();
+        let tp = t.path().to_path_buf();
+        let a = proj(&tp, "alpha", true);
+        let mut g = turn(&a, "sg", NOW - 50);
+        g.project_id = None;
+        let e = env_with(t, Fake::ok(), vec![a], vec![g], None);
+        fs::remove_dir_all(&e.ctx.paths.claude_home).unwrap();
+        let rec = go(&e);
+        assert_eq!(e.fake.calls().len(), 0, "no target at all, skipped: {rec:?}");
+        assert!(rec.warnings.iter().any(|w| w.contains("no memory file")));
+    }
+
+    #[test]
+    fn scheduler_stop_cancels_long_run_quickly() {
+        let mut f = Fake::ok();
+        f.slow = true;
+        let e = two_with(f);
+        // The ctx clock is NOW = day 20, 00:00 UTC, which is the slot.
+        let s = sched(&e, Schedule::Daily { hh: 0, mm: 0 });
+        s.start();
+        let t0 = std::time::Instant::now();
+        while e.fake.calls().is_empty() && t0.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!e.fake.calls().is_empty(), "scheduled run started");
+        let t1 = std::time::Instant::now();
+        s.stop();
+        assert!(t1.elapsed() < Duration::from_secs(3), "stop returned quickly");
+        assert_eq!(lock(&e.ctx.store).runs().last().unwrap().status, RunStatus::Cancelled);
+        assert!(!e.ctx.is_running());
+    }
+
+    #[test]
+    fn scheduler_does_not_fire_twice_on_dst_fall_back() {
+        let e = two();
+        let mut c = ExtractConfig::default();
+        c.schedule = Schedule::Daily { hh: 1, mm: 30 };
+        lock(&e.ctx.store).set_config(c);
+        let t0 = 100 * DAY_MS;
+        // UTC+1 until 01:00 UTC, then UTC+0: local 01:30 happens at 00:30 and again at 01:30 UTC.
+        let off: OffsetFn = Arc::new(move |now| if now < t0 + 60 * MIN { 3600 } else { 0 });
+        let s = Scheduler::with_offset(e.ctx.clone(), off);
+        assert!(s.tick(t0 + 30 * MIN).is_some());
+        assert!(s.tick(t0 + 90 * MIN).is_none(), "repeated local hour");
+        assert_eq!(lock(&e.ctx.store).runs().len(), 1);
+    }
 }

@@ -138,6 +138,40 @@ fn attr(s: &str) -> String {
         .replace('\n', " ")
 }
 
+fn turn_line(t: &Turn) -> String {
+    format!(
+        "<turn tool=\"{}\" session_id=\"{}\" ts=\"{}\" role=\"{}\">{}</turn>",
+        tool_name(t.tool),
+        attr(&t.session_id),
+        t.ts,
+        role_name(t.role),
+        escape_tags(&truncate_chars(&redact(&t.text), MAX_TURN_CHARS))
+    )
+}
+
+/// Splits `turns` into chronological chunks (oldest chunk first) whose
+/// formatted excerpt each fits `cap` chars, so no turn is ever dropped.
+pub fn chunk_turns<'a>(turns: &[&'a Turn], cap: usize) -> Vec<Vec<&'a Turn>> {
+    let mut sorted: Vec<&Turn> = turns.to_vec();
+    sorted.sort_by_key(|t| t.ts);
+    let mut chunks: Vec<Vec<&Turn>> = Vec::new();
+    let mut cur: Vec<&Turn> = Vec::new();
+    let mut used = 0usize;
+    for t in sorted {
+        let n = turn_line(t).chars().count() + 1;
+        if !cur.is_empty() && used + n > cap {
+            chunks.push(std::mem::take(&mut cur));
+            used = 0;
+        }
+        used += n;
+        cur.push(t);
+    }
+    if !cur.is_empty() {
+        chunks.push(cur);
+    }
+    chunks
+}
+
 /// Formats the excerpt: chronological, newest turns kept within the cap.
 fn excerpt(turns: &[&Turn]) -> String {
     let mut sorted: Vec<&Turn> = turns.to_vec();
@@ -145,14 +179,7 @@ fn excerpt(turns: &[&Turn]) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut used = 0usize;
     for t in sorted.iter().rev() {
-        let line = format!(
-            "<turn tool=\"{}\" session_id=\"{}\" ts=\"{}\" role=\"{}\">{}</turn>",
-            tool_name(t.tool),
-            attr(&t.session_id),
-            t.ts,
-            role_name(t.role),
-            escape_tags(&truncate_chars(&redact(&t.text), MAX_TURN_CHARS))
-        );
+        let line = turn_line(t);
         let n = line.chars().count() + 1;
         if used + n > MAX_EXCERPT_CHARS {
             break;
@@ -161,7 +188,8 @@ fn excerpt(turns: &[&Turn]) -> String {
         lines.push(line);
     }
     lines.reverse();
-    lines.join("\n")
+    lines.join("
+")
 }
 
 fn instructions(project_name: &str, lang: &str) -> String {
@@ -400,6 +428,14 @@ fn str_field(item: &Value, key: &str) -> Option<String> {
     item.get(key).and_then(Value::as_str).map(String::from)
 }
 
+/// Result of `parse_output_full`.
+pub struct ParsedOutput {
+    pub suggestions: Vec<Suggestion>,
+    pub warnings: Vec<String>,
+    /// The output was not JSON with a `suggestions` array at all.
+    pub unusable: bool,
+}
+
 /// Parses and validates model output. Invalid suggestions are dropped with a warning.
 pub fn parse_output(
     raw: &str,
@@ -407,15 +443,26 @@ pub fn parse_output(
     source_tool: Tool,
     turns: &[&Turn],
 ) -> (Vec<Suggestion>, Vec<String>) {
+    let p = parse_output_full(raw, targets, source_tool, turns);
+    (p.suggestions, p.warnings)
+}
+
+/// Like `parse_output`, with a structured `unusable` flag.
+pub fn parse_output_full(
+    raw: &str,
+    targets: &[MemoryTarget],
+    source_tool: Tool,
+    turns: &[&Turn],
+) -> ParsedOutput {
     let mut warnings: Vec<String> = Vec::new();
     let mut out: Vec<Suggestion> = Vec::new();
     let Some(root) = unwrap_output(raw, &mut warnings) else {
         warnings.push("output is not valid JSON with a `suggestions` array".into());
-        return (out, warnings);
+        return ParsedOutput { suggestions: out, warnings, unusable: true };
     };
     let Some(items) = root.get("suggestions").and_then(Value::as_array) else {
         warnings.push("`suggestions` is not an array".into());
-        return (out, warnings);
+        return ParsedOutput { suggestions: out, warnings, unusable: true };
     };
     if items.len() > MAX_SUGGESTIONS {
         warnings.push(format!("{} suggestions returned, keeping the first {MAX_SUGGESTIONS}", items.len()));
@@ -542,7 +589,7 @@ pub fn parse_output(
             status: SuggestionStatus::Pending,
         });
     }
-    (out, warnings)
+    ParsedOutput { suggestions: out, warnings, unusable: false }
 }
 
 #[cfg(test)]
@@ -569,6 +616,29 @@ mod tests {
             vec![target("f1", MemoryKind::ClaudeInstructions, "# Rules\nUse tabs.\nUse tabs and more.\nPrefer Rust.\n")],
             vec![turn("s1", 100, Role::User, "always run tests"), turn("s1", 200, Role::Assistant, "ok")],
         )
+    }
+
+    #[test]
+    fn chunk_turns_splits_in_order_without_loss() {
+        let ts: Vec<Turn> = (0..10).map(|i| turn("s", 100 - i, Role::User, &"x".repeat(500))).collect();
+        let refs: Vec<&Turn> = ts.iter().collect();
+        let chunks = chunk_turns(&refs, 2_000);
+        assert!(chunks.len() >= 3);
+        let flat: Vec<i64> = chunks.iter().flatten().map(|t| t.ts).collect();
+        assert_eq!(flat.len(), 10);
+        assert!(flat.windows(2).all(|w| w[0] <= w[1]), "ascending across chunks");
+        for c in &chunks {
+            assert!(excerpt(c).chars().count() <= 2_000);
+        }
+        assert!(chunk_turns(&[], 100).is_empty());
+    }
+
+    #[test]
+    fn parse_output_flags_unusable() {
+        let (t, ts) = fixture();
+        let refs: Vec<&Turn> = ts.iter().collect();
+        assert!(parse_output_full("nope", &t, Tool::Claude, &refs).unusable);
+        assert!(!parse_output_full(r#"{"suggestions":[]}"#, &t, Tool::Claude, &refs).unusable);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { lineForPreviewTop, previewTopForLine, type Block } from "./scrollSync";
+import { lineForPreviewTop, previewTopForLine, withSentinel, type Block } from "./scrollSync";
 
 const blocks: Block[] = [
   { line: 1, top: 20 },
@@ -82,5 +82,25 @@ describe("lineForPreviewTop", () => {
       const top = previewTopForLine(blocks, Math.floor(line), line - Math.floor(line));
       expect(lineForPreviewTop(blocks, top)).toBeCloseTo(line, 5);
     }
+  });
+});
+
+describe("withSentinel", () => {
+  it("lets interpolation reach the end of a tall last block", () => {
+    const b = withSentinel(blocks, 25, 1400);
+    expect(previewTopForLine(b, 25, 0)).toBe(1400);
+    expect(previewTopForLine(b, 22.5, 0)).toBeCloseTo(1000);
+    expect(lineForPreviewTop(b, 1400)).toBe(25);
+    expect(lineForPreviewTop(b, 1000)).toBeCloseTo(22.5);
+  });
+
+  it("drops blocks at or after the end line and never goes backwards in top", () => {
+    const b = withSentinel(blocks, 7, 100);
+    expect(b.map((x) => x.line)).toEqual([1, 3, 7]);
+    expect(b[b.length - 1].top).toBeGreaterThanOrEqual(80);
+  });
+
+  it("works with no blocks", () => {
+    expect(withSentinel([], 10, 500)).toEqual([{ line: 10, top: 500 }]);
   });
 });

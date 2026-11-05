@@ -204,6 +204,8 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
     }
   }, [base, saving, text, file.path, m]);
 
+  const { leadEditor } = useScrollSync({ enabled: mode === "split" && syncOn, view, previewRef });
+
   // Jump to the requested line (search results). Waits until the editor exists and has the text.
   React.useEffect(() => {
     if (!reveal || reveal.nonce === revealed.current || !base) return;
@@ -213,6 +215,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
     }
     if (!view || !view.dom.isConnected) return;
     revealed.current = reveal.nonce;
+    leadEditor();
     const line = view.state.doc.line(Math.min(Math.max(1, reveal.line), view.state.doc.lines));
     view.dispatch({
       selection: { anchor: line.from },
@@ -220,7 +223,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
     });
     view.focus();
     onRevealed?.();
-  }, [reveal, base, view, mode, onRevealed]);
+  }, [reveal, base, view, mode, onRevealed, leadEditor]);
 
   const reload = () => {
     setConflict(false);
@@ -245,8 +248,6 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
       // ignore
     }
   };
-
-  useScrollSync({ enabled: mode === "split" && syncOn, view, previewRef });
 
   const copyPath = async () => {
     try {
@@ -273,7 +274,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col" onKeyDown={onKeyDown}>
-      <div className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border px-4">
+      <div className="@container flex h-10 shrink-0 items-center gap-2.5 border-b border-border px-4">
         {dirty ? (
           <span
             role="img"
@@ -283,11 +284,11 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
           />
         ) : null}
         <span
-          className="flex min-w-0 font-mono text-[12.5px] text-muted-foreground select-text"
+          className="flex min-w-[6rem] shrink font-mono text-[12.5px] text-muted-foreground select-text"
           title={file.path}
         >
           <span className="min-w-0 truncate">{dir}</span>
-          <b className="shrink-0 font-medium text-foreground">{name}</b>
+          <b className="min-w-0 truncate font-medium text-foreground">{name}</b>
         </span>
         <button
           type="button"
@@ -299,7 +300,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
           {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
         </button>
         {base ? (
-          <span className="shrink-0 rounded-full border border-border px-2 text-xs leading-5 whitespace-nowrap text-muted-foreground">
+          <span className="shrink-0 rounded-full border border-border px-2 text-xs leading-5 whitespace-nowrap text-muted-foreground @max-[42rem]:hidden">
             {fmt(m.tokens, { n: compactNumber(base.tokens) })}
           </span>
         ) : null}
@@ -345,19 +346,21 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
           variant="outline"
           disabled={!base || !file.exists}
           onClick={() => setHistoryOpen(true)}
-          className="h-7 shrink-0 cursor-pointer gap-1.5 bg-card px-3 text-xs hover:bg-muted"
+          title={m.history}
+          className="h-7 shrink-0 cursor-pointer gap-1.5 bg-card px-3 text-xs hover:bg-muted @max-[42rem]:w-7 @max-[42rem]:px-0"
         >
           <History className="size-4" aria-hidden="true" />
-          {m.history}
+          <span className="@max-[42rem]:sr-only">{m.history}</span>
         </Button>
         <Button
           type="button"
           disabled={!base || saving || !canSave}
           onClick={() => void save()}
-          className="h-7 shrink-0 cursor-pointer gap-1.5 px-3 text-xs font-semibold"
+          title={m.save}
+          className="h-7 shrink-0 cursor-pointer gap-1.5 px-3 text-xs font-semibold @max-[42rem]:w-7 @max-[42rem]:px-0"
         >
           <Save className="size-4" aria-hidden="true" />
-          {m.save}
+          <span className="@max-[42rem]:sr-only">{m.save}</span>
         </Button>
       </div>
 

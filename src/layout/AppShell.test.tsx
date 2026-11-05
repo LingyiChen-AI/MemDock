@@ -201,3 +201,12 @@ describe("Appearance popover", () => {
     expect(await screen.findByRole("button", { name: "外观 / Appearance" })).toBeInTheDocument();
   });
 });
+
+describe("AppearanceControls labels", () => {
+  it("label column is wide enough for English (min-w-20)", async () => {
+    mockSettings({ language: "en" });
+    setup("usage");
+    const label = await screen.findByText("Accent color");
+    expect(label.className).toMatch(/min-w-20/);
+  });
+});

@@ -78,3 +78,23 @@ describe("sync scroll toggle", () => {
     expect(screen.queryByRole("button", { name: "同步滚动" })).not.toBeInTheDocument();
   });
 });
+
+describe("editor top bar at narrow widths", () => {
+  it("lets the path shrink, truncates the file name, and compacts the right side", async () => {
+    renderApp(<MemoryEditor file={globalClaude} index={sampleIndex} />);
+    const name = await screen.findByText("CLAUDE.md");
+    const pathBox = name.parentElement as HTMLElement;
+    expect(pathBox.className).toMatch(/min-w-0|min-w-\[6rem\]/);
+    expect(name.className).toMatch(/\btruncate\b/);
+    expect(name.className).not.toMatch(/shrink-0/);
+    expect(pathBox).toHaveAttribute("title", globalClaude.path);
+    const bar = pathBox.parentElement as HTMLElement;
+    expect(bar.className).toMatch(/@container/);
+    expect(screen.getByText(/tokens/).className).toMatch(/@max-\[[\d.]+rem\]:hidden/);
+    for (const label of ["历史版本", "保存"]) {
+      const span = screen.getByText(label);
+      expect(span.className).toMatch(/@max-\[[\d.]+rem\]:sr-only/);
+    }
+    expect(screen.getByRole("button", { name: "保存" })).toHaveAttribute("title", "保存");
+  });
+});

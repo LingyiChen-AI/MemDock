@@ -49,3 +49,14 @@ export function lineForPreviewTop(blocks: Block[], top: number): number {
   if (span <= 0) return cur.line;
   return cur.line + ((top - cur.top) / span) * (next.line - cur.line);
 }
+
+/**
+ * Appends an end marker so the last (possibly tall) block interpolates towards the bottom:
+ * `endLine` is the editor position at its maximum scroll, `endTop` the preview's maximum scrollTop.
+ * Blocks at or after `endLine` are dropped to keep the list sorted.
+ */
+export function withSentinel(blocks: Block[], endLine: number, endTop: number): Block[] {
+  const kept = blocks.filter((b) => b.line < endLine);
+  const lastTop = kept.length ? kept[kept.length - 1].top : 0;
+  return [...kept, { line: endLine, top: Math.max(endTop, lastTop) }];
+}

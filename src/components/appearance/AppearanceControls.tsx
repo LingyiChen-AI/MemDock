@@ -21,7 +21,7 @@ function Segmented({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="w-14 shrink-0 text-xs text-muted-foreground">{label}</span>
+      <span className="min-w-20 shrink-0 text-xs text-muted-foreground">{label}</span>
       <div role="radiogroup" aria-label={label} className="inline-flex rounded-md border border-border bg-card p-0.5">
         {options.map((o) => {
           const checked = o.value === value;
@@ -73,7 +73,7 @@ function AccentPicker({
   };
   return (
     <div className="flex items-center gap-3">
-      <span className="w-14 shrink-0 text-xs text-muted-foreground">{label}</span>
+      <span className="min-w-20 shrink-0 text-xs text-muted-foreground">{label}</span>
       <div role="radiogroup" aria-label={label} className="flex items-center gap-3 p-1">
         {SWATCHES.map((s, i) => {
           const checked = s.value === value;

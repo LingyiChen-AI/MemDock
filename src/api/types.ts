@@ -171,6 +171,10 @@ export interface UpdateStatus {
   local_modified: boolean;
   /** No recorded baseline: treated as modified. */
   local_state_unknown: boolean;
+  /** A subfolder of a larger git repository: not updatable from here. */
+  not_updatable_subdir: boolean;
+  /** The repository root when `not_updatable_subdir`. */
+  repo_root: string | null;
   error: string | null;
 }
 
@@ -179,6 +183,18 @@ export interface BackupInfo {
   id: string;
   created_at: number;
   size_bytes: number;
+}
+
+/** A deleted skill whose backups remain (restorable to `dir`). */
+export interface DeletedSkill {
+  bucket: string;
+  name: string;
+  tool: Tool;
+  scope: SkillScope;
+  /** Original skill directory. */
+  dir: string;
+  /** Newest first. */
+  backups: BackupInfo[];
 }
 
 export interface RepoSkill {
@@ -199,7 +215,15 @@ export interface InspectResult {
 }
 
 export type InstallFrom =
-  | { type: "git"; url: string; clone_url: string; git_ref?: string | null; skill_path: string }
+  | {
+      type: "git";
+      url: string;
+      clone_url: string;
+      git_ref?: string | null;
+      skill_path: string;
+      /** Install exactly this (inspected) commit. */
+      commit?: string | null;
+    }
   | { type: "folder"; path: string }
   | { type: "zip"; path: string }
   | { type: "template"; name: string; description: string };

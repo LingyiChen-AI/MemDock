@@ -43,16 +43,21 @@ pub struct Registry {
 impl Default for Registry {
     fn default() -> Self {
         Registry {
-            version: 1,
+            version: REGISTRY_VERSION,
             skills: Vec::new(),
         }
     }
 }
 
+/// Highest registry format this build understands.
+pub const REGISTRY_VERSION: u32 = 1;
+
 /// Loads the registry. A missing file -> empty. Any other read or parse failure
 /// -> the file is copied to `<path>.bak` (timestamped if one exists) and an
 /// empty registry is returned; if that backup fails an error is returned so the
-/// caller never overwrites data it could not preserve.
+/// caller never overwrites data it could not preserve. A registry written by a
+/// newer version is backed up and refused (error), never read as the current
+/// format and never overwritten.
 pub fn load_registry(path: &Path) -> Result<Registry, String> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -62,8 +67,24 @@ pub fn load_registry(path: &Path) -> Result<Registry, String> {
             return Ok(Registry::default());
         }
     };
-    match serde_json::from_slice(&bytes) {
-        Ok(r) => Ok(r),
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) => {
+            let version = v.get("version").and_then(|x| x.as_u64()).unwrap_or(1);
+            if version > u64::from(REGISTRY_VERSION) {
+                backup_corrupt(path)?;
+                return Err(format!(
+                    "skills registry {} has version {version}, newer than this build supports ({REGISTRY_VERSION}); it was backed up and left untouched",
+                    path.display()
+                ));
+            }
+            match serde_json::from_value(v) {
+                Ok(r) => Ok(r),
+                Err(_) => {
+                    backup_corrupt(path)?;
+                    Ok(Registry::default())
+                }
+            }
+        }
         Err(_) => {
             backup_corrupt(path)?;
             Ok(Registry::default())
@@ -79,6 +100,12 @@ fn backup_corrupt(path: &Path) -> Result<(), String> {
     let mut bak = base.clone();
     bak.push(".bak");
     let mut target = path.with_file_name(bak);
+    // Already backed up (the same unreadable file is loaded again and again).
+    if let (Ok(a), Ok(b)) = (fs::read(path), fs::read(&target)) {
+        if a == b {
+            return Ok(());
+        }
+    }
     if target.exists() {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -214,13 +241,17 @@ pub fn register_manual(
         e.installs.retain(|i| normalize_path(&i.dir) != key);
     }
     registry.skills.retain(|e| !e.installs.is_empty());
+    // Join an existing record only when it has the very same baseline (no
+    // commit, same content): a shared record's hash and commit are never
+    // rewritten, and the new install never inherits another install's commit.
     if let Some(e) = registry.skills.iter_mut().find(|e| {
         e.name == entry.name
             && e.source.url == source.url
             && e.source.skill_path == source.skill_path
+            && e.source.commit.is_none()
+            && e.content_hash == hash
     }) {
         e.installs.push(install);
-        e.content_hash = hash;
         e.updated_at = now;
     } else {
         registry.skills.push(RegistryEntry {
@@ -400,5 +431,105 @@ mod tests {
         register_manual(&mut reg, &e, "https://github.com/a/b/", "skills/demo").unwrap();
         assert_eq!(reg.skills.len(), 1);
         assert_eq!(reg.skills[0].installs.len(), 1);
+    }
+
+    fn manual_url() -> &'static str {
+        "https://github.com/o/r"
+    }
+
+    #[test]
+    fn register_manual_never_rewrites_a_shared_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        for d in [&a, &b] {
+            fs::create_dir_all(d).unwrap();
+            fs::write(d.join("SKILL.md"), "same").unwrap();
+        }
+        let hash = dir_content_hash(&a).unwrap();
+        let rec = |d: &Path| InstallRecord {
+            tool: Tool::Claude,
+            scope: SkillScope::Global,
+            dir: d.to_string_lossy().into_owned(),
+        };
+        let shared = RegistryEntry {
+            name: "demo".into(),
+            source: SkillSource {
+                url: normalize_url(manual_url()),
+                git_ref: None,
+                commit: Some("c1".into()),
+                skill_path: "skills/demo".into(),
+                origin: SourceOrigin::Registry,
+            },
+            clone_url: Some(manual_url().into()),
+            installs: vec![rec(&a), rec(&b)],
+            content_hash: "baseline-of-install-a".into(),
+            installed_at: 1,
+            updated_at: 2,
+        };
+        let mut reg = Registry {
+            version: 1,
+            skills: vec![shared.clone()],
+        };
+        register_manual(&mut reg, &entry(&b), manual_url(), "skills/demo").unwrap();
+        // The shared entry lost only the registered install; hash and commit stay.
+        let old = reg.skills.iter().find(|e| e.source.commit.is_some()).unwrap();
+        assert_eq!(old.installs, vec![rec(&a)]);
+        assert_eq!(old.content_hash, "baseline-of-install-a");
+        assert_eq!(old.source.commit.as_deref(), Some("c1"));
+        assert_eq!(old.updated_at, 2);
+        // The registered install has its own entry: no commit, current content as baseline.
+        let own = reg.skills.iter().find(|e| e.source.origin == SourceOrigin::Manual).unwrap();
+        assert_eq!(own.installs, vec![rec(&b)]);
+        assert_eq!(own.source.commit, None);
+        assert_eq!(own.content_hash, hash);
+        assert_eq!(reg.skills.len(), 2);
+    }
+
+    #[test]
+    fn register_manual_only_joins_an_identical_baseline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        for d in [&a, &b] {
+            fs::create_dir_all(d).unwrap();
+            fs::write(d.join("SKILL.md"), "same").unwrap();
+        }
+        let mut reg = Registry::default();
+        register_manual(&mut reg, &entry(&a), manual_url(), "p").unwrap();
+        register_manual(&mut reg, &entry(&b), manual_url(), "p").unwrap();
+        assert_eq!(reg.skills.len(), 1, "same content, no commit: one record");
+        assert_eq!(reg.skills[0].installs.len(), 2);
+        // Different content: its own record, the first one's hash is untouched.
+        let c = tmp.path().join("c");
+        fs::create_dir_all(&c).unwrap();
+        fs::write(c.join("SKILL.md"), "edited").unwrap();
+        let first_hash = reg.skills[0].content_hash.clone();
+        register_manual(&mut reg, &entry(&c), manual_url(), "p").unwrap();
+        assert_eq!(reg.skills.len(), 2);
+        assert_eq!(reg.skills[0].content_hash, first_hash);
+    }
+
+    #[test]
+    fn newer_registry_version_is_backed_up_and_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills-registry.json");
+        let future = r#"{"version": 2, "skills": [], "extra": {"x": 1}}"#;
+        fs::write(&path, future).unwrap();
+        let err = load_registry(&path).unwrap_err();
+        assert!(err.contains("version 2"), "{err}");
+        assert_eq!(fs::read_to_string(tmp.path().join("skills-registry.json.bak")).unwrap(), future);
+        assert_eq!(fs::read_to_string(&path).unwrap(), future, "never overwritten");
+        // Loading again does not pile up more backups.
+        assert!(load_registry(&path).is_err());
+        let baks: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".bak"))
+            .collect();
+        assert_eq!(baks.len(), 1);
+        // Version 1 and a missing version still load.
+        fs::write(&path, r#"{"version": 1, "skills": []}"#).unwrap();
+        assert_eq!(load_registry(&path).unwrap(), Registry::default());
     }
 }

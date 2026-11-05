@@ -1,14 +1,23 @@
 import * as React from "react";
 import { Package, TriangleAlert } from "lucide-react";
 import { listMemories } from "@/api/memory";
-import { checkSkillUpdates, deleteSkill, gitAvailable, listSkills, onSkillsChanged, updateSkill } from "@/api/skills";
-import type { MemoryIndex, SkillEntry, UpdateStatus } from "@/api/types";
+import {
+  checkSkillUpdates,
+  deleteSkill,
+  gitAvailable,
+  listDeletedSkillBackups,
+  listSkills,
+  onSkillsChanged,
+  updateSkill,
+} from "@/api/skills";
+import type { DeletedSkill, MemoryIndex, SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { basename, fmt } from "@/pages/memory/paths";
 import { AddSkillDialog } from "./AddSkillDialog";
 import { BackupsDrawer } from "./BackupsDrawer";
+import { DeletedSkillDetail } from "./DeletedSkillDetail";
 import { PARTIAL_SAVE_PREFIX, describeError } from "./flowParts";
 import { SkillDetail } from "./SkillDetail";
 import { SkillList } from "./SkillList";
@@ -51,7 +60,11 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
   const [checkError, setCheckError] = React.useState<string | null>(null);
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
   const [dirty, setDirty] = React.useState(false);
-  const [pending, setPending] = React.useState<SkillEntry | null>(null);
+  // Deleted skills (their backups remain) and the opened one; opening a skill clears it.
+  const [deleted, setDeleted] = React.useState<DeletedSkill[]>([]);
+  const [selectedDeleted, setSelectedDeleted] = React.useState<string | undefined>();
+  // The selection change waiting for the "discard unsaved edits" confirmation.
+  const [pending, setPending] = React.useState<{ run: () => void } | null>(null);
   // Flows: each one is opened for one concrete entry and never follows the selection afterwards.
   const [addOpen, setAddOpen] = React.useState(false);
   const [syncEntry, setSyncEntry] = React.useState<SkillEntry | null>(null);
@@ -66,14 +79,18 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
   const widthRef = React.useRef(width);
   widthRef.current = width;
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (): Promise<SkillEntry[] | null> => {
+    // The deleted group is secondary: a failure there never hides the list.
+    listDeletedSkillBackups().then(setDeleted, () => setDeleted([]));
     try {
       const list = await listSkills();
       setEntries(list);
       setError(null);
+      return list;
     } catch (e) {
       setError(errorMessage(e));
       setEntries((prev) => prev ?? []);
+      return null;
     }
   }, []);
 
@@ -133,11 +150,25 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
     [entries, selected],
   );
 
-  const select = (entry: SkillEntry) => {
-    if (entryKey(entry) === selectedKey) return;
-    if (dirty) setPending(entry);
-    else setSelectedKey(entryKey(entry));
+  const open = (run: () => void) => {
+    if (dirty) setPending({ run });
+    else run();
   };
+
+  const select = (entry: SkillEntry) => {
+    if (entryKey(entry) === selectedKey && selectedDeleted === undefined) return;
+    open(() => {
+      setSelectedDeleted(undefined);
+      setSelectedKey(entryKey(entry));
+    });
+  };
+
+  const selectDeleted = (item: DeletedSkill) => {
+    if (item.bucket === selectedDeleted) return;
+    open(() => setSelectedDeleted(item.bucket));
+  };
+
+  const deletedItem = deleted.find((d) => d.bucket === selectedDeleted);
 
   const check = async () => {
     setChecking(true);
@@ -256,7 +287,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
     );
   }
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && deleted.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3">
         <Package className="size-8 text-muted-foreground" aria-hidden="true" />
@@ -289,13 +320,16 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
           entries={entries}
           projectName={projectName}
           updates={updates}
-          selectedKey={selectedKey}
+          selectedKey={deletedItem ? undefined : selectedKey}
           onSelect={select}
           gitOk={gitOk}
           checking={checking}
           checkedUpdates={checkedUpdates}
           onCheck={() => void check()}
           onAdd={() => setAddOpen(true)}
+          deleted={deleted}
+          selectedDeleted={deletedItem?.bucket}
+          onSelectDeleted={selectDeleted}
         />
         <div
           role="separator"
@@ -317,7 +351,22 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
             <span className="text-foreground">{checkError ?? fmt(s.loadFailed, { message: error ?? "" })}</span>
           </div>
         ) : null}
-        {selected ? (
+        {deletedItem ? (
+          <DeletedSkillDetail
+            key={deletedItem.bucket}
+            item={deletedItem}
+            projectName={projectName}
+            onRestored={(item, dir) => {
+              push("success", fmt(s.deletedRestored, { name: item.name }));
+              setSelectedDeleted(undefined);
+              const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+              void load().then((list) => {
+                const back = list?.find((e) => norm(e.dir) === norm(dir));
+                if (back) setSelectedKey(entryKey(back));
+              });
+            }}
+          />
+        ) : selected ? (
           <SkillDetail
             key={entryKey(selected)}
             entry={selected}
@@ -351,7 +400,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
         onConfirm={() => {
           if (pending) {
             setDirty(false);
-            setSelectedKey(entryKey(pending));
+            pending.run();
           }
           setPending(null);
         }}

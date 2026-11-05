@@ -88,6 +88,7 @@ pub fn skill_roots(paths: &AgentPaths, home: &Path, project_roots: &[String]) ->
         let r = Path::new(r);
         v.push(r.join(".claude").join("skills"));
         v.push(r.join(".agents").join("skills"));
+        v.push(r.join(".codex").join("skills"));
     }
     v
 }
@@ -403,5 +404,25 @@ mod tests {
         }
         // Events keep coming every 200ms, yet the deadline is capped at first + 1s.
         assert_eq!(d.deadline(), Some(t0 + ms(1000)));
+    }
+
+    #[test]
+    fn skill_roots_include_project_codex_skills() {
+        let paths = AgentPaths::from_home(Path::new("/h"));
+        let roots = skill_roots(&paths, Path::new("/h"), &["/work/app".to_string()]);
+        let has = |rel: &str| {
+            roots
+                .iter()
+                .any(|r| normalize_path(&r.to_string_lossy()) == normalize_path(rel))
+        };
+        assert!(has("/work/app/.claude/skills"));
+        assert!(has("/work/app/.agents/skills"));
+        assert!(has("/work/app/.codex/skills"));
+        assert!(is_skill_relevant(
+            Path::new("/work/app/.codex/skills/x/SKILL.md"),
+            &paths,
+            Path::new("/h"),
+            &["/work/app".to_string()]
+        ));
     }
 }

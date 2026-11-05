@@ -18,6 +18,10 @@ pub struct ParsedSource {
     pub clone_url: String,
     pub git_ref: Option<String>,
     pub skill_path: Option<String>,
+    /// Everything after `tree/` of a GitHub tree URL; the ref may span several
+    /// segments (`feature/x`), see [`resolve_tree_ref`].
+    #[serde(skip)]
+    pub tree_tail: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -73,7 +77,9 @@ fn clone_url_of(s: &str) -> String {
 /// addresses and other `https://` git URLs. `url` is the normalized identity,
 /// `clone_url` keeps the user's scheme (credentials stripped) for network calls.
 pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
+    // A pasted browser URL may carry `?tab=...` / `#readme`.
     let s = input.trim();
+    let s = s.split(['?', '#']).next().unwrap_or("").trim();
     let err = || format!("无法识别的来源: {input}");
     if s.is_empty() || s.contains(char::is_whitespace) || s.starts_with('-') {
         return Err(err());
@@ -83,6 +89,7 @@ pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
         clone_url,
         git_ref: None,
         skill_path: None,
+        tree_tail: Vec::new(),
     };
     // owner/repo shorthand.
     if !s.contains("://") && !s.contains(':') && !s.contains('@') {
@@ -113,6 +120,7 @@ pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
                 url,
                 git_ref: Some(segs[3].to_string()),
                 skill_path: Some(skill_path).filter(|p| !p.is_empty()),
+                tree_tail: segs[3..].iter().map(|s| s.to_string()).collect(),
             });
         }
         if segs.len() != 2 {
@@ -120,6 +128,23 @@ pub fn parse_github_input(input: &str) -> Result<ParsedSource, String> {
         }
     }
     Ok(plain(normalize_url(s), clone_url_of(s)))
+}
+
+/// A GitHub `tree/<ref>/<path>` URL does not say where the ref ends. With the
+/// remote's branch / tag names, the longest prefix of the tail that is a real
+/// ref wins (`feature/x/skills/a` -> ref `feature/x`, path `skills/a`). With no
+/// match (or no names, e.g. offline) the first segment stays the ref.
+pub fn resolve_tree_ref(parsed: &mut ParsedSource, refs: &[String]) {
+    let tail = &parsed.tree_tail;
+    for k in (1..=tail.len()).rev() {
+        let cand = tail[..k].join("/");
+        let path = tail[k..].join("/");
+        if refs.iter().any(|r| *r == cand) && valid_ref(&cand) && valid_subpath(&path) {
+            parsed.git_ref = Some(cand);
+            parsed.skill_path = Some(path).filter(|p| !p.is_empty());
+            return;
+        }
+    }
 }
 
 /// A cache directory counts only when a clone finished into it.
@@ -358,5 +383,70 @@ mod tests {
         cleanup_cache(tmp.path(), Duration::ZERO);
         assert!(!tmp.path().join("e1").exists() && !tmp.path().join("e2").exists());
         cleanup_cache(&tmp.path().join("missing"), Duration::ZERO);
+    }
+
+    #[test]
+    fn parse_strips_query_and_fragment() {
+        let s = p("https://github.com/o/r/tree/main/skills/demo?tab=readme-ov-file#install");
+        assert_eq!(s.git_ref.as_deref(), Some("main"));
+        assert_eq!(s.skill_path.as_deref(), Some("skills/demo"));
+        assert_eq!(p("https://github.com/o/r?tab=readme").url, "https://github.com/o/r");
+        assert_eq!(p("https://github.com/o/r#readme").url, "https://github.com/o/r");
+        assert_eq!(p("https://github.com/o/r.git?x=1#y").url, "https://github.com/o/r");
+        assert!(parse_github_input("?tab=x").is_err());
+    }
+
+    fn refs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn tree_ref_with_slash_resolves_to_the_longest_remote_ref() {
+        let url = "https://github.com/o/r/tree/feature/x/skills/a";
+        // Without refs (offline) the first segment stays the ref.
+        let mut s = p(url);
+        resolve_tree_ref(&mut s, &[]);
+        assert_eq!(s.git_ref.as_deref(), Some("feature"));
+        assert_eq!(s.skill_path.as_deref(), Some("x/skills/a"));
+        // `feature/x` is a real branch.
+        let mut s = p(url);
+        resolve_tree_ref(&mut s, &refs(&["main", "feature/x"]));
+        assert_eq!(s.git_ref.as_deref(), Some("feature/x"));
+        assert_eq!(s.skill_path.as_deref(), Some("skills/a"));
+        // The longest match wins over a shorter one.
+        let mut s = p(url);
+        resolve_tree_ref(&mut s, &refs(&["feature", "feature/x", "feature/x/skills"]));
+        assert_eq!(s.git_ref.as_deref(), Some("feature/x/skills"));
+        assert_eq!(s.skill_path.as_deref(), Some("a"));
+        // The whole tail is the ref: no path.
+        let mut s = p("https://github.com/o/r/tree/feature/x");
+        resolve_tree_ref(&mut s, &refs(&["feature/x"]));
+        assert_eq!(s.git_ref.as_deref(), Some("feature/x"));
+        assert_eq!(s.skill_path, None);
+        // A short ref stays when nothing longer exists.
+        let mut s = p("https://github.com/o/r/tree/main/skills/a");
+        resolve_tree_ref(&mut s, &refs(&["main", "feature/x"]));
+        assert_eq!(s.git_ref.as_deref(), Some("main"));
+        assert_eq!(s.skill_path.as_deref(), Some("skills/a"));
+        // Refs that git would take as options are never chosen.
+        let mut s = p(url);
+        resolve_tree_ref(&mut s, &refs(&["feature/x/../y"]));
+        assert_eq!(s.git_ref.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn tree_ref_resolves_against_a_real_bare_repo() {
+        use crate::skills::git::testutil::{commit_file, git, make_remote};
+        use crate::skills::git::{GitRunner, SystemGit};
+        let t = tempfile::tempdir().unwrap();
+        let (url, work) = make_remote(t.path());
+        git(&work, &["checkout", "-q", "-b", "feature/x"]);
+        commit_file(&work, "f.txt");
+        git(&work, &["push", "-q", "origin", "feature/x"]);
+        let names = SystemGit::new().ls_remote_refs(&url).unwrap();
+        let mut s = p("https://github.com/o/r/tree/feature/x/skills/a");
+        resolve_tree_ref(&mut s, &names);
+        assert_eq!(s.git_ref.as_deref(), Some("feature/x"));
+        assert_eq!(s.skill_path.as_deref(), Some("skills/a"));
     }
 }

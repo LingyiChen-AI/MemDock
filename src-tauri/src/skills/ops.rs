@@ -14,8 +14,10 @@ use crate::paths::AgentPaths;
 use crate::projects::normalize_path;
 use crate::skills::frontmatter::parse_frontmatter;
 use crate::skills::fsops::{
-    BackupInfo, MAX_ZIP_BYTES, atomic_replace_dir, backup_dir, cleanup_leftovers, copy_dir,
-    copy_dir_confined, extract_zip, now_millis, prune_backups, remove_any,
+    BackupInfo, BackupMeta, DeletedSkill, MAX_ZIP_BYTES, atomic_replace_dir, backup_bucket,
+    backup_dir, carry_live_dirs, cleanup_leftovers, copy_dir, copy_dir_confined, extract_zip,
+    list_deleted, now_millis, prune_backups, read_meta, remove_any, restore_dir, uncarry_live_dirs,
+    valid_backup_id, valid_bucket,
 };
 use crate::skills::git::{GitError, GitRunner};
 use crate::skills::git_cache::{CACHE_MAX_AGE, cache_dir_for, cleanup_cache, is_complete_cache};
@@ -54,16 +56,28 @@ impl OpsCtx {
     }
 }
 
-/// Returns a complete clone of `url` at the remote commit of `git_ref`, as
-/// `(cache dir, commit)`. Under `cache_lock`: old entries are cleaned first,
-/// only complete caches are reused, anything else is re-cloned.
+fn is_full_sha(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Returns a complete clone of `url` as `(cache dir, commit)`. With `pin` (a
+/// full commit id) that exact commit is used and `ls-remote` is skipped;
+/// otherwise the remote commit of `git_ref`. Under `cache_lock`: old entries
+/// are cleaned first, only complete caches are reused, anything else is
+/// re-cloned. The cache directory is named after the commit the clone really
+/// holds, even when the remote moved between `ls-remote` and the clone.
 pub fn ensure_cache(
     ctx: &OpsCtx,
     url: &str,
     clone_url: &str,
     git_ref: Option<&str>,
+    pin: Option<&str>,
 ) -> Result<(PathBuf, String), OpsError> {
-    let head = ctx.git.ls_remote_head(clone_url, git_ref).map_err(git_err)?;
+    let pin = pin.filter(|p| is_full_sha(p));
+    let head = match pin {
+        Some(p) => p.to_string(),
+        None => ctx.git.ls_remote_head(clone_url, git_ref).map_err(git_err)?,
+    };
     let _g = ctx.cache_lock.lock().unwrap_or_else(|e| e.into_inner());
     cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
     let cache = cache_dir_for(&ctx.cache_root(), url, &head);
@@ -75,9 +89,21 @@ pub fn ensure_cache(
     }
     let commit = ctx
         .git
-        .shallow_clone(clone_url, git_ref, &cache)
+        .shallow_clone(clone_url, pin.or(git_ref), &cache)
         .map_err(git_err)?;
-    Ok((cache, commit))
+    if commit == head {
+        return Ok((cache, commit));
+    }
+    let actual = cache_dir_for(&ctx.cache_root(), url, &commit);
+    if is_complete_cache(&actual) {
+        remove_any(&cache)?;
+        return Ok((actual, commit));
+    }
+    if actual.exists() {
+        remove_any(&actual)?;
+    }
+    fs::rename(&cache, &actual)?;
+    Ok((actual, commit))
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -144,6 +170,8 @@ pub enum InstallFrom {
         git_ref: Option<String>,
         /// `""` when the skill is the repository root.
         skill_path: String,
+        /// Install exactly this commit (the one the user inspected).
+        commit: Option<String>,
     },
     Folder {
         path: String,
@@ -341,12 +369,13 @@ fn prepare(ctx: &OpsCtx, from: &InstallFrom, staging: &Path) -> Result<Prepared,
             clone_url,
             git_ref,
             skill_path,
+            commit: pinned,
         } => {
             let sub = repo_subpath(skill_path)?;
             if !ctx.git.available() {
                 return Err(OpsError::GitUnavailable);
             }
-            let (cache, commit) = ensure_cache(ctx, url, clone_url, git_ref.as_deref())?;
+            let (cache, commit) = ensure_cache(ctx, url, clone_url, git_ref.as_deref(), pinned.as_deref())?;
             let skill_src = cache.join(&sub);
             if !skill_src.is_dir() {
                 return Err(invalid(format!(
@@ -392,14 +421,39 @@ fn prepare(ctx: &OpsCtx, from: &InstallFrom, staging: &Path) -> Result<Prepared,
     }
 }
 
+/// Backup meta of a skill directory that is about to be replaced.
+fn meta_for(dir: &Path, name: &str, t: &InstallTarget) -> BackupMeta {
+    BackupMeta::new(&dir.to_string_lossy(), name, t.tool, t.scope.clone())
+}
+
+/// Backup meta of a scanned skill (`dir` is the link itself for symlinked skills).
+fn meta_of(entry: &SkillEntry) -> BackupMeta {
+    BackupMeta::new(
+        &entry.dir,
+        &entry.name,
+        entry.tool,
+        entry.scope.clone(),
+    )
+}
+
+/// Name for temp siblings: the directory's own name (any characters).
+fn dir_base(dir: &Path) -> String {
+    dir.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "skill".into())
+}
+
 /// Copies `content` next to `dir`, then moves it into place (backing up and
-/// atomically replacing an existing directory).
+/// atomically replacing an existing directory). With `carry`, the live `.git`
+/// and `node_modules` of a real directory move into the new one (and back on
+/// failure), as a symlinked skill keeps them in place anyway.
 fn place(
     ctx: &OpsCtx,
     content: &Path,
     dir: &Path,
-    name: &str,
+    meta: &BackupMeta,
     overwrite: bool,
+    carry: bool,
 ) -> Result<(), OpsError> {
     let exists = fs::symlink_metadata(dir).is_ok();
     if exists && !overwrite {
@@ -411,14 +465,20 @@ fn place(
     fs::create_dir_all(parent)?;
     cleanup_leftovers(parent);
     let sibling = parent.join(format!(
-        ".{name}.memdock-new-{}-{}",
+        ".{}.memdock-new-{}-{}",
+        dir_base(dir),
         std::process::id(),
         now_millis()
     ));
+    let mut moved: Vec<&'static str> = Vec::new();
     let result = (|| -> Result<(), OpsError> {
         copy_dir(content, &sibling)?;
         if exists {
-            backup_dir(dir, &ctx.backups_root(), name)?;
+            backup_dir(dir, &ctx.backups_root(), meta)?;
+            let is_link = fs::symlink_metadata(dir).is_ok_and(|m| m.is_symlink());
+            if carry && !is_link {
+                moved = carry_live_dirs(dir, &sibling)?;
+            }
             atomic_replace_dir(&sibling, dir)?;
         } else {
             fs::rename(&sibling, dir)?;
@@ -426,6 +486,7 @@ fn place(
         Ok(())
     })();
     if result.is_err() {
+        uncarry_live_dirs(dir, &sibling, &moved);
         let _ = fs::remove_dir_all(&sibling);
     }
     result
@@ -560,7 +621,8 @@ pub fn install(
     let mut done: Vec<(InstallTarget, PathBuf)> = Vec::new();
     let mut failure = None;
     for (t, dir) in dirs {
-        match place(ctx, &prepared.content, &dir, &name, overwrite) {
+        let meta = meta_for(&dir, &name, &t);
+        match place(ctx, &prepared.content, &dir, &meta, overwrite, false) {
             Ok(()) => done.push((t, dir)),
             Err(e) => {
                 failure = Some(e);
@@ -603,12 +665,18 @@ pub struct UpdateStatus {
     pub local_modified: bool,
     /// No registry content hash to compare against: treated as modified.
     pub local_state_unknown: bool,
+    /// The skill is a subdirectory of a larger git repository: pulling would
+    /// update the whole repository, so Memdock leaves it to the user.
+    pub not_updatable_subdir: bool,
+    /// The repository root, when `not_updatable_subdir`.
+    pub repo_root: Option<String>,
     pub error: Option<String>,
 }
 
 /// Scans skills and attaches their inferred source.
 pub fn scan_with_sources(ctx: &OpsCtx) -> Result<(Vec<SkillEntry>, Registry), OpsError> {
-    let reg = load_registry(&ctx.registry_path).map_err(io_msg)?;
+    // Read-only: a registry this build cannot read still lets the list show.
+    let reg = load_registry(&ctx.registry_path).unwrap_or_default();
     let lock = read_skill_lock(&ctx.home);
     let mut all = scan_skills(&ctx.paths, &ctx.home, &ctx.projects);
     for e in all.iter_mut().filter(|e| !e.readonly) {
@@ -636,6 +704,19 @@ fn local_state(entry: &SkillEntry, reg: Option<&RegistryEntry>) -> (bool, bool) 
 
 fn is_pull_origin(o: SourceOrigin) -> bool {
     matches!(o, SourceOrigin::GitDir | SourceOrigin::SymlinkRepo)
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let canon = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    normalize_path(&canon(a).to_string_lossy()) == normalize_path(&canon(b).to_string_lossy())
+}
+
+/// The repository root when the skill's real directory lies inside a larger
+/// repository (so it cannot be updated by pulling just this skill).
+fn enclosing_repo_root(ctx: &OpsCtx, entry: &SkillEntry) -> Option<PathBuf> {
+    let base = real_dir(entry);
+    let root = ctx.git.repo_root(&base)?;
+    (!same_dir(&root, &base)).then_some(root)
 }
 
 /// Directory that holds the files (the link target for symlinked skills).
@@ -692,12 +773,22 @@ pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> 
             has_update: false,
             local_modified,
             local_state_unknown: unknown,
+            not_updatable_subdir: false,
+            repo_root: None,
             error: None,
         };
         if !git_ok {
             st.error = Some(git_msg(&GitError::NotInstalled));
             out.push(st);
             continue;
+        }
+        if is_pull_origin(source.origin) {
+            if let Some(root) = enclosing_repo_root(ctx, e) {
+                st.not_updatable_subdir = true;
+                st.repo_root = Some(root.to_string_lossy().into_owned());
+                out.push(st);
+                continue;
+            }
         }
         let url = network_url(ctx, e, source, reg_entry);
         let key = (url.clone(), source.git_ref.clone());
@@ -719,17 +810,6 @@ pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> 
         out.push(st);
     }
     out
-}
-
-/// Backup bucket / temp-name key: the skill directory's own name, never the
-/// (untrusted) frontmatter name.
-pub fn skill_key(entry: &SkillEntry) -> Result<String, OpsError> {
-    let name = Path::new(&entry.dir)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    validate_name(&name).map_err(invalid)?;
-    Ok(name)
 }
 
 const REGISTRY_NOT_SAVED: &str = "files updated, registry not saved";
@@ -840,6 +920,7 @@ pub fn update(
     skill_id: &str,
     accept_local_changes: bool,
 ) -> Result<SkillEntry, OpsError> {
+    load_registry(&ctx.registry_path).map_err(io_msg)?;
     let (entry, reg) = lookup(ctx, skill_id)?;
     if entry.readonly {
         return Err(OpsError::ReadOnly);
@@ -857,6 +938,12 @@ pub fn update(
         return Err(OpsError::GitUnavailable);
     }
     if is_pull_origin(source.origin) {
+        if let Some(root) = enclosing_repo_root(ctx, &entry) {
+            return Err(invalid(format!(
+                "这个 skill 位于仓库 {} 的子目录，请在该仓库里自行更新",
+                root.display()
+            )));
+        }
         update_by_pull(ctx, &entry)?;
     } else {
         let url = network_url(ctx, &entry, &source, reg_entry);
@@ -865,30 +952,30 @@ pub fn update(
     rescan_entry(ctx, &entry.id)
 }
 
-/// Skills that live in a git working tree: fast-forward the repository.
+/// Skills that are themselves a git working tree (or a link to one): fast-forward the repository.
 fn update_by_pull(ctx: &OpsCtx, entry: &SkillEntry) -> Result<(), OpsError> {
     let base = real_dir(entry);
     let root = ctx
         .git
         .repo_root(&base)
         .ok_or_else(|| invalid("skill is not inside a git repository"))?;
-    let key = skill_key(entry)?;
+    let bucket = backup_bucket(Path::new(&entry.dir));
     // Back up outside the real bucket so a failed pull neither leaves a
     // useless backup nor prunes older ones.
     let stage = TempDir::new(&ctx.staging_root())?;
-    let info = backup_dir(&base, &stage.0, &key)?;
+    let info = backup_dir(&base, &stage.0, &meta_of(entry))?;
     ctx.git.pull_ff_only(&root).map_err(git_err)?;
-    let dest_base = ctx.backups_root().join(&key);
+    let dest_base = ctx.backups_root().join(&bucket);
     fs::create_dir_all(&dest_base)?;
     let mut id = info.id.parse::<i64>().unwrap_or_else(|_| now_millis());
     while dest_base.join(id.to_string()).exists() {
         id += 1;
     }
     fs::rename(
-        stage.0.join(&key).join(&info.id),
+        stage.0.join(&bucket).join(&info.id),
         dest_base.join(id.to_string()),
     )?;
-    prune_backups(&ctx.backups_root(), &key, &id.to_string());
+    prune_backups(&ctx.backups_root(), &bucket, &id.to_string());
     Ok(())
 }
 
@@ -900,7 +987,7 @@ fn update_by_clone(
     url: &str,
 ) -> Result<(), OpsError> {
     let sub = repo_subpath(&source.skill_path)?;
-    let (cache, commit) = ensure_cache(ctx, &source.url, url, source.git_ref.as_deref())?;
+    let (cache, commit) = ensure_cache(ctx, &source.url, url, source.git_ref.as_deref(), None)?;
     let skill_src = cache.join(&sub);
     if !skill_src.is_dir() {
         return Err(invalid(format!(
@@ -922,23 +1009,23 @@ fn update_by_clone(
     if !content.join("SKILL.md").is_file() {
         return Err(invalid("SKILL.md not found in the updated skill"));
     }
-    let key = skill_key(entry)?;
-    place(ctx, &content, Path::new(&entry.dir), &key, true)?;
+    place(ctx, &content, Path::new(&entry.dir), &meta_of(entry), true, true)?;
     record_state(ctx, entry, source, url, Some(commit), true)
 }
 
 /// Restores a backup. The current state is backed up first, so a rollback can
 /// itself be undone.
 pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEntry, OpsError> {
+    load_registry(&ctx.registry_path).map_err(io_msg)?;
     let (entry, reg) = lookup(ctx, skill_id)?;
     if entry.readonly {
         return Err(OpsError::ReadOnly);
     }
-    if backup_id.is_empty() || !backup_id.bytes().all(|b| b.is_ascii_digit()) {
+    if !valid_backup_id(backup_id) {
         return Err(invalid("invalid backup id"));
     }
-    let key = skill_key(&entry)?;
-    let backup = ctx.backups_root().join(&key).join(backup_id);
+    let bucket = backup_bucket(Path::new(&entry.dir));
+    let backup = ctx.backups_root().join(&bucket).join(backup_id);
     if !backup.is_dir() {
         return Err(invalid(format!("backup not found: {backup_id}")));
     }
@@ -949,30 +1036,25 @@ pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEn
     cleanup_leftovers(parent);
     let sibling = parent.join(format!(
         ".{}.memdock-new-{}-{}",
-        key,
+        dir_base(&dir),
         std::process::id(),
         now_millis()
     ));
-    let is_link = fs::symlink_metadata(&dir)
-        .map(|m| m.is_symlink())
-        .unwrap_or(false);
-    let live_git = dir.join(".git");
-    let mut moved_git = false;
+    let is_link = fs::symlink_metadata(&dir).is_ok_and(|m| m.is_symlink());
+    let mut moved: Vec<&'static str> = Vec::new();
     let result = (|| -> Result<(), OpsError> {
-        copy_dir(&backup, &sibling)?;
-        backup_dir(&dir, &ctx.backups_root(), &key)?;
-        // copy_dir never brings `.git` back; carry the live repository over.
-        if !is_link && fs::symlink_metadata(&live_git).is_ok() {
-            fs::rename(&live_git, sibling.join(".git"))?;
-            moved_git = true;
+        let meta = read_meta(&ctx.backups_root(), &bucket, backup_id);
+        restore_dir(&backup, &sibling, meta.as_ref(), false)?;
+        backup_dir(&dir, &ctx.backups_root(), &meta_of(&entry))?;
+        // The restore never brings `.git` / `node_modules` back; carry the live ones over.
+        if !is_link {
+            moved = carry_live_dirs(&dir, &sibling)?;
         }
         atomic_replace_dir(&sibling, &dir)?;
         Ok(())
     })();
     if result.is_err() {
-        if moved_git {
-            let _ = fs::rename(sibling.join(".git"), &live_git);
-        }
+        uncarry_live_dirs(&dir, &sibling, &moved);
         let _ = fs::remove_dir_all(&sibling);
     }
     result?;
@@ -1010,7 +1092,6 @@ pub fn delete(ctx: &OpsCtx, skill_id: &str) -> Result<BackupInfo, OpsError> {
     if entry.readonly {
         return Err(OpsError::ReadOnly);
     }
-    let key = skill_key(&entry)?;
     // Fail early on an unreadable registry, before touching any file.
     load_registry(&ctx.registry_path).map_err(io_msg)?;
     let dir = PathBuf::from(&entry.dir);
@@ -1020,7 +1101,7 @@ pub fn delete(ctx: &OpsCtx, skill_id: &str) -> Result<BackupInfo, OpsError> {
     let info = if entry.is_symlink && !real.is_dir() {
         no_backup()
     } else {
-        backup_dir(&real, &ctx.backups_root(), &key)?
+        backup_dir(&real, &ctx.backups_root(), &meta_of(&entry))?
     };
     // remove_any never follows a link: remove_file / remove_dir for links,
     // remove_dir_all only for real directories.
@@ -1089,7 +1170,12 @@ pub fn sync_to(
     overwrite: bool,
 ) -> Result<SkillEntry, OpsError> {
     let (entry, reg) = lookup(ctx, skill_id)?;
-    let key = skill_key(&entry)?;
+    let key = dir_base(Path::new(&entry.dir));
+    if let Err(m) = validate_name(&key) {
+        return Err(invalid(format!(
+            "目录名 {key:?} 不符合同步的命名规则（小写字母、数字、- _ .），请先把该 skill 的文件夹重命名后再同步（{m}）"
+        )));
+    }
     if is_readonly_location(&target, &key) {
         return Err(OpsError::ReadOnly);
     }
@@ -1118,7 +1204,14 @@ pub fn sync_to(
     if !content.join("SKILL.md").is_file() {
         return Err(invalid("SKILL.md not found in the skill"));
     }
-    place(ctx, &content, &dir, &key, overwrite)?;
+    place(
+        ctx,
+        &content,
+        &dir,
+        &meta_for(&dir, &key, &target),
+        overwrite,
+        false,
+    )?;
     let installed = [(target, dir.clone())];
     // The copy inherits the source's local state: a clean baseline only when
     // the source matches its recorded hash.
@@ -1126,6 +1219,71 @@ pub fn sync_to(
     update_registry(ctx, &installed, &key, source.as_ref(), !modified)
         .map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))?;
     rescan_entry(ctx, &normalize_path(&dir.to_string_lossy()))
+}
+
+/// Skills that were deleted (their directory is gone) but still have backups.
+pub fn list_deleted_skills(ctx: &OpsCtx) -> Vec<DeletedSkill> {
+    list_deleted(&ctx.backups_root())
+}
+
+/// Absolute path of a backup bucket, for showing / opening it.
+pub fn backup_folder(ctx: &OpsCtx, bucket: &str) -> Result<PathBuf, OpsError> {
+    if !valid_bucket(bucket) {
+        return Err(invalid("invalid backup bucket"));
+    }
+    let p = ctx.backups_root().join(bucket);
+    if !p.is_dir() {
+        return Err(invalid(format!("backup folder not found: {bucket}")));
+    }
+    Ok(fs::canonicalize(&p).unwrap_or(p))
+}
+
+/// Restores a deleted skill from a backup into its original directory. Only
+/// when that directory does not exist and its parent does; the restored skill
+/// is a plain local skill (no registry entry). Returns the restored directory.
+pub fn restore_deleted(
+    ctx: &OpsCtx,
+    bucket: &str,
+    backup_id: &str,
+) -> Result<String, OpsError> {
+    if !valid_bucket(bucket) || !valid_backup_id(backup_id) {
+        return Err(invalid("invalid backup"));
+    }
+    let root = ctx.backups_root();
+    let backup = root.join(bucket).join(backup_id);
+    if !backup.is_dir() {
+        return Err(invalid(format!("backup not found: {backup_id}")));
+    }
+    let meta = read_meta(&root, bucket, backup_id)
+        .ok_or_else(|| invalid("这个备份缺少来源信息，无法自动恢复"))?;
+    if backup_bucket(Path::new(&meta.dir)) != bucket {
+        return Err(invalid("备份的来源信息与备份位置不一致，无法恢复"));
+    }
+    let dir = PathBuf::from(&meta.dir);
+    if fs::symlink_metadata(&dir).is_ok() {
+        return Err(invalid(format!(
+            "原位置已经存在同名目录，不会覆盖：{}",
+            dir.display()
+        )));
+    }
+    let parent = dir
+        .parent()
+        .filter(|p| p.is_dir())
+        .ok_or_else(|| invalid(format!("原位置的上级目录已不存在：{}", dir.display())))?;
+    cleanup_leftovers(parent);
+    let sibling = parent.join(format!(
+        ".{}.memdock-new-{}-{}",
+        dir_base(&dir),
+        std::process::id(),
+        now_millis()
+    ));
+    let result = restore_dir(&backup, &sibling, Some(&meta), true)
+        .and_then(|_| fs::rename(&sibling, &dir));
+    if let Err(e) = result {
+        let _ = fs::remove_dir_all(&sibling);
+        return Err(e.into());
+    }
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 /// Records a user-supplied source for a skill whose origin is unknown.
@@ -1182,6 +1340,11 @@ mod tests {
     fn write(p: &Path, text: &str) {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, text).unwrap();
+    }
+
+    /// Backup bucket of the Claude global skill directory `name`.
+    fn bk(e: &Env, name: &str) -> String {
+        backup_bucket(&e.ctx.paths.claude_home.join("skills").join(name))
     }
 
     fn claude() -> InstallTarget {
@@ -1262,6 +1425,7 @@ mod tests {
             clone_url: url.to_string(),
             git_ref: None,
             skill_path: path.to_string(),
+            commit: None,
         }
     }
 
@@ -1271,7 +1435,7 @@ mod tests {
         let (url, _work) = repo_with_skill(&e);
         let results: Vec<(PathBuf, String)> = std::thread::scope(|sc| {
             let hs: Vec<_> = (0..4)
-                .map(|_| sc.spawn(|| ensure_cache(&e.ctx, &url, &url, None).unwrap()))
+                .map(|_| sc.spawn(|| ensure_cache(&e.ctx, &url, &url, None, None).unwrap()))
                 .collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
@@ -1432,9 +1596,9 @@ mod tests {
                 .contains("v2")
         );
         assert!(!dir.join("mine.txt").exists());
-        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "demo"));
         assert_eq!(backups.len(), 1);
-        let b = e.ctx.backups_root().join("demo").join(&backups[0].id);
+        let b = e.ctx.backups_root().join(bk(&e, "demo")).join(&backups[0].id);
         assert!(
             fs::read_to_string(b.join("SKILL.md"))
                 .unwrap()
@@ -1646,6 +1810,7 @@ mod tests {
             clone_url: url.clone(),
             git_ref: Some("main".into()),
             skill_path: "skills/x".into(),
+            commit: None,
         };
         install(&e.ctx, from, &[claude()], false).unwrap();
         crate::skills::git::testutil::commit_file(&work, "later.txt");
@@ -1711,6 +1876,8 @@ mod tests {
         fail_clone: AtomicBool,
         /// After a successful clone, turn this path into a directory.
         sabotage: std::sync::Mutex<Option<PathBuf>>,
+        /// When set, `ls_remote_head` answers with this commit.
+        stale_head: std::sync::Mutex<Option<String>>,
     }
 
     impl WrapGit {
@@ -1720,6 +1887,7 @@ mod tests {
                 ls_calls: AtomicUsize::new(0),
                 fail_clone: AtomicBool::new(false),
                 sabotage: std::sync::Mutex::new(None),
+                stale_head: std::sync::Mutex::new(None),
             })
         }
     }
@@ -1730,6 +1898,9 @@ mod tests {
         }
         fn ls_remote_head(&self, url: &str, r: Option<&str>) -> Result<String, GitError> {
             self.ls_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(h) = self.stale_head.lock().unwrap().clone() {
+                return Ok(h);
+            }
             self.inner.ls_remote_head(url, r)
         }
         fn shallow_clone(
@@ -1777,6 +1948,7 @@ mod tests {
             clone_url: url.to_string(),
             git_ref: Some("main".into()),
             skill_path: path.to_string(),
+            commit: None,
         }
     }
 
@@ -1871,9 +2043,9 @@ mod tests {
         update(&e.ctx, &id, true).unwrap();
         assert!(!dir.join("mine.txt").exists());
         assert!(dir.join("more.md").is_file());
-        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "x");
+        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "x"));
         assert_eq!(backups.len(), 1);
-        let b = e.ctx.backups_root().join("x").join(&backups[0].id);
+        let b = e.ctx.backups_root().join(bk(&e, "x")).join(&backups[0].id);
         assert_eq!(fs::read_to_string(b.join("mine.txt")).unwrap(), "mine");
     }
 
@@ -1971,7 +2143,7 @@ mod tests {
         update(&e.ctx, &id, true).unwrap();
         assert_eq!(git(&dir, &["rev-parse", "HEAD"]), new);
         assert!(dir.join("extra.md").is_file() && dir.join(".git").exists());
-        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "gd");
+        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "gd"));
         assert_eq!(backups.len(), 1);
 
         // Rolling back restores the files but keeps the repository.
@@ -1999,56 +2171,6 @@ mod tests {
     }
 
     #[test]
-    fn update_symlinked_skill_pulls_in_repo_root() {
-        let e = env();
-        let (url, work) = make_remote(&e.root);
-        push_change(
-            &work,
-            "skills/s/SKILL.md",
-            "---\nname: s\ndescription: linked\n---\nv1\n",
-        );
-        let repo = e.root.join("repo");
-        git(&e.root, &["clone", "-q", &url, &repo.to_string_lossy()]);
-        let link = e.ctx.paths.claude_home.join("skills").join("s");
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        let target = repo.join("skills/s");
-        #[cfg(unix)]
-        let ok = std::os::unix::fs::symlink(&target, &link).is_ok();
-        #[cfg(windows)]
-        let ok = std::os::windows::fs::symlink_dir(&target, &link).is_ok();
-        if !ok {
-            eprintln!("skipped: cannot create symlinks");
-            return;
-        }
-        let new = push_change(&work, "skills/s/more.md", "m");
-        let id = normalize_path(&link.to_string_lossy());
-        let es = all_entries(&e);
-        assert_eq!(
-            es[0].source.as_ref().unwrap().origin,
-            SourceOrigin::SymlinkRepo
-        );
-        let st = check_updates(&e.ctx, &es);
-        assert!(st[0].has_update && st[0].local_state_unknown, "{:?}", st[0]);
-        assert_eq!(
-            update(&e.ctx, &id, false).unwrap_err(),
-            OpsError::LocalChanges { unknown: true }
-        );
-        update(&e.ctx, &id, true).unwrap();
-        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new);
-        assert!(
-            fs::symlink_metadata(&link)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert!(link.join("more.md").is_file());
-        assert_eq!(
-            crate::skills::fsops::list_backups(&e.ctx.backups_root(), "s").len(),
-            1
-        );
-    }
-
-    #[test]
     fn rollback_restores_backup_and_backs_up_current() {
         let e = env();
         let src1 = folder_skill(&e, "demo", "demo", "v1");
@@ -2068,17 +2190,17 @@ mod tests {
             true,
         )
         .unwrap();
-        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "demo"));
         assert_eq!(backups.len(), 1);
         let id = normalize_path(&dir.to_string_lossy());
         let out = rollback(&e.ctx, &id, &backups[0].id).unwrap();
         assert_eq!(out.id, id);
         let text = fs::read_to_string(dir.join("SKILL.md")).unwrap();
         assert!(text.contains("v1") && !text.contains("v2"));
-        let after = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        let after = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "demo"));
         assert_eq!(after.len(), 2);
         // The new backup holds v2 (the state before the rollback).
-        let newest = e.ctx.backups_root().join("demo").join(&after[0].id);
+        let newest = e.ctx.backups_root().join(bk(&e, "demo")).join(&after[0].id);
         assert!(
             fs::read_to_string(newest.join("SKILL.md"))
                 .unwrap()
@@ -2124,7 +2246,7 @@ v2
                 ),
             );
             update(&e.ctx, &id, false).unwrap();
-            let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "x");
+            let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "x"));
             assert_eq!(backups.len(), 1, "{bad}");
             rollback(&e.ctx, &id, &backups[0].id).unwrap();
             // Nothing named after the malicious value exists anywhere.
@@ -2137,7 +2259,7 @@ v2
                 .flatten()
                 .map(|d| d.file_name().to_string_lossy().into_owned())
                 .collect();
-            assert_eq!(created, vec!["x".to_string()], "{bad}");
+            assert_eq!(created, vec![bk(&e, "x")], "{bad}");
         }
     }
 
@@ -2167,7 +2289,7 @@ v2
 ",
         )
         .unwrap();
-        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "demo"));
         let id = normalize_path(&dir.to_string_lossy());
         rollback(&e.ctx, &id, &b[0].id).unwrap();
         assert_eq!(
@@ -2218,9 +2340,14 @@ v2
         let (dir, work) = git_dir_skill(&e);
         let id = normalize_path(&dir.to_string_lossy());
         for _ in 0..10 {
-            crate::skills::fsops::backup_dir(&dir, &e.ctx.backups_root(), "gd").unwrap();
+            crate::skills::fsops::backup_dir(
+                &dir,
+                &e.ctx.backups_root(),
+                &BackupMeta::new(&dir.to_string_lossy(), "gd", Tool::Claude, SkillScope::Global),
+            )
+            .unwrap();
         }
-        let before: Vec<String> = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "gd")
+        let before: Vec<String> = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "gd"))
             .into_iter()
             .map(|b| b.id)
             .collect();
@@ -2230,7 +2357,7 @@ v2
         git(&dir, &["commit", "-q", "-m", "local"]);
         push_change(&work, "remote.md", "r");
         assert!(update(&e.ctx, &id, true).is_err());
-        let after: Vec<String> = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "gd")
+        let after: Vec<String> = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "gd"))
             .into_iter()
             .map(|b| b.id)
             .collect();
@@ -2295,7 +2422,7 @@ v2
         write(&dir.join("mine.txt"), "mine");
         let info = delete(&e.ctx, &id).unwrap();
         assert!(!dir.exists());
-        let b = e.ctx.backups_root().join("demo").join(&info.id);
+        let b = e.ctx.backups_root().join(bk(&e, "demo")).join(&info.id);
         assert_eq!(fs::read_to_string(b.join("mine.txt")).unwrap(), "mine");
         assert!(b.join("SKILL.md").is_file() && b.join("ref/a.md").is_file());
         let names: Vec<_> = fs::read_dir(dir.parent().unwrap())
@@ -2328,7 +2455,7 @@ v2
         assert!(target.join("SKILL.md").is_file());
         assert_eq!(fs::read_to_string(target.join("sub/f.txt")).unwrap(), "f");
         // The backup is a real copy of the contents.
-        let b = e.ctx.backups_root().join("linked").join(&info.id);
+        let b = e.ctx.backups_root().join(bk(&e, "linked")).join(&info.id);
         assert!(b.join("SKILL.md").is_file() && b.join("sub/f.txt").is_file());
         assert!(!fs::symlink_metadata(&b).unwrap().file_type().is_symlink());
     }
@@ -2438,12 +2565,13 @@ v2
         assert!(d.join("mine.txt").exists());
         sync_to(&e.ctx, &id, codex(), true).unwrap();
         assert!(!d.join("mine.txt").exists());
-        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        let cb = backup_bucket(&d);
+        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &cb);
         assert_eq!(b.len(), 1);
         assert!(
             e.ctx
                 .backups_root()
-                .join("demo")
+                .join(&cb)
                 .join(&b[0].id)
                 .join("mine.txt")
                 .is_file()
@@ -2793,5 +2921,410 @@ v2
         assert_eq!(reg.skills[0].installs.len(), 1);
         assert_eq!(reg.skills[1].installs.len(), 2);
         assert_eq!(reg.skills[1].content_hash, dir_content_hash(&cdir).unwrap());
+    }
+
+    // -----------------------------------------------------------------------
+    // Final fix wave: restorable backups, odd directory names, subdirectory
+    // skills, carried .git / node_modules, pinned commits.
+    // -----------------------------------------------------------------------
+
+    /// A user skill written straight into the Claude skills folder (any dir name).
+    fn raw_skill(e: &Env, dir_name: &str) -> (PathBuf, String) {
+        let d = e.ctx.paths.claude_home.join("skills").join(dir_name);
+        write(
+            &d.join("SKILL.md"),
+            "---\nname: raw\ndescription: raw skill\n---\nv1\n",
+        );
+        write(&d.join("extra.txt"), "extra");
+        (d.clone(), normalize_path(&d.to_string_lossy()))
+    }
+
+    #[test]
+    fn delete_backup_has_meta_and_is_listed_then_restorable() {
+        let e = env();
+        let (dir, id) = install_demo(&e, claude());
+        write(&dir.join("mine.txt"), "mine");
+        write(&dir.join(".git/HEAD"), "ref");
+        let info = delete(&e.ctx, &id).unwrap();
+        assert!(!dir.exists());
+        let bucket = bk(&e, "demo");
+        let b = e.ctx.backups_root().join(&bucket).join(&info.id);
+        let meta: BackupMeta = serde_json::from_str(
+            &fs::read_to_string(b.join(crate::skills::fsops::META_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta.dir, dir.to_string_lossy());
+        assert_eq!(meta.name, "demo");
+        assert_eq!(meta.tool, Tool::Claude);
+        assert_eq!(meta.scope, SkillScope::Global);
+
+        let deleted = list_deleted_skills(&e.ctx);
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].bucket, bucket);
+        assert_eq!(deleted[0].dir, dir.to_string_lossy());
+        assert_eq!(deleted[0].backups.len(), 1);
+
+        let restored = restore_deleted(&e.ctx, &bucket, &info.id).unwrap();
+        assert_eq!(restored, dir.to_string_lossy());
+        assert_eq!(fs::read_to_string(dir.join("mine.txt")).unwrap(), "mine");
+        // A deleted skill gets everything back, .git included, but not the meta file.
+        assert!(dir.join(".git/HEAD").is_file());
+        assert!(!dir.join(crate::skills::fsops::META_FILE).exists());
+        // It is local again: no registry entry, and no longer "deleted".
+        assert!(load_registry(&e.ctx.registry_path).unwrap().skills.is_empty());
+        assert!(list_deleted_skills(&e.ctx).is_empty());
+        let names: Vec<_> = fs::read_dir(dir.parent().unwrap()).unwrap().flatten().collect();
+        assert_eq!(names.len(), 1, "no temp leftovers");
+    }
+
+    #[test]
+    fn same_named_skills_do_not_share_backups() {
+        let e = env();
+        let (cdir, cid) = install_demo(&e, claude());
+        let (xdir, xid) = install_demo(&e, codex());
+        write(&cdir.join("only-claude.txt"), "c");
+        write(&xdir.join("only-codex.txt"), "x");
+        let a = delete(&e.ctx, &cid).unwrap();
+        let b = delete(&e.ctx, &xid).unwrap();
+        let deleted = list_deleted_skills(&e.ctx);
+        assert_eq!(deleted.len(), 2);
+        assert_ne!(deleted[0].bucket, deleted[1].bucket);
+        for d in &deleted {
+            assert_eq!(d.backups.len(), 1);
+            assert_eq!(d.name, "demo");
+        }
+        let claude_bucket = backup_bucket(&cdir);
+        let codex_bucket = backup_bucket(&xdir);
+        assert_ne!(claude_bucket, codex_bucket);
+        assert!(claude_bucket.starts_with("demo-") && claude_bucket.len() == "demo-".len() + 8);
+        let root = e.ctx.backups_root();
+        assert!(root.join(&claude_bucket).join(&a.id).join("only-claude.txt").is_file());
+        assert!(!root.join(&claude_bucket).join(&a.id).join("only-codex.txt").exists());
+        assert!(root.join(&codex_bucket).join(&b.id).join("only-codex.txt").is_file());
+        // Restoring one leaves the other deleted.
+        restore_deleted(&e.ctx, &codex_bucket, &b.id).unwrap();
+        assert!(xdir.join("only-codex.txt").is_file() && !cdir.exists());
+        assert_eq!(list_deleted_skills(&e.ctx).len(), 1);
+    }
+
+    #[test]
+    fn restore_deleted_refuses_existing_dir_and_missing_parent() {
+        let e = env();
+        let (dir, id) = install_demo(&e, claude());
+        let info = delete(&e.ctx, &id).unwrap();
+        let bucket = bk(&e, "demo");
+        // The original place is taken again.
+        write(&dir.join("SKILL.md"), "someone else");
+        let err = restore_deleted(&e.ctx, &bucket, &info.id).unwrap_err();
+        assert!(matches!(&err, OpsError::Invalid { message } if message.contains("已经存在")), "{err:?}");
+        assert_eq!(fs::read_to_string(dir.join("SKILL.md")).unwrap(), "someone else");
+        // A bucket whose directory exists again is not listed as deleted.
+        assert!(list_deleted_skills(&e.ctx).is_empty());
+        // The parent is gone.
+        fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+        let err = restore_deleted(&e.ctx, &bucket, &info.id).unwrap_err();
+        assert!(matches!(&err, OpsError::Invalid { message } if message.contains("上级目录")), "{err:?}");
+        assert!(!dir.parent().unwrap().exists());
+        // Bad input never touches the disk.
+        for (b, i) in [("..", "1"), ("a/b", "1"), (bucket.as_str(), "../x"), (bucket.as_str(), "")] {
+            assert!(matches!(restore_deleted(&e.ctx, b, i), Err(OpsError::Invalid { .. })), "{b} {i}");
+        }
+        // With the parent back, it restores.
+        fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&dir).ok();
+        restore_deleted(&e.ctx, &bucket, &info.id).unwrap();
+        assert!(dir.join("SKILL.md").is_file());
+    }
+
+    #[test]
+    fn restore_deleted_rejects_forged_meta() {
+        let e = env();
+        let (_dir, id) = install_demo(&e, claude());
+        let info = delete(&e.ctx, &id).unwrap();
+        let bucket = bk(&e, "demo");
+        let mpath = e
+            .ctx
+            .backups_root()
+            .join(&bucket)
+            .join(&info.id)
+            .join(crate::skills::fsops::META_FILE);
+        let mut meta: BackupMeta = serde_json::from_str(&fs::read_to_string(&mpath).unwrap()).unwrap();
+        meta.dir = e.root.join("elsewhere").to_string_lossy().into_owned();
+        fs::write(&mpath, serde_json::to_string(&meta).unwrap()).unwrap();
+        assert!(matches!(
+            restore_deleted(&e.ctx, &bucket, &info.id),
+            Err(OpsError::Invalid { .. })
+        ));
+        assert!(list_deleted_skills(&e.ctx).is_empty());
+    }
+
+    #[test]
+    fn odd_directory_names_can_be_deleted_and_restored() {
+        let e = env();
+        for name in ["MySkill", "My Skill"] {
+            let (dir, id) = raw_skill(&e, name);
+            let info = delete(&e.ctx, &id).unwrap();
+            assert!(!info.id.is_empty() && !dir.exists(), "{name}");
+            let bucket = backup_bucket(&dir);
+            assert!(bucket.starts_with(&format!("{}-", name.to_lowercase().replace(' ', "-"))));
+            let d = list_deleted_skills(&e.ctx);
+            assert!(d.iter().any(|x| x.bucket == bucket && x.dir == dir.to_string_lossy()), "{name}");
+            restore_deleted(&e.ctx, &bucket, &info.id).unwrap();
+            assert_eq!(fs::read_to_string(dir.join("extra.txt")).unwrap(), "extra");
+        }
+        assert!(list_deleted_skills(&e.ctx).is_empty());
+    }
+
+    #[test]
+    fn odd_directory_names_update_rollback_and_list_backups() {
+        let e = env();
+        let (url, _work) = repo_with_skill(&e);
+        let (dir, id) = raw_skill(&e, "My Skill");
+        // Tracked in the registry: update clones the repo skill over the folder.
+        let now = now_millis();
+        let reg = Registry {
+            version: 1,
+            skills: vec![RegistryEntry {
+                name: "raw".into(),
+                source: SkillSource {
+                    url: url.clone(),
+                    git_ref: None,
+                    commit: None,
+                    skill_path: "skills/x".into(),
+                    origin: SourceOrigin::Registry,
+                },
+                clone_url: Some(url.clone()),
+                installs: vec![InstallRecord {
+                    tool: Tool::Claude,
+                    scope: SkillScope::Global,
+                    dir: dir.to_string_lossy().into_owned(),
+                }],
+                content_hash: dir_content_hash(&dir).unwrap(),
+                installed_at: now,
+                updated_at: now,
+            }],
+        };
+        save_registry(&e.ctx.registry_path, &reg).unwrap();
+        update(&e.ctx, &id, false).unwrap();
+        assert!(dir.join("ref.md").is_file() && !dir.join("extra.txt").exists());
+        let bucket = backup_bucket(&dir);
+        let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bucket);
+        assert_eq!(backups.len(), 1);
+        assert!(e.ctx.backups_root().join(&bucket).join(&backups[0].id).join("extra.txt").is_file());
+        // Roll back to the original files, then forward again from the new backup.
+        rollback(&e.ctx, &id, &backups[0].id).unwrap();
+        assert!(dir.join("extra.txt").is_file() && !dir.join("ref.md").exists());
+        assert_eq!(
+            crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bucket).len(),
+            2
+        );
+        let names: Vec<_> = fs::read_dir(dir.parent().unwrap()).unwrap().flatten().collect();
+        assert_eq!(names.len(), 1, "no temp leftovers");
+    }
+
+    #[test]
+    fn odd_directory_names_sync_is_refused_with_a_hint() {
+        let e = env();
+        let (_dir, id) = raw_skill(&e, "MySkill");
+        let r = sync_to(&e.ctx, &id, codex(), false);
+        assert!(matches!(&r, Err(OpsError::Invalid { message }) if message.contains("重命名")), "{r:?}");
+        assert!(!e.ctx.paths.codex_home.join("skills").exists());
+    }
+
+    /// A skill that is a link into a subdirectory of a larger repository.
+    fn linked_subdir_skill(e: &Env) -> Option<(PathBuf, PathBuf, PathBuf, String)> {
+        let (url, work) = make_remote(&e.root);
+        push_change(
+            &work,
+            "skills/s/SKILL.md",
+            "---\nname: s\ndescription: linked\n---\nv1\n",
+        );
+        let repo = e.root.join("repo");
+        git(&e.root, &["clone", "-q", &url, &repo.to_string_lossy()]);
+        let link = e.ctx.paths.claude_home.join("skills").join("s");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if !make_link(&repo.join("skills/s"), &link) {
+            eprintln!("skipped: cannot create symlinks");
+            return None;
+        }
+        Some((link, repo, work, url))
+    }
+
+    #[test]
+    fn subdirectory_of_a_repo_is_not_updatable() {
+        let e = env();
+        let Some((link, repo, work, _url)) = linked_subdir_skill(&e) else {
+            return;
+        };
+        let id = normalize_path(&link.to_string_lossy());
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        push_change(&work, "skills/s/more.md", "m");
+        let es = all_entries(&e);
+        assert_eq!(es[0].source.as_ref().unwrap().origin, SourceOrigin::SymlinkRepo);
+        let st = check_updates(&e.ctx, &es);
+        assert_eq!(st.len(), 1);
+        assert!(st[0].not_updatable_subdir, "{:?}", st[0]);
+        assert!(!st[0].has_update && st[0].error.is_none() && st[0].latest.is_none());
+        assert!(st[0].repo_root.as_deref().is_some_and(|r| r.to_lowercase().contains("repo")));
+        let r = update(&e.ctx, &id, true);
+        assert!(matches!(&r, Err(OpsError::Invalid { message }) if message.contains("子目录")), "{r:?}");
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head, "nothing was pulled");
+        assert!(crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "s")).is_empty());
+    }
+
+    /// Mirrors a repo whose root holds the skill, linked into the skills folder.
+    #[test]
+    fn linked_repo_root_is_updatable() {
+        let e = env();
+        let (url, work) = make_remote(&e.root);
+        push_change(
+            &work,
+            "SKILL.md",
+            "---\nname: r\ndescription: root skill\n---\nv1\n",
+        );
+        let repo = e.root.join("repo");
+        git(&e.root, &["clone", "-q", &url, &repo.to_string_lossy()]);
+        let link = e.ctx.paths.claude_home.join("skills").join("r");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if !make_link(&repo, &link) {
+            eprintln!("skipped: cannot create symlinks");
+            return;
+        }
+        let new = push_change(&work, "more.md", "m");
+        let id = normalize_path(&link.to_string_lossy());
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        assert!(st[0].has_update && !st[0].not_updatable_subdir, "{:?}", st[0]);
+        update(&e.ctx, &id, true).unwrap();
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new);
+        assert!(link.join("more.md").is_file());
+    }
+
+    #[test]
+    fn update_by_clone_carries_git_and_node_modules() {
+        let e = env();
+        let (url, work) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let dir = installed_x(&e);
+        let id = normalize_path(&dir.to_string_lossy());
+        write(&dir.join("node_modules/m/index.js"), "module");
+        write(&dir.join(".git/HEAD"), "ref: refs/heads/main");
+        push_change(&work, "skills/x/new.md", "n");
+        update(&e.ctx, &id, false).unwrap();
+        assert!(dir.join("new.md").is_file());
+        assert_eq!(fs::read_to_string(dir.join("node_modules/m/index.js")).unwrap(), "module");
+        assert_eq!(fs::read_to_string(dir.join(".git/HEAD")).unwrap(), "ref: refs/heads/main");
+        // The backup still holds them as well.
+        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "x"));
+        assert!(e.ctx.backups_root().join(bk(&e, "x")).join(&b[0].id).join("node_modules/m/index.js").is_file());
+        // Rolling back keeps the live ones too.
+        write(&dir.join("node_modules/m/later.js"), "later");
+        rollback(&e.ctx, &id, &b[0].id).unwrap();
+        assert!(!dir.join("new.md").exists());
+        assert!(dir.join("node_modules/m/later.js").is_file());
+        assert!(dir.join(".git/HEAD").is_file());
+        let names: Vec<_> = fs::read_dir(dir.parent().unwrap()).unwrap().flatten().collect();
+        assert_eq!(names.len(), 1, "no temp leftovers");
+    }
+
+    #[test]
+    fn failed_update_leaves_git_and_node_modules_in_place() {
+        let (e, w) = env_wrap();
+        let (url, work) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let dir = installed_x(&e);
+        let id = normalize_path(&dir.to_string_lossy());
+        write(&dir.join("node_modules/m.js"), "m");
+        write(&dir.join(".git/HEAD"), "ref");
+        push_change(&work, "skills/x/new.md", "n");
+        w.fail_clone.store(true, Ordering::SeqCst);
+        assert!(update(&e.ctx, &id, false).is_err());
+        assert!(dir.join("node_modules/m.js").is_file() && dir.join(".git/HEAD").is_file());
+        assert!(!dir.join("new.md").exists());
+    }
+
+    #[test]
+    fn place_failure_after_carry_puts_git_and_node_modules_back() {
+        let e = env();
+        let dir = e.ctx.paths.claude_home.join("skills").join("p");
+        write(&dir.join("SKILL.md"), "old");
+        write(&dir.join("node_modules/m.js"), "m");
+        write(&dir.join(".git/HEAD"), "ref");
+        let content = e.root.join("content");
+        write(&content.join("SKILL.md"), "new");
+        // The helpers the swap relies on, then the real thing.
+        let sibling = e.root.join("sibling");
+        fs::create_dir_all(&sibling).unwrap();
+        let moved = carry_live_dirs(&dir, &sibling).unwrap();
+        assert_eq!(moved.len(), 2);
+        assert!(!dir.join("node_modules").exists() && sibling.join(".git/HEAD").is_file());
+        uncarry_live_dirs(&dir, &sibling, &moved);
+        assert!(dir.join("node_modules/m.js").is_file() && dir.join(".git/HEAD").is_file());
+        assert!(!sibling.join(".git").exists());
+        // The real thing still works end to end.
+        let meta = BackupMeta::new(&dir.to_string_lossy(), "p", Tool::Claude, SkillScope::Global);
+        place(&e.ctx, &content, &dir, &meta, true, true).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("SKILL.md")).unwrap(), "new");
+        assert!(dir.join("node_modules/m.js").is_file() && dir.join(".git/HEAD").is_file());
+        // Without `carry` (install overwrite) they stay in the backup only.
+        write(&content.join("SKILL.md"), "newer");
+        place(&e.ctx, &content, &dir, &meta, true, false).unwrap();
+        assert!(!dir.join("node_modules").exists() && !dir.join(".git").exists());
+    }
+
+    #[test]
+    fn install_from_inspect_pins_the_inspected_commit() {
+        let e = env();
+        let (url, work) = repo_with_skill(&e);
+        let seen = git(&work, &["rev-parse", "HEAD"]);
+        // The branch moves after the user looked at it.
+        push_change(&work, "skills/x/later.md", "later");
+        let from = InstallFrom::Git {
+            url: url.clone(),
+            clone_url: url.clone(),
+            git_ref: None,
+            skill_path: "skills/x".into(),
+            commit: Some(seen.clone()),
+        };
+        install(&e.ctx, from, &[claude()], false).unwrap();
+        let dir = installed_x(&e);
+        assert!(dir.join("ref.md").is_file());
+        assert!(!dir.join("later.md").exists(), "installed what the user saw");
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        assert_eq!(reg.skills[0].source.commit.as_deref(), Some(seen.as_str()));
+        // So the next check offers the newer commit.
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        assert!(st[0].has_update, "{:?}", st[0]);
+        // A non-sha pin is ignored.
+        let e2 = env();
+        let (url2, _w2) = repo_with_skill(&e2);
+        let from = InstallFrom::Git {
+            url: url2.clone(),
+            clone_url: url2,
+            git_ref: None,
+            skill_path: "skills/x".into(),
+            commit: Some("not-a-sha".into()),
+        };
+        install(&e2.ctx, from, &[claude()], false).unwrap();
+    }
+
+    #[test]
+    fn cache_dir_is_named_after_the_cloned_commit() {
+        let (e, w) = env_wrap();
+        let (url, work) = repo_with_skill(&e);
+        let actual = git(&work, &["rev-parse", "HEAD"]);
+        // ls-remote answers with a commit that is no longer the branch tip.
+        let stale = "0123456789abcdef0123456789abcdef01234567".to_string();
+        *w.stale_head.lock().unwrap() = Some(stale.clone());
+        let (cache, commit) = ensure_cache(&e.ctx, &url, &url, None, None).unwrap();
+        assert_eq!(commit, actual);
+        assert_eq!(cache, cache_dir_for(&e.ctx.cache_root(), &url, &actual));
+        assert!(is_complete_cache(&cache));
+        assert!(!cache_dir_for(&e.ctx.cache_root(), &url, &stale).exists());
+        let dirs: Vec<_> = fs::read_dir(e.ctx.cache_root()).unwrap().flatten().collect();
+        assert_eq!(dirs.len(), 1, "{dirs:?}");
+        // Asking again with the stale answer reuses the correctly named cache.
+        *w.stale_head.lock().unwrap() = Some(stale);
+        let (cache2, commit2) = ensure_cache(&e.ctx, &url, &url, None, None).unwrap();
+        assert_eq!((cache2, commit2), (cache, actual));
     }
 }

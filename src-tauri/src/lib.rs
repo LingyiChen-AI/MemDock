@@ -66,6 +66,8 @@ pub fn run() {
                 paths::AgentPaths::detect(),
                 data_dir,
             ));
+            let cleanup_state = state.clone();
+            std::thread::spawn(move || commands_skills::startup_cleanup(&cleanup_state));
             let handle = watcher::start(app.handle().clone(), state.clone());
             app.manage(state);
             app.manage(handle);
@@ -93,6 +95,9 @@ pub fn run() {
             commands_skills::rollback_skill,
             commands_skills::list_skill_backups,
             commands_skills::delete_skill,
+            commands_skills::list_deleted_skill_backups,
+            commands_skills::restore_deleted_skill,
+            commands_skills::reveal_backup_folder,
             commands_skills::sync_skill,
             commands_skills::register_skill_source,
             commands_skills::list_skill_files,

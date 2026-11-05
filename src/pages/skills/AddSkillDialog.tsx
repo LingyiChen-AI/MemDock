@@ -117,7 +117,7 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
     if (tab === "github" && inspected)
       return inspected.skills
         .filter((x) => picked.includes(x.skill_path))
-        .map((x) => ({ type: "git", url: inspected.url, clone_url: inspected.clone_url, git_ref: inspected.git_ref, skill_path: x.skill_path }));
+        .map((x) => ({ type: "git", url: inspected.url, clone_url: inspected.clone_url, git_ref: inspected.git_ref, skill_path: x.skill_path, commit: inspected.commit }));
     if (tab === "local" && local) return [{ type: local.kind, path: local.path }];
     if (tab === "template") return [{ type: "template", name, description: description.trim() }];
     return [];

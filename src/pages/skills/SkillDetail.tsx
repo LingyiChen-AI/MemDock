@@ -68,7 +68,13 @@ export function SkillDetail({
   };
   const scopeText = entry.scope.type === "global" ? s.global : projectName(entry.scope.project_id);
   // Updating pulls from the source repository: it needs a recorded source and git.
-  const updateBlock = !entry.source ? s.updateNeedSource : !gitOk ? s.needGit : null;
+  const updateBlock = !entry.source
+    ? s.updateNeedSource
+    : !gitOk
+      ? s.needGit
+      : update?.not_updatable_subdir
+        ? fmt(s.updateSubdir, { root: update.repo_root ?? "" })
+        : null;
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">

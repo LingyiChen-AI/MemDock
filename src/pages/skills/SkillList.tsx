@@ -1,9 +1,10 @@
 import * as React from "react";
-import { ChevronDown, Plus, RefreshCw, Search } from "lucide-react";
-import type { SkillEntry, UpdateStatus } from "@/api/types";
+import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import type { DeletedSkill, SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
+import { formatSnapshotTime } from "@/pages/memory/HistoryDrawer";
 import { ToolTag } from "@/pages/memory/ToolTag";
 import { fmt } from "@/pages/memory/paths";
 import { entryKey, sortEntries, sourceLabel } from "./skillUtils";
@@ -26,6 +27,11 @@ export interface SkillListProps {
   checkedUpdates: number | null;
   onCheck: () => void;
   onAdd: () => void;
+  /** Deleted skills whose backups remain; the group is hidden when empty. */
+  deleted?: DeletedSkill[];
+  /** Bucket of the opened deleted skill. */
+  selectedDeleted?: string;
+  onSelectDeleted?: (item: DeletedSkill) => void;
 }
 
 export const tagClass =
@@ -45,6 +51,9 @@ export function SkillList({
   checkedUpdates,
   onCheck,
   onAdd,
+  deleted = [],
+  selectedDeleted,
+  onSelectDeleted,
 }: SkillListProps) {
   const { t } = useI18n();
   const s = t.skills;
@@ -52,6 +61,9 @@ export function SkillList({
   const [tool, setTool] = React.useState<ToolFilter>("all");
   const [scope, setScope] = React.useState<ScopeFilter>("all");
   const listRef = React.useRef<HTMLDivElement>(null);
+  const [deletedOpen, setDeletedOpen] = React.useState(false);
+  // An opened deleted skill keeps its group visible.
+  const showDeleted = deletedOpen || selectedDeleted !== undefined;
 
   const visible = React.useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -167,6 +179,49 @@ export function SkillList({
           })
         )}
       </div>
+
+      {deleted.length > 0 ? (
+        <div className="flex max-h-[45%] shrink-0 flex-col border-t border-border">
+          <button
+            type="button"
+            aria-expanded={showDeleted}
+            onClick={() => setDeletedOpen((v) => !v)}
+            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 px-3 text-left text-xs font-medium text-muted-foreground outline-none transition-colors duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
+          >
+            {showDeleted ? <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" /> : <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />}
+            <Trash2 className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{fmt(s.deletedGroup, { n: deleted.length })}</span>
+          </button>
+          {showDeleted ? (
+            <div role="list" aria-label={s.deletedListLabel} className="min-h-0 overflow-y-auto px-2 pb-2">
+              {deleted.map((d) => {
+                const on = d.bucket === selectedDeleted;
+                const latest = d.backups[0]?.created_at;
+                return (
+                  <button
+                    key={d.bucket}
+                    type="button"
+                    role="listitem"
+                    aria-current={on ? "true" : undefined}
+                    onClick={() => onSelectDeleted?.(d)}
+                    className={cn(
+                      "mb-0.5 flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-1.5 text-left text-foreground outline-none transition-colors duration-150 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                      on && "bg-muted shadow-[inset_2px_0_0_var(--primary)]",
+                    )}
+                  >
+                    <span className="min-w-0 truncate font-mono text-[13px] font-medium" title={d.name}>
+                      {d.name}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {latest ? fmt(s.deletedLatest, { time: formatSnapshotTime(latest) }) : s.deletedNoBackups}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -7,11 +7,24 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+use crate::model::Tool;
+use crate::projects::normalize_path;
+use crate::skills::model::SkillScope;
+
 /// Names never copied by [`copy_dir`] (and ignored by the content hash).
-const EXCLUDED: [&str; 3] = [".git", "node_modules", ".memdock-complete"];
+const EXCLUDED: [&str; 4] = [
+    ".git",
+    "node_modules",
+    ".memdock-complete",
+    ".memdock-meta.json",
+];
+/// Describes a backup (see [`BackupMeta`]). A dot name so it cannot collide
+/// with a skill's own `meta.json`; never restored.
+pub const META_FILE: &str = ".memdock-meta.json";
 /// Backups kept per skill.
 pub const MAX_BACKUPS: usize = 10;
 /// Upper bound for the uncompressed size of one zip.
@@ -32,7 +45,7 @@ pub fn now_millis() -> i64 {
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 pub struct BackupInfo {
-    /// Directory name under `<backups_root>/<name>/`, the creation time in ms.
+    /// Directory name under `<backups_root>/<bucket>/`, the creation time in ms.
     pub id: String,
     pub created_at: i64,
     pub size_bytes: u64,
@@ -117,19 +130,6 @@ pub fn copy_dir_confined(src: &Path, dst: &Path, root: &Path) -> io::Result<()> 
     )
 }
 
-/// Full copy including `.git` and `node_modules` (backups must lose nothing).
-fn copy_dir_full(src: &Path, dst: &Path) -> io::Result<()> {
-    copy_tree(
-        src,
-        dst,
-        &CopyOpts {
-            exclude: false,
-            confine: None,
-        },
-        0,
-    )
-}
-
 pub fn dir_size(dir: &Path) -> u64 {
     WalkDir::new(dir)
         .into_iter()
@@ -154,17 +154,204 @@ pub fn remove_any(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Copies `src` to `<backups_root>/<name>/<millis>/` and keeps at most
-/// [`MAX_BACKUPS`] backups for that name (oldest are deleted).
-pub fn backup_dir(src: &Path, backups_root: &Path, name: &str) -> io::Result<BackupInfo> {
-    let base = backups_root.join(name);
+/// Symlinks that could not be recreated inside a backup (Windows without the
+/// symlink privilege). The target is recorded, never followed.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct LinkRecord {
+    /// `/`-separated path relative to the skill directory.
+    pub path: String,
+    pub target: String,
+}
+
+/// Describes whose backup a bucket holds; written next to the copied files.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct BackupMeta {
+    /// The skill directory the backup was taken from (the link for symlinked skills).
+    pub dir: String,
+    pub name: String,
+    pub tool: Tool,
+    pub scope: SkillScope,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<LinkRecord>,
+}
+
+impl BackupMeta {
+    pub fn new(dir: &str, name: &str, tool: Tool, scope: SkillScope) -> Self {
+        BackupMeta {
+            dir: dir.to_string(),
+            name: name.to_string(),
+            tool,
+            scope,
+            links: Vec::new(),
+        }
+    }
+}
+
+/// A skill whose directory is gone but whose backups remain.
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct DeletedSkill {
+    pub bucket: String,
+    pub name: String,
+    pub tool: Tool,
+    pub scope: SkillScope,
+    pub dir: String,
+    /// Newest first.
+    pub backups: Vec<BackupInfo>,
+}
+
+/// `<sanitized dir name>-<first 8 hex of sha256(normalize_path(dir))>`: the
+/// backup bucket of the skill directory `dir`. Same-named skills in different
+/// places never share a bucket, and the (untrusted) skill name is not used.
+pub fn backup_bucket(dir: &Path) -> String {
+    let base = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mut safe: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect();
+    if safe.is_empty() {
+        safe = "skill".into();
+    }
+    let digest = Sha256::digest(normalize_path(&dir.to_string_lossy()).as_bytes());
+    let hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    format!("{safe}-{hex}")
+}
+
+/// True for names that [`backup_bucket`] can produce (no separators, no `..`).
+pub fn valid_bucket(b: &str) -> bool {
+    !b.is_empty()
+        && b != "."
+        && b != ".."
+        && b.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Backup ids are millisecond timestamps.
+pub fn valid_backup_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn make_link(target: &Path, link: &Path, is_dir: bool) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let _ = is_dir;
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        if is_dir {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
+}
+
+fn join_rel(rel: &str, name: &str) -> String {
+    if rel.is_empty() {
+        name.to_string()
+    } else {
+        format!("{rel}/{name}")
+    }
+}
+
+/// Copies a tree keeping symlinks as links (never following them). Links that
+/// cannot be created are appended to `failed`. `exclude` skips the names in
+/// [`EXCLUDED`].
+fn copy_keep_links(
+    src: &Path,
+    dst: &Path,
+    rel: &str,
+    exclude: bool,
+    failed: &mut Vec<LinkRecord>,
+    depth: usize,
+) -> io::Result<()> {
+    if depth > MAX_DEPTH {
+        return Err(io::Error::other(format!(
+            "directory nesting too deep: {}",
+            src.display()
+        )));
+    }
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == META_FILE || (exclude && EXCLUDED.iter().any(|x| name == *x)) {
+            continue;
+        }
+        let path = entry.path();
+        let to = dst.join(&name);
+        let lmeta = fs::symlink_metadata(&path)?;
+        let child_rel = join_rel(rel, &name.to_string_lossy());
+        if lmeta.is_symlink() {
+            let target = fs::read_link(&path)?;
+            let is_dir = fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false);
+            if make_link(&target, &to, is_dir).is_err() {
+                failed.push(LinkRecord {
+                    path: child_rel,
+                    target: target.to_string_lossy().into_owned(),
+                });
+            }
+        } else if lmeta.is_dir() {
+            copy_keep_links(&path, &to, &child_rel, exclude, failed, depth + 1)?;
+        } else if lmeta.is_file() {
+            fs::copy(&path, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Restores the files of a backup into `dst` (created). Symlinks inside are
+/// recreated as links where the OS allows it and skipped otherwise; the meta
+/// file is never brought back. `.git` / `node_modules` only come back with
+/// `keep_all` (a skill that no longer exists); a rollback keeps the live ones.
+pub fn restore_dir(
+    backup: &Path,
+    dst: &Path,
+    meta: Option<&BackupMeta>,
+    keep_all: bool,
+) -> io::Result<()> {
+    let mut failed = Vec::new();
+    copy_keep_links(backup, dst, "", !keep_all, &mut failed, 0)?;
+    if let Some(m) = meta {
+        for l in &m.links {
+            let to = dst.join(l.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let _ = make_link(Path::new(&l.target), &to, true)
+                .or_else(|_| make_link(Path::new(&l.target), &to, false));
+        }
+    }
+    Ok(())
+}
+
+/// Copies `src` to `<backups_root>/<bucket>/<millis>/` (symlinks kept as links,
+/// never followed) with a meta file, and keeps at most [`MAX_BACKUPS`] backups
+/// per bucket (oldest are deleted). The bucket comes from `meta.dir`.
+pub fn backup_dir(src: &Path, backups_root: &Path, meta: &BackupMeta) -> io::Result<BackupInfo> {
+    let bucket = backup_bucket(Path::new(&meta.dir));
+    let base = backups_root.join(&bucket);
     fs::create_dir_all(&base)?;
     let mut ms = now_millis();
     while base.join(ms.to_string()).exists() {
         ms += 1;
     }
     let dest = base.join(ms.to_string());
-    if let Err(e) = copy_dir_full(src, &dest) {
+    let mut meta = meta.clone();
+    meta.links.clear();
+    let result = (|| -> io::Result<()> {
+        copy_keep_links(src, &dest, "", false, &mut meta.links, 0)?;
+        let json = serde_json::to_string_pretty(&meta).map_err(io::Error::other)?;
+        fs::write(dest.join(META_FILE), json)
+    })();
+    if let Err(e) = result {
         let _ = fs::remove_dir_all(&dest);
         return Err(e);
     }
@@ -173,14 +360,23 @@ pub fn backup_dir(src: &Path, backups_root: &Path, name: &str) -> io::Result<Bac
         created_at: ms,
         size_bytes: dir_size(&dest),
     };
-    prune_backups(backups_root, name, &info.id);
+    prune_backups(backups_root, &bucket, &info.id);
     Ok(info)
 }
 
-/// Deletes the oldest backups of `name` beyond [`MAX_BACKUPS`], never `keep_id`.
-pub fn prune_backups(backups_root: &Path, name: &str, keep_id: &str) {
-    let base = backups_root.join(name);
-    let others: Vec<BackupInfo> = list_backups(backups_root, name)
+/// Meta of one backup, if it has a readable one.
+pub fn read_meta(backups_root: &Path, bucket: &str, id: &str) -> Option<BackupMeta> {
+    if !valid_bucket(bucket) || !valid_backup_id(id) {
+        return None;
+    }
+    let text = fs::read_to_string(backups_root.join(bucket).join(id).join(META_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Deletes the oldest backups of `bucket` beyond [`MAX_BACKUPS`], never `keep_id`.
+pub fn prune_backups(backups_root: &Path, bucket: &str, keep_id: &str) {
+    let base = backups_root.join(bucket);
+    let others: Vec<BackupInfo> = list_backups(backups_root, bucket)
         .into_iter()
         .filter(|b| b.id != keep_id)
         .collect();
@@ -189,9 +385,9 @@ pub fn prune_backups(backups_root: &Path, name: &str, keep_id: &str) {
     }
 }
 
-/// Backups of `name`, newest first.
-pub fn list_backups(backups_root: &Path, name: &str) -> Vec<BackupInfo> {
-    let Ok(rd) = fs::read_dir(backups_root.join(name)) else {
+/// Backups of `bucket`, newest first.
+pub fn list_backups(backups_root: &Path, bucket: &str) -> Vec<BackupInfo> {
+    let Ok(rd) = fs::read_dir(backups_root.join(bucket)) else {
         return Vec::new();
     };
     let mut out: Vec<BackupInfo> = rd
@@ -209,6 +405,76 @@ pub fn list_backups(backups_root: &Path, name: &str) -> Vec<BackupInfo> {
         .collect();
     out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     out
+}
+
+/// Buckets whose skill directory no longer exists, newest backup first.
+/// Buckets without a readable meta file are ignored.
+pub fn list_deleted(backups_root: &Path) -> Vec<DeletedSkill> {
+    let Ok(rd) = fs::read_dir(backups_root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        let bucket = e.file_name().to_string_lossy().into_owned();
+        if !valid_bucket(&bucket) || !e.path().is_dir() {
+            continue;
+        }
+        let backups = list_backups(backups_root, &bucket);
+        let Some(meta) = backups
+            .iter()
+            .find_map(|b| read_meta(backups_root, &bucket, &b.id))
+        else {
+            continue;
+        };
+        // A meta pointing at another bucket is not ours.
+        if backup_bucket(Path::new(&meta.dir)) != bucket {
+            continue;
+        }
+        if fs::symlink_metadata(&meta.dir).is_ok() {
+            continue;
+        }
+        out.push(DeletedSkill {
+            bucket,
+            name: meta.name,
+            tool: meta.tool,
+            scope: meta.scope,
+            dir: meta.dir,
+            backups,
+        });
+    }
+    out.sort_by(|a, b| {
+        let t = |d: &DeletedSkill| d.backups.first().map(|x| x.created_at).unwrap_or(0);
+        t(b).cmp(&t(a)).then_with(|| a.bucket.cmp(&b.bucket))
+    });
+    out
+}
+
+/// Names carried over from the live directory when it is replaced.
+const CARRIED: [&str; 2] = [".git", "node_modules"];
+
+/// Moves the live `.git` / `node_modules` of `live` into `new` (which must be
+/// on the same volume) and returns what was moved. All or nothing.
+pub fn carry_live_dirs(live: &Path, new: &Path) -> io::Result<Vec<&'static str>> {
+    let mut moved = Vec::new();
+    for n in CARRIED {
+        let from = live.join(n);
+        if fs::symlink_metadata(&from).is_err() {
+            continue;
+        }
+        if let Err(e) = fs::rename(&from, new.join(n)) {
+            uncarry_live_dirs(live, new, &moved);
+            return Err(e);
+        }
+        moved.push(n);
+    }
+    Ok(moved)
+}
+
+/// Puts what [`carry_live_dirs`] moved back into `live`.
+pub fn uncarry_live_dirs(live: &Path, new: &Path, moved: &[&str]) {
+    for n in moved {
+        let _ = fs::rename(new.join(n), live.join(n));
+    }
 }
 
 fn sibling_named(target: &Path, tag: &str) -> PathBuf {
@@ -496,6 +762,20 @@ mod tests {
         fs::write(p, text).unwrap();
     }
 
+    /// Meta for a skill directory called `name` under `root/skills`.
+    fn meta(root: &Path, name: &str) -> BackupMeta {
+        BackupMeta::new(
+            &root.join("skills").join(name).to_string_lossy(),
+            name,
+            Tool::Claude,
+            SkillScope::Global,
+        )
+    }
+
+    fn bucket(root: &Path, name: &str) -> String {
+        backup_bucket(&root.join("skills").join(name))
+    }
+
     fn make_zip(path: &Path, entries: &[(&str, &str)]) {
         let f = fs::File::create(path).unwrap();
         let mut z = zip::ZipWriter::new(f);
@@ -586,21 +866,21 @@ mod tests {
         let root = t.path().join("bk");
         let mut last = None;
         for _ in 0..12 {
-            last = Some(backup_dir(&src, &root, "demo").unwrap());
+            last = Some(backup_dir(&src, &root, &meta(t.path(), "demo")).unwrap());
         }
-        let list = list_backups(&root, "demo");
+        let list = list_backups(&root, &bucket(t.path(), "demo"));
         assert_eq!(list.len(), MAX_BACKUPS);
         assert_eq!(list[0].id, last.unwrap().id);
         assert!(list.windows(2).all(|w| w[0].created_at > w[1].created_at));
-        assert_eq!(list[0].size_bytes, 5 + 4);
+        assert!(list[0].size_bytes >= 5 + 4, "files plus the meta file");
         // Backups are full copies, including .git.
         assert!(
-            root.join("demo")
+            root.join(bucket(t.path(), "demo"))
                 .join(&list[0].id)
                 .join(".git/HEAD")
                 .exists()
         );
-        assert!(list_backups(&root, "none").is_empty());
+        assert!(list_backups(&root, "none-00000000").is_empty());
     }
 
     #[test]
@@ -787,13 +1067,17 @@ mod tests {
         let future = now_millis() + 10_000_000_000;
         for i in 0..MAX_BACKUPS as i64 {
             write(
-                &root.join("demo").join((future + i).to_string()).join("f"),
+                &root
+                    .join(bucket(t.path(), "demo"))
+                    .join((future + i).to_string())
+                    .join("f"),
                 "f",
             );
         }
-        let info = backup_dir(&src, &root, "demo").unwrap();
-        assert!(root.join("demo").join(&info.id).join("SKILL.md").exists());
-        assert_eq!(list_backups(&root, "demo").len(), MAX_BACKUPS);
+        let info = backup_dir(&src, &root, &meta(t.path(), "demo")).unwrap();
+        let b = bucket(t.path(), "demo");
+        assert!(root.join(&b).join(&info.id).join("SKILL.md").exists());
+        assert_eq!(list_backups(&root, &b).len(), MAX_BACKUPS);
     }
 
     #[test]
@@ -814,5 +1098,139 @@ mod tests {
         cleanup_leftovers(t.path());
         assert!(!old.exists());
         assert!(fresh.exists() && keep.exists() && dotfile.exists());
+    }
+
+    #[test]
+    fn bucket_is_sanitized_stable_and_per_directory() {
+        let a = backup_bucket(Path::new("/h/.claude/skills/My Skill"));
+        assert!(a.starts_with("my-skill-") && a.len() == "my-skill-".len() + 8, "{a}");
+        assert!(valid_bucket(&a));
+        // Different place, same name: different bucket.
+        assert_ne!(a, backup_bucket(Path::new("/h/.codex/skills/My Skill")));
+        // Same place spelled differently: same bucket.
+        assert_eq!(a, backup_bucket(Path::new("/h/.claude/skills/My Skill/")));
+        let long = backup_bucket(Path::new(&format!("/s/{}", "A".repeat(100))));
+        assert_eq!(long.len(), 64 + 1 + 8);
+        let odd = backup_bucket(Path::new("/s/\u{4e2d}\u{6587}.v1"));
+        assert!(valid_bucket(&odd) && odd.starts_with("--.v1-"), "{odd}");
+        assert!(!valid_bucket("..") && !valid_bucket("a/b") && !valid_bucket(""));
+    }
+
+    #[test]
+    fn backup_writes_meta_and_it_is_not_restored() {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("skills").join("demo");
+        write(&src.join("SKILL.md"), "a");
+        write(&src.join("meta.json"), "skill's own");
+        write(&src.join(".git/HEAD"), "ref");
+        let root = t.path().join("bk");
+        let info = backup_dir(&src, &root, &meta(t.path(), "demo")).unwrap();
+        let b = bucket(t.path(), "demo");
+        let m = read_meta(&root, &b, &info.id).unwrap();
+        assert_eq!(m.name, "demo");
+        assert_eq!(m.dir, src.to_string_lossy());
+        assert!(m.links.is_empty());
+        // The skill's own meta.json is untouched; ours has a reserved name.
+        let bdir = root.join(&b).join(&info.id);
+        assert_eq!(fs::read_to_string(bdir.join("meta.json")).unwrap(), "skill's own");
+        assert!(bdir.join(META_FILE).is_file());
+        // Restoring: no meta file; .git only with keep_all.
+        let a = t.path().join("a");
+        restore_dir(&bdir, &a, Some(&m), false).unwrap();
+        assert!(a.join("SKILL.md").is_file() && a.join("meta.json").is_file());
+        assert!(!a.join(META_FILE).exists() && !a.join(".git").exists());
+        let b2 = t.path().join("b");
+        restore_dir(&bdir, &b2, Some(&m), true).unwrap();
+        assert!(b2.join(".git/HEAD").is_file() && !b2.join(META_FILE).exists());
+        // Wrong or hostile bucket / id never reads anything.
+        assert!(read_meta(&root, "../x", &info.id).is_none());
+        assert!(read_meta(&root, &b, "../1").is_none());
+    }
+
+    #[test]
+    fn backup_never_follows_links_even_to_an_ancestor() {
+        let t = tempfile::tempdir().unwrap();
+        let outside = t.path().join("outside");
+        write(&outside.join("secret.txt"), "do not copy");
+        let src = t.path().join("skills").join("demo");
+        write(&src.join("SKILL.md"), "a");
+        write(&src.join("sub/f.txt"), "f");
+        if !try_dir_symlink(t.path(), &src.join("loop")) {
+            eprintln!("skipped: cannot create symlinks");
+            return;
+        }
+        // Also a link to a sibling directory with content.
+        assert!(try_dir_symlink(&outside, &src.join("sub/out")));
+        let root = t.path().join("bk");
+        let info = backup_dir(&src, &root, &meta(t.path(), "demo")).unwrap();
+        let b = root.join(bucket(t.path(), "demo")).join(&info.id);
+        assert!(b.join("SKILL.md").is_file() && b.join("sub/f.txt").is_file());
+        // Links are kept as links or recorded in the meta; their content is not copied.
+        let m = read_meta(&root, &bucket(t.path(), "demo"), &info.id).unwrap();
+        for (rel, target) in [("loop", t.path()), ("sub/out", outside.as_path())] {
+            let p = b.join(rel);
+            let kept_as_link = fs::symlink_metadata(&p).is_ok_and(|m| m.is_symlink());
+            let recorded = m.links.iter().any(|l| l.path == rel && Path::new(&l.target) == target);
+            assert!(kept_as_link || recorded, "{rel}: {m:?}");
+            if !kept_as_link {
+                assert!(!p.exists());
+            }
+        }
+        assert!(!b.join("loop/outside").exists() || fs::symlink_metadata(b.join("loop")).unwrap().is_symlink());
+        assert!(dir_size(&b) < 1000, "no followed content");
+        // Restoring does not recurse either.
+        let r = t.path().join("restored");
+        restore_dir(&b, &r, Some(&m), true).unwrap();
+        assert!(r.join("SKILL.md").is_file());
+    }
+
+    #[test]
+    fn carry_live_dirs_moves_both_and_puts_them_back() {
+        let t = tempfile::tempdir().unwrap();
+        let live = t.path().join("live");
+        write(&live.join("SKILL.md"), "s");
+        write(&live.join(".git/HEAD"), "ref");
+        write(&live.join("node_modules/m.js"), "m");
+        let new = t.path().join("new");
+        fs::create_dir_all(&new).unwrap();
+        let moved = carry_live_dirs(&live, &new).unwrap();
+        assert_eq!(moved, vec![".git", "node_modules"]);
+        assert!(new.join(".git/HEAD").is_file() && new.join("node_modules/m.js").is_file());
+        assert!(!live.join(".git").exists() && live.join("SKILL.md").is_file());
+        uncarry_live_dirs(&live, &new, &moved);
+        assert!(live.join(".git/HEAD").is_file() && live.join("node_modules/m.js").is_file());
+        // A failure halfway returns what was already moved.
+        write(&new.join("node_modules/block"), "x");
+        assert!(carry_live_dirs(&live, &new).is_err());
+        assert!(live.join(".git/HEAD").is_file() && live.join("node_modules/m.js").is_file());
+        // Nothing to carry: nothing moved.
+        let bare = t.path().join("bare");
+        write(&bare.join("SKILL.md"), "s");
+        assert!(carry_live_dirs(&bare, &new).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_deleted_only_lists_missing_dirs_with_meta() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("bk");
+        let mk = |name: &str| {
+            let d = t.path().join("skills").join(name);
+            write(&d.join("SKILL.md"), name);
+            d
+        };
+        let gone = mk("gone");
+        let alive = mk("alive");
+        backup_dir(&gone, &root, &meta(t.path(), "gone")).unwrap();
+        backup_dir(&alive, &root, &meta(t.path(), "alive")).unwrap();
+        // A bucket without meta (not ours) and a stray file are ignored.
+        write(&root.join("legacy-12345678/1/SKILL.md"), "x");
+        write(&root.join("stray.txt"), "x");
+        fs::remove_dir_all(&gone).unwrap();
+        let d = list_deleted(&root);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].name, "gone");
+        assert_eq!(d[0].bucket, bucket(t.path(), "gone"));
+        assert_eq!(d[0].backups.len(), 1);
+        assert!(list_deleted(&t.path().join("none")).is_empty());
     }
 }

@@ -23,6 +23,11 @@ pub enum GitError {
 pub trait GitRunner: Send + Sync {
     fn available(&self) -> bool;
     fn ls_remote_head(&self, url: &str, git_ref: Option<&str>) -> Result<String, GitError>;
+    /// Branch and tag names the remote advertises (`refs/heads/` / `refs/tags/`
+    /// stripped), used to resolve `tree/<ref>/<path>` refs that contain `/`.
+    fn ls_remote_refs(&self, _url: &str) -> Result<Vec<String>, GitError> {
+        Err(failed("listing remote refs is not supported"))
+    }
     fn shallow_clone(
         &self,
         url: &str,
@@ -280,6 +285,24 @@ impl GitRunner for SystemGit {
             Err(_) if is_full_sha(r) => Ok(r.to_string()),
             Err(e) => Err(e),
         }
+    }
+
+    fn ls_remote_refs(&self, url: &str) -> Result<Vec<String>, GitError> {
+        check_arg(url)?;
+        let out = self.run(None, &["ls-remote", "--heads", "--tags", "--", url])?;
+        let mut names: Vec<String> = out
+            .lines()
+            .filter_map(|l| l.split_whitespace().nth(1))
+            .filter_map(|n| {
+                let n = n.strip_suffix("^{}").unwrap_or(n);
+                n.strip_prefix("refs/heads/")
+                    .or_else(|| n.strip_prefix("refs/tags/"))
+                    .map(str::to_string)
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
 
     fn shallow_clone(
@@ -613,5 +636,19 @@ mod tests {
         let g = SystemGit::new();
         assert!(g.remote_url(tmp.path()).is_none());
         assert!(g.head_commit(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn ls_remote_refs_lists_branches_and_tags() {
+        let t = tempfile::tempdir().unwrap();
+        let (url, work) = make_remote(t.path());
+        git(&work, &["checkout", "-q", "-b", "feature/x"]);
+        commit_file(&work, "f.txt");
+        git(&work, &["push", "-q", "origin", "feature/x"]);
+        git(&work, &["tag", "-a", "v1.0", "-m", "v1"]);
+        git(&work, &["push", "-q", "origin", "v1.0"]);
+        let refs = SystemGit::new().ls_remote_refs(&url).unwrap();
+        assert_eq!(refs, vec!["feature/x", "main", "v1.0"]);
+        assert!(SystemGit::new().ls_remote_refs("--evil").is_err());
     }
 }

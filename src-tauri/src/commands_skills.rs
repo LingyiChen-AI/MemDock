@@ -14,9 +14,9 @@ use crate::commands::{lock, AppState, CommandError};
 use crate::memory::analyze::{estimate_tokens, find_imports, ImportRef};
 use crate::memory::io::{read_memory, write_memory};
 use crate::model::{Project, Tool};
-use crate::skills::fsops::{list_backups, BackupInfo};
+use crate::skills::fsops::{backup_bucket, list_backups, valid_backup_id, BackupInfo, DeletedSkill};
 use crate::skills::git::GitError;
-use crate::skills::git_cache::{list_repo_skills, parse_github_input, RepoSkill};
+use crate::skills::git_cache::{list_repo_skills, parse_github_input, resolve_tree_ref, RepoSkill};
 use crate::skills::model::{SkillEntry, SkillScope};
 use crate::skills::ops::{
     self, InstallFrom, InstallTarget, OpsCtx, OpsError, UpdateStatus,
@@ -89,6 +89,9 @@ pub enum InstallFromDto {
         #[serde(default)]
         git_ref: Option<String>,
         skill_path: String,
+        /// Pin the install to the commit the user inspected.
+        #[serde(default)]
+        commit: Option<String>,
     },
     Folder {
         path: String,
@@ -110,11 +113,13 @@ impl From<InstallFromDto> for InstallFrom {
                 clone_url,
                 git_ref,
                 skill_path,
+                commit,
             } => InstallFrom::Git {
                 url,
                 clone_url,
                 git_ref,
                 skill_path,
+                commit,
             },
             InstallFromDto::Folder { path } => InstallFrom::Folder { path },
             InstallFromDto::Zip { path } => InstallFrom::Zip { path },
@@ -241,6 +246,28 @@ pub fn list_skills_impl(state: &AppState) -> Result<Vec<SkillEntry>, CommandErro
     Ok(ops::scan_with_sources(&ops_ctx(state))?.0)
 }
 
+/// Startup housekeeping: removes stale `.memdock-*` temp siblings in every
+/// skills folder and anything in `<appdata>/skill-tmp` older than an hour.
+/// Meant for a background thread; failures are ignored.
+pub fn startup_cleanup(state: &AppState) {
+    use crate::skills::fsops::cleanup_leftovers;
+    use crate::skills::git_cache::cleanup_cache;
+    let settings = crate::settings::load_settings(&state.settings_path);
+    let roots: Vec<String> =
+        crate::projects::discover_projects(&state.paths, &settings.manual_projects)
+            .into_iter()
+            .filter(|p| p.exists)
+            .map(|p| p.path)
+            .collect();
+    for root in crate::watcher::skill_roots(&state.paths, &state.home, &roots) {
+        cleanup_leftovers(&root);
+    }
+    cleanup_cache(
+        &state.data_dir.join("skill-tmp"),
+        std::time::Duration::from_secs(3600),
+    );
+}
+
 pub fn git_available_impl(state: &AppState) -> bool {
     state.git.available()
 }
@@ -249,9 +276,16 @@ pub fn inspect_git_source_impl(
     state: &AppState,
     input: &str,
 ) -> Result<InspectResult, CommandError> {
-    let parsed = parse_github_input(input).map_err(invalid)?;
+    let mut parsed = parse_github_input(input).map_err(invalid)?;
     if !state.git.available() {
         return Err(CommandError::new("git_unavailable", "git is not installed"));
+    }
+    // `tree/feature/x/skills/a`: let the remote's refs decide where the ref ends.
+    // Offline / failing listing keeps the first segment as the ref.
+    if parsed.tree_tail.len() > 1 {
+        if let Ok(refs) = state.git.ls_remote_refs(&parsed.clone_url) {
+            resolve_tree_ref(&mut parsed, &refs);
+        }
     }
     // No skills_lock here: only the cache lock inside `ensure_cache`.
     let (cache, commit) = ops::ensure_cache(
@@ -259,6 +293,7 @@ pub fn inspect_git_source_impl(
         &parsed.url,
         &parsed.clone_url,
         parsed.git_ref.as_deref(),
+        None,
     )?;
     Ok(InspectResult {
         skills: list_repo_skills(&cache),
@@ -310,8 +345,8 @@ pub fn list_skill_backups_impl(
     skill_id: &str,
 ) -> Result<Vec<BackupInfo>, CommandError> {
     let entry = find_entry(state, skill_id)?;
-    let key = ops::skill_key(&entry)?;
-    Ok(list_backups(&ops_ctx(state).backups_root(), &key))
+    let bucket = backup_bucket(Path::new(&entry.dir));
+    Ok(list_backups(&ops_ctx(state).backups_root(), &bucket))
 }
 
 /// Reads a text file of a backup (default `SKILL.md`) for comparing it with the current content.
@@ -323,11 +358,11 @@ pub fn read_skill_backup_file_impl(
     rel_path: Option<&str>,
 ) -> Result<SkillFileDto, CommandError> {
     let entry = find_entry(state, skill_id)?;
-    let key = ops::skill_key(&entry)?;
-    if backup_id.is_empty() || !backup_id.bytes().all(|b| b.is_ascii_digit()) {
+    let bucket = backup_bucket(Path::new(&entry.dir));
+    if !valid_backup_id(backup_id) {
         return Err(invalid("invalid backup id"));
     }
-    let base = ops_ctx(state).backups_root().join(&key).join(backup_id);
+    let base = ops_ctx(state).backups_root().join(&bucket).join(backup_id);
     if !base.is_dir() {
         return Err(invalid(format!("backup not found: {backup_id}")));
     }
@@ -356,6 +391,28 @@ pub fn read_skill_backup_file_impl(
 pub fn delete_skill_impl(state: &AppState, skill_id: &str) -> Result<BackupInfo, CommandError> {
     let _g = lock(&state.skills_lock);
     Ok(ops::delete(&ops_ctx(state), skill_id)?)
+}
+
+pub fn list_deleted_skill_backups_impl(state: &AppState) -> Vec<DeletedSkill> {
+    ops::list_deleted_skills(&ops_ctx(state))
+}
+
+/// Restores a deleted skill to its original directory; returns that directory.
+pub fn restore_deleted_skill_impl(
+    state: &AppState,
+    bucket: &str,
+    backup_id: &str,
+) -> Result<String, CommandError> {
+    let _g = lock(&state.skills_lock);
+    Ok(ops::restore_deleted(&ops_ctx(state), bucket, backup_id)?)
+}
+
+/// Absolute path of a backup bucket. The app has no opener plugin, so the UI
+/// shows the path with a copy button.
+pub fn reveal_backup_folder_impl(state: &AppState, bucket: &str) -> Result<String, CommandError> {
+    Ok(ops::backup_folder(&ops_ctx(state), bucket)?
+        .to_string_lossy()
+        .into_owned())
 }
 
 pub fn sync_skill_impl(
@@ -659,6 +716,26 @@ pub fn delete_skill(
     skill_id: String,
 ) -> Result<BackupInfo, CommandError> {
     emitting(&app, delete_skill_impl(&state, &skill_id))
+}
+
+#[tauri::command(async)]
+pub fn list_deleted_skill_backups(state: St) -> Vec<DeletedSkill> {
+    list_deleted_skill_backups_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn restore_deleted_skill(
+    state: St,
+    app: AppHandle,
+    bucket: String,
+    backup_id: String,
+) -> Result<String, CommandError> {
+    emitting(&app, restore_deleted_skill_impl(&state, &bucket, &backup_id))
+}
+
+#[tauri::command(async)]
+pub fn reveal_backup_folder(state: St, bucket: String) -> Result<String, CommandError> {
+    reveal_backup_folder_impl(&state, &bucket)
 }
 
 #[tauri::command(async)]
@@ -1082,5 +1159,56 @@ b
         assert_eq!(inspect_git_source_impl(&st, "o/r").unwrap().preselected, None);
         let err = inspect_git_source_impl(&st, "not a repo").unwrap_err();
         assert_eq!(err.code, "invalid");
+    }
+
+    #[test]
+    fn startup_cleanup_removes_only_old_temp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let root = st.paths.claude_home.join("skills");
+        fs::create_dir_all(root.join("keep")).unwrap();
+        fs::write(root.join("keep/SKILL.md"), "k").unwrap();
+        let tmp_dir = st.data_dir.join("skill-tmp");
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let age = |p: &Path, secs: u64| {
+            let f = fs::File::options().write(true).open(p).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs))
+                .unwrap();
+        };
+        let old_left = root.join(".keep.memdock-old-1-2");
+        let new_left = root.join(".keep.memdock-new-1-2");
+        let old_tmp = tmp_dir.join("install-1-1");
+        let new_tmp = tmp_dir.join("install-2-2");
+        for p in [&old_left, &new_left, &old_tmp, &new_tmp] {
+            fs::write(p, "x").unwrap();
+        }
+        age(&old_left, 7200);
+        age(&old_tmp, 7200);
+        startup_cleanup(&st);
+        assert!(!old_left.exists() && !old_tmp.exists());
+        assert!(new_left.exists() && new_tmp.exists());
+        assert!(root.join("keep/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn deleted_skills_list_restore_and_reveal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let e = install_demo(&st);
+        let b = delete_skill_impl(&st, &e.id).unwrap();
+        let deleted = list_deleted_skill_backups_impl(&st);
+        assert_eq!(deleted.len(), 1);
+        let bucket = deleted[0].bucket.clone();
+        assert_eq!(deleted[0].backups[0].id, b.id);
+        let path = reveal_backup_folder_impl(&st, &bucket).unwrap();
+        assert!(Path::new(&path).is_dir() && path.contains(&bucket));
+        assert_eq!(reveal_backup_folder_impl(&st, "..").unwrap_err().code, "invalid");
+        assert_eq!(reveal_backup_folder_impl(&st, "nope-00000000").unwrap_err().code, "invalid");
+        let dir = restore_deleted_skill_impl(&st, &bucket, &b.id).unwrap();
+        assert_eq!(dir, e.dir);
+        assert_eq!(list_skills_impl(&st).unwrap().len(), 1);
+        assert!(list_deleted_skill_backups_impl(&st).is_empty());
+        // Restoring again would overwrite: refused.
+        assert_eq!(restore_deleted_skill_impl(&st, &bucket, &b.id).unwrap_err().code, "invalid");
     }
 }

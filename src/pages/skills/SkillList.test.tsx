@@ -139,4 +139,41 @@ describe("SkillList", () => {
     setup([a, b]);
     expect(names()).toEqual(["dup", "dup"]);
   });
+
+  const gone = {
+    bucket: "pdf-notes-1a2b3c4d",
+    name: "pdf-notes",
+    tool: "claude" as const,
+    scope: { type: "global" as const },
+    dir: "C:\\x\\pdf-notes",
+    backups: [{ id: "1700000900000", created_at: 1_700_000_900_000, size_bytes: 10 }],
+  };
+
+  it("hides the deleted group when nothing was deleted", () => {
+    setup([alpha], { deleted: [] });
+    expect(screen.queryByRole("button", { name: /已删除的 skill/ })).toBeNull();
+    expect(screen.queryByRole("list", { name: "已删除的 skill 列表" })).toBeNull();
+  });
+
+  it("shows a collapsed group with the count, expands to the deleted skills and selects one", async () => {
+    const p = setup([alpha], { deleted: [gone, { ...gone, bucket: "b-2", name: "other", backups: [] }], onSelectDeleted: vi.fn() });
+    const head = screen.getByRole("button", { name: "已删除的 skill（2）" });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("list", { name: "已删除的 skill 列表" })).toBeNull();
+    await userEvent.click(head);
+    expect(head).toHaveAttribute("aria-expanded", "true");
+    const list = screen.getByRole("list", { name: "已删除的 skill 列表" });
+    expect(within(list).getByText("pdf-notes")).toBeInTheDocument();
+    expect(within(list).getByText(/最近备份 \d\d-\d\d \d\d:\d\d/)).toBeInTheDocument();
+    await userEvent.click(within(list).getByText("pdf-notes"));
+    expect(p.onSelectDeleted).toHaveBeenCalledWith(gone);
+    // The skills list itself is unaffected.
+    expect(names()).toEqual(["alpha"]);
+  });
+
+  it("keeps the group open while one of its skills is opened", () => {
+    setup([alpha], { deleted: [gone], selectedDeleted: gone.bucket, onSelectDeleted: vi.fn() });
+    expect(screen.getByRole("list", { name: "已删除的 skill 列表" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { current: true })).toHaveTextContent("pdf-notes");
+  });
 });

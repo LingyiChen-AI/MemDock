@@ -198,8 +198,8 @@ const skillsList: SkillEntry[] = [
   }),
 ];
 const skillUpdates: UpdateStatus[] = [
-  { skill_id: skillsList[0].id, current: "a1b2c3d4e5f6", latest: "0f1e2d3c4b5a", has_update: true, local_modified: true, local_state_unknown: false, error: null },
-  { skill_id: skillsList[3].id, current: "9f8e7d6c5b4a", latest: "9f8e7d6c5b4a", has_update: false, local_modified: false, local_state_unknown: true, error: null },
+  { skill_id: skillsList[0].id, current: "a1b2c3d4e5f6", latest: "0f1e2d3c4b5a", has_update: true, local_modified: true, local_state_unknown: false, not_updatable_subdir: false, repo_root: null, error: null },
+  { skill_id: skillsList[3].id, current: "9f8e7d6c5b4a", latest: "9f8e7d6c5b4a", has_update: false, local_modified: false, local_state_unknown: true, not_updatable_subdir: false, repo_root: null, error: null },
 ];
 const skillFileList = {
   files: [
@@ -244,6 +244,28 @@ const skillBackups = [
   { id: "1730800000000", created_at: NOW - 2 * 3600_000, size_bytes: 182_000 },
   { id: "1730700000000", created_at: NOW - 30 * 3600_000, size_bytes: 176_400 },
   { id: "1730100000000", created_at: NOW - 8 * 24 * 3600_000, size_bytes: 91_300 },
+];
+
+const deletedSkills = [
+  {
+    bucket: "pdf-notes-1a2b3c4d",
+    name: "pdf-notes",
+    tool: "claude",
+    scope: { type: "global" },
+    dir: "C:\\Users\\Admin\\.claude\\skills\\pdf-notes",
+    backups: [
+      { id: "1730800000000", created_at: NOW - 3 * 3600_000, size_bytes: 24_500 },
+      { id: "1730200000000", created_at: NOW - 7 * 24 * 3600_000, size_bytes: 21_900 },
+    ],
+  },
+  {
+    bucket: "deploy-helper-9e8d7c6b",
+    name: "Deploy Helper",
+    tool: "codex",
+    scope: { type: "project", project_id: jev.id },
+    dir: "C:\\work\\jev\\.agents\\skills\\Deploy Helper",
+    backups: [{ id: "1730600000000", created_at: NOW - 36 * 3600_000, size_bytes: 8_800 }],
+  },
 ];
 
 let version = 0;
@@ -308,6 +330,12 @@ mockIPC(
         return skillsList[0];
       case "list_skill_backups":
         return skillBackups;
+      case "list_deleted_skill_backups":
+        return params.get("deleted") === "0" ? [] : deletedSkills;
+      case "reveal_backup_folder":
+        return `C:\\Users\\Admin\\AppData\\Roaming\\MemDock\\skill-backups\\${String(a.bucket)}`;
+      case "restore_deleted_skill":
+        return "C:\\Users\\Admin\\.claude\\skills\\pdf-notes";
       case "rollback_skill":
         return skillsList[0];
       case "plugin:dialog|open":

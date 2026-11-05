@@ -155,4 +155,18 @@ describe("SkillDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "登记" }));
     expect(await screen.findByText("登记失败：bad url")).toBeInTheDocument();
   });
+
+  it("update is disabled with a hint for a subfolder of a larger repository", () => {
+    const src = { url: "https://github.com/o/mono", git_ref: null, commit: "abc1234567890", skill_path: "skills/x", origin: "symlink_repo" as const };
+    const sub = mkSkill({ name: "sub", source: src });
+    setup(sub, {
+      update: mkUpdate({ skill_id: sub.id, not_updatable_subdir: true, repo_root: "C:\\repos\\mono" }),
+    });
+    const btn = screen.getByRole("button", { name: "更新" });
+    expect(btn).toBeDisabled();
+    expect(btn.closest("span")).toHaveAttribute(
+      "title",
+      "这个 skill 位于仓库 C:\\repos\\mono 的子目录，请在该仓库里自行更新",
+    );
+  });
 });

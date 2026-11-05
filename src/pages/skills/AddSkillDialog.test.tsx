@@ -72,7 +72,7 @@ describe("AddSkillDialog", () => {
     await userEvent.click(install);
     await waitFor(() => expect(installSkill).toHaveBeenCalledTimes(2));
     expect((installSkill as Mock).mock.calls[0]).toEqual([
-      { type: "git", url: inspected.url, clone_url: inspected.clone_url, git_ref: null, skill_path: "skills/alpha" },
+      { type: "git", url: inspected.url, clone_url: inspected.clone_url, git_ref: null, skill_path: "skills/alpha", commit: inspected.commit },
       [{ tool: "claude", scope: { type: "global" } }],
       false,
     ]);

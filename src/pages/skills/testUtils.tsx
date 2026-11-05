@@ -28,6 +28,8 @@ export function mkUpdate(over: Partial<UpdateStatus> & { skill_id: string }): Up
     has_update: false,
     local_modified: false,
     local_state_unknown: false,
+    not_updatable_subdir: false,
+    repo_root: null,
     error: null,
     ...over,
   };

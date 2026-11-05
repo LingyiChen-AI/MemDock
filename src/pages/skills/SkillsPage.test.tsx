@@ -9,6 +9,9 @@ vi.mock("@/api/memory", () => ({
 }));
 vi.mock("@/api/skills", () => ({
   listSkills: vi.fn(),
+  listDeletedSkillBackups: vi.fn().mockResolvedValue([]),
+  restoreDeletedSkill: vi.fn(),
+  revealBackupFolder: vi.fn(),
   gitAvailable: vi.fn().mockResolvedValue(true),
   checkSkillUpdates: vi.fn(),
   onSkillsChanged: vi.fn().mockResolvedValue(() => {}),
@@ -117,5 +120,49 @@ describe("SkillsPage", () => {
     await act(async () => emit());
     expect(await screen.findByText(/已被外部删除/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "alpha" })).toBeInTheDocument();
+  });
+
+  it("lists deleted skills at the bottom, opens one and restores it", async () => {
+    const { listDeletedSkillBackups, restoreDeletedSkill, revealBackupFolder } = await import("@/api/skills");
+    const gone = {
+      bucket: "gone-1a2b3c4d",
+      name: "gone",
+      tool: "claude" as const,
+      scope: { type: "global" as const },
+      dir: a.dir.replace("alpha", "gone"),
+      backups: [{ id: "1700000900000", created_at: 1_700_000_900_000, size_bytes: 2048 }],
+    };
+    (listDeletedSkillBackups as Mock).mockResolvedValue([gone]);
+    (revealBackupFolder as Mock).mockResolvedValue("C:\\data\\skill-backups\\gone-1a2b3c4d");
+    (restoreDeletedSkill as Mock).mockResolvedValue(gone.dir);
+    const back = mkSkill({ name: "gone", dir: gone.dir, id: gone.dir.replace(/\\/g, "/").toLowerCase() });
+    (listSkills as Mock).mockResolvedValue([a, b]);
+    renderApp(<SkillsPage />);
+    await screen.findByRole("heading", { name: "alpha" });
+    await userEvent.click(await screen.findByRole("button", { name: "已删除的 skill（1）" }));
+    await userEvent.click(within(screen.getByRole("list", { name: "已删除的 skill 列表" })).getByText("gone"));
+    expect(await screen.findByText("这个 skill 已被删除，备份还在，可以恢复到原位置。")).toBeInTheDocument();
+    expect(await screen.findByText("C:\\data\\skill-backups\\gone-1a2b3c4d")).toBeInTheDocument();
+    // Restoring brings it back: the list is reloaded and the restored skill opens.
+    (listDeletedSkillBackups as Mock).mockResolvedValue([]);
+    (listSkills as Mock).mockResolvedValue([a, b, back]);
+    await userEvent.click(screen.getByRole("button", { name: "恢复到原位置" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "恢复" }));
+    await vi.waitFor(() => expect(restoreDeletedSkill).toHaveBeenCalledWith("gone-1a2b3c4d", "1700000900000"));
+    expect(await screen.findByText("已恢复 gone 到原位置")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "gone" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /已删除的 skill（/ })).toBeNull();
+  });
+
+  it("still shows the deleted group when the last skill was deleted", async () => {
+    const { listDeletedSkillBackups } = await import("@/api/skills");
+    (listDeletedSkillBackups as Mock).mockResolvedValue([
+      { bucket: "gone-1a2b3c4d", name: "gone", tool: "claude", scope: { type: "global" }, dir: "C:\\x\\gone", backups: [] },
+    ]);
+    (listSkills as Mock).mockResolvedValue([]);
+    renderApp(<SkillsPage />);
+    expect(await screen.findByRole("button", { name: "已删除的 skill（1）" })).toBeInTheDocument();
+    expect(screen.queryByText("还没有 skill")).toBeNull();
   });
 });

@@ -9,6 +9,9 @@ vi.mock("@/api/memory", () => ({
 }));
 vi.mock("@/api/skills", () => ({
   listSkills: vi.fn(),
+  listDeletedSkillBackups: vi.fn().mockResolvedValue([]),
+  restoreDeletedSkill: vi.fn(),
+  revealBackupFolder: vi.fn(),
   gitAvailable: vi.fn().mockResolvedValue(true),
   checkSkillUpdates: vi.fn(),
   onSkillsChanged: vi.fn().mockResolvedValue(() => {}),
@@ -113,10 +116,10 @@ describe("skill actions", () => {
     await userEvent.click(screen.getByRole("button", { name: "删除" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/只删除链接，不会删除 → C:\\repo\\linked/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/可在「备份」里恢复/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/可在列表底部「已删除的 skill」里恢复/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "删除" }));
     await waitFor(() => expect(deleteSkill).toHaveBeenCalledWith(link.id));
-    expect(await screen.findByText(/已删除 linked，可在「备份」里恢复/)).toBeInTheDocument();
+    expect(await screen.findByText(/已删除 linked，可在列表底部「已删除的 skill」里恢复/)).toBeInTheDocument();
   });
 
   it("tells that a dangling link needed no backup", async () => {
@@ -124,7 +127,7 @@ describe("skill actions", () => {
     await open();
     await userEvent.click(screen.getByRole("button", { name: "删除" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText("会先备份，可在「备份」里恢复。")).toBeInTheDocument();
+    expect(within(dialog).getByText("会先备份，可在列表底部「已删除的 skill」里恢复。")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "删除" }));
     expect(await screen.findByText("已删除失效的链接（无需备份）")).toBeInTheDocument();
   });

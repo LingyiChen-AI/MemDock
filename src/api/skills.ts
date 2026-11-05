@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   BackupInfo,
+  DeletedSkill,
   InspectResult,
   InstallFrom,
   InstallTarget,
@@ -54,6 +55,21 @@ export function listSkillBackups(skillId: string): Promise<BackupInfo[]> {
 /** Resolves with the backup taken first; `id === ""` means no backup was made. */
 export function deleteSkill(skillId: string): Promise<BackupInfo> {
   return invoke<BackupInfo>("delete_skill", { skillId });
+}
+
+/** Skills whose folder is gone but whose backups remain. */
+export function listDeletedSkillBackups(): Promise<DeletedSkill[]> {
+  return invoke<DeletedSkill[]>("list_deleted_skill_backups");
+}
+
+/** Restores a deleted skill to its original folder; resolves with that folder. */
+export function restoreDeletedSkill(bucket: string, backupId: string): Promise<string> {
+  return invoke<string>("restore_deleted_skill", { bucket, backupId });
+}
+
+/** Absolute path of a backup folder (there is no opener plugin; the UI shows it with a copy button). */
+export function revealBackupFolder(bucket: string): Promise<string> {
+  return invoke<string>("reveal_backup_folder", { bucket });
 }
 
 export function syncSkill(

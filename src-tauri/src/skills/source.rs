@@ -214,6 +214,9 @@ mod tests {
         fn repo_root(&self, _: &Path) -> Option<PathBuf> {
             self.root.clone()
         }
+        fn pull_ff_only(&self, _: &Path) -> Result<String, GitError> {
+            Err(GitError::NotInstalled)
+        }
     }
 
     fn entry(name: &str, dir: &Path) -> SkillEntry {

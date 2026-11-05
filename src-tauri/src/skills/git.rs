@@ -32,6 +32,8 @@ pub trait GitRunner: Send + Sync {
     fn remote_url(&self, dir: &Path) -> Option<String>;
     fn head_commit(&self, dir: &Path) -> Option<String>;
     fn repo_root(&self, dir: &Path) -> Option<PathBuf>;
+    /// `git pull --ff-only` inside `dir`; returns the new HEAD commit.
+    fn pull_ff_only(&self, dir: &Path) -> Result<String, GitError>;
 }
 
 /// Runs the real `git` executable.
@@ -328,6 +330,15 @@ impl GitRunner for SystemGit {
             .ok()
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
+    }
+
+    fn pull_ff_only(&self, dir: &Path) -> Result<String, GitError> {
+        if !dir.is_dir() {
+            return Err(failed("not a directory"));
+        }
+        // `dir` is only ever the working directory, never an option-like argument.
+        self.run(Some(dir), &["pull", "-q", "--ff-only"])?;
+        self.run(Some(dir), &["rev-parse", "HEAD"])
     }
 }
 

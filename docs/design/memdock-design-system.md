@@ -55,7 +55,7 @@
 
 | 变量 | 暗色 | 亮色 | 标签文字 |
 |---|---|---|---|
-| `--tool-claude` | `#F59E0B` | `#D97706` | `CC` / Claude Code |
+| `--tool-claude` | `#F59E0B` | `#D97706` | `Claude Code` |
 | `--tool-codex` | `#38BDF8` | `#0284C7` | `Codex` |
 
 **变更类型色**（待审核卡片、diff）：新增 `--primary`；修改 `--warning`；过时 `--destructive`。diff 行底色用对应颜色 15% 透明度。
@@ -69,7 +69,10 @@
 | 页面标题 | 同上 | 18px / 26px / 600 |
 | 区块标题 | 同上 | 14px / 20px / 600 |
 | 数字指标 | 同上，`font-variant-numeric: tabular-nums` | 22px / 28px / 600 |
-| 代码、路径、编辑器 | `"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace` | 12.5px / 20px |
+| 记忆内容（编辑器、预览、diff 正文、搜索结果预览） | `"Inter Variable", "LXGW WenKai Screen", "PingFang SC", "Microsoft YaHei UI", sans-serif` | 编辑器 13.5px / 24px；预览 14px / 25px |
+| 代码、路径、行号 | `"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace` | 12.5px / 20px |
+
+> 2026-11-05 用户选定霞鹜文楷（LXGW WenKai Screen，OFL 开源，npm `lxgw-wenkai-screen-webfont`，按 unicode-range 子集本地打包）作为记忆内容的中文字体。原因：编辑器原先整体用等宽字体，JetBrains Mono 不含中文，中文回落到别的字体导致中英不齐、观感怪。等宽字体只用于行内代码、代码块、路径和行号。界面框架（导航、按钮、标签）仍用界面正文字体。
 
 > 桌面工具 13px 正文是 macOS/VS Code 的惯例；可在设置里提供「界面缩放 90% / 100% / 110%」。
 
@@ -116,3 +119,12 @@
 - 可点击元素 `cursor: pointer`，hover 有 150ms 过渡。
 - 不靠颜色单独表达含义（工具、变更类型都带文字）。
 - 中英两种语言下检查文字溢出（英文通常更长），按钮宽度不写死。
+
+## 9. 外观设置入口与滚动同步（2026-11-05 用户反馈）
+
+- **外观面板**：侧栏底部（「收起侧栏」同一行）放一个调色板图标按钮（lucide `Palette`，带 tooltip「外观 / Appearance」），点开 Popover：
+  - 「模式」分段控件：暗色 / 亮色 / 跟随系统；
+  - 「主题色」5 个圆形色块（同设置页）；
+  - 「语言」分段控件：中文 / English / 跟随系统。
+  - 侧栏折叠成图标栏时按钮仍在。任何页面都能打开。
+- **分栏滚动同步**：编辑器与预览按 Markdown 源码行号对应（预览块级元素带 `data-line`），滚动一侧时另一侧把对应块对齐到顶部；用「谁先滚谁是主」的锁避免互相触发抖动；只在「分栏」模式生效，提供一个默认开启的「同步滚动」开关，记在 localStorage `memdock.syncScroll`。

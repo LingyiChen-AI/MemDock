@@ -195,6 +195,7 @@ fn scan_children(root: &Path, skip: &[&str], ctx: &Ctx, out: &mut Vec<SkillEntry
     let mut dirs: Vec<PathBuf> = rd
         .flatten()
         .filter(|e| !skip.iter().any(|s| e.file_name() == *s))
+        .filter(|e| !crate::skills::fsops::is_leftover_name(&e.file_name().to_string_lossy()))
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();
@@ -634,5 +635,24 @@ mod tests {
         }
         let out = scan_skills(&paths, tmp.path(), &[]);
         assert_eq!(out[0].file_count, STATS_MAX_FILES);
+    }
+
+    #[test]
+    fn leftover_memdock_dirs_are_not_skills() {
+        let (tmp, paths) = setup();
+        skill(&paths.claude_home.join("skills/real"), "real", "d");
+        skill(
+            &paths.claude_home.join("skills/.real.memdock-old-1-2"),
+            "real",
+            "d",
+        );
+        skill(
+            &paths.claude_home.join("skills/.real.memdock-new-1-2"),
+            "real",
+            "d",
+        );
+        let out = scan_skills(&paths, tmp.path(), &[]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "real");
     }
 }

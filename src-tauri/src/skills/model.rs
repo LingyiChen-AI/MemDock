@@ -36,8 +36,11 @@ pub enum SourceOrigin {
 pub struct SkillSource {
     /// Normalized: `https://github.com/owner/repo` (no `.git`, no trailing `/`).
     pub url: String,
-    /// Commit the install corresponds to, when known.
+    /// Tracking ref (branch or tag) requested at install; `None` = remote HEAD.
     pub git_ref: Option<String>,
+    /// Commit the install corresponds to, when known.
+    #[serde(default)]
+    pub commit: Option<String>,
     /// Path inside the repository; `""` when the skill is the repo root.
     pub skill_path: String,
     pub origin: SourceOrigin,

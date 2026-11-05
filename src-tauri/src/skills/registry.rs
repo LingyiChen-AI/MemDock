@@ -204,6 +204,7 @@ pub fn register_manual(
     let source = SkillSource {
         url,
         git_ref: None,
+        commit: None,
         skill_path,
         origin: SourceOrigin::Manual,
     };
@@ -266,7 +267,8 @@ mod tests {
                 name: "demo".into(),
                 source: SkillSource {
                     url: "https://github.com/a/b".into(),
-                    git_ref: Some("abc".into()),
+                    git_ref: Some("main".into()),
+                    commit: Some("abc".into()),
                     skill_path: "skills/demo".into(),
                     origin: SourceOrigin::Registry,
                 },

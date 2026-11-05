@@ -20,6 +20,8 @@ pub const MAX_ZIP_BYTES: u64 = 200 * 1024 * 1024;
 pub const MAX_ZIP_ENTRIES: usize = 20_000;
 /// Deepest directory nesting copied (guards against symlink loops).
 const MAX_DEPTH: usize = 40;
+/// Age after which leftover temp directories are removed.
+const LEFTOVER_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
 pub fn now_millis() -> i64 {
     SystemTime::now()
@@ -171,8 +173,13 @@ pub fn backup_dir(src: &Path, backups_root: &Path, name: &str) -> io::Result<Bac
         created_at: ms,
         size_bytes: dir_size(&dest),
     };
-    let all = list_backups(backups_root, name);
-    for old in all.iter().skip(MAX_BACKUPS) {
+    // Never prune the backup that was just made, even if older-looking ids
+    // sort after it (clock changes, future-dated backups).
+    let others: Vec<BackupInfo> = list_backups(backups_root, name)
+        .into_iter()
+        .filter(|b| b.id != info.id)
+        .collect();
+    for old in others.iter().skip(MAX_BACKUPS - 1) {
         let _ = fs::remove_dir_all(base.join(&old.id));
     }
     Ok(info)
@@ -242,17 +249,62 @@ pub fn atomic_replace_dir(prepared: &Path, target: &Path) -> io::Result<()> {
                 return Err(e);
             }
             // New content is in place; the old copy is just garbage now.
-            let _ = fs::remove_dir_all(&old);
+            if let Err(e) = fs::remove_dir_all(&old) {
+                eprintln!(
+                    "memdock: could not remove old skill copy {}: {e}",
+                    old.display()
+                );
+            }
             Ok(())
         }
     }
 }
 
+/// Empties `dir` but keeps the excluded entries (`.git`, `node_modules`, ...)
+/// that [`copy_dir`] never brings back.
 fn clear_dir_contents(dir: &Path) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
-        remove_any(&entry?.path())?;
+        let entry = entry?;
+        if EXCLUDED.iter().any(|x| entry.file_name() == *x) {
+            continue;
+        }
+        remove_any(&entry.path())?;
     }
     Ok(())
+}
+
+/// Removes stale `.<name>.memdock-old-*` / `.memdock-new-*` / `.memdock-tmp-*`
+/// leftovers in `root` that are older than one hour.
+pub fn cleanup_leftovers(root: &Path) {
+    let Ok(rd) = fs::read_dir(root) else { return };
+    let now = SystemTime::now();
+    for e in rd.flatten() {
+        if !is_leftover_name(&e.file_name().to_string_lossy()) {
+            continue;
+        }
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age >= LEFTOVER_MAX_AGE);
+        if old {
+            if let Err(err) = remove_any(&e.path()) {
+                eprintln!(
+                    "memdock: could not remove leftover {}: {err}",
+                    e.path().display()
+                );
+            }
+        }
+    }
+}
+
+/// True for temp directories created by install / replace (`.x.memdock-old-1`).
+pub fn is_leftover_name(name: &str) -> bool {
+    name.starts_with('.')
+        && ["old", "new", "tmp"]
+            .iter()
+            .any(|k| name.contains(&format!(".memdock-{k}-")))
 }
 
 fn replace_through_link(prepared: &Path, link: &Path) -> io::Result<()> {
@@ -263,11 +315,29 @@ fn replace_through_link(prepared: &Path, link: &Path) -> io::Result<()> {
             real.display()
         )));
     }
+    // The link target must not contain the link's own location or `prepared`
+    // (clearing it would wipe the skills directory).
+    let inside = |p: &Path| -> bool {
+        let canon = p
+            .parent()
+            .and_then(|d| fs::canonicalize(d).ok())
+            .map(|d| d.join(p.file_name().unwrap_or_default()))
+            .or_else(|| fs::canonicalize(p).ok());
+        canon.is_none_or(|c| c.starts_with(&real))
+    };
+    if inside(link) || inside(prepared) {
+        return Err(io::Error::other(format!(
+            "refusing to replace through a symlink whose target contains the link or the new content: {}",
+            real.display()
+        )));
+    }
+    // Excluded entries (.git, node_modules) stay untouched, so the safety
+    // copy only needs the rest.
     let safety = sibling_named(&real, "old");
-    copy_dir_full(&real, &safety).inspect_err(|_| {
+    copy_dir(&real, &safety).inspect_err(|_| {
         let _ = fs::remove_dir_all(&safety);
     })?;
-    let result = clear_dir_contents(&real).and_then(|_| copy_dir_full(prepared, &real));
+    let result = clear_dir_contents(&real).and_then(|_| copy_dir(prepared, &real));
     match result {
         Ok(()) => {
             let _ = fs::remove_dir_all(&safety);
@@ -275,7 +345,7 @@ fn replace_through_link(prepared: &Path, link: &Path) -> io::Result<()> {
             Ok(())
         }
         Err(e) => {
-            let restored = clear_dir_contents(&real).and_then(|_| copy_dir_full(&safety, &real));
+            let restored = clear_dir_contents(&real).and_then(|_| copy_dir(&safety, &real));
             match restored {
                 Ok(()) => {
                     let _ = fs::remove_dir_all(&safety);
@@ -659,5 +729,86 @@ mod tests {
             .unwrap();
         w.finish().unwrap();
         assert!(extract_zip(&z, &t.path().join("o"), MAX_ZIP_BYTES).is_err());
+    }
+
+    #[test]
+    fn symlink_overwrite_preserves_git_and_node_modules() {
+        let t = tempfile::tempdir().unwrap();
+        let real = t.path().join("repo/skill");
+        write(&real.join("old.txt"), "old");
+        write(&real.join(".git/HEAD"), "ref");
+        write(&real.join("node_modules/x"), "x");
+        let skills = t.path().join("skills");
+        fs::create_dir_all(&skills).unwrap();
+        let link = skills.join("link");
+        if !try_dir_symlink(&real, &link) {
+            eprintln!("skipped: cannot create symlinks");
+            return;
+        }
+        let prepared = skills.join(".link.memdock-new-1");
+        write(&prepared.join("new.txt"), "new");
+        atomic_replace_dir(&prepared, &link).unwrap();
+        assert_eq!(fs::read_to_string(real.join("new.txt")).unwrap(), "new");
+        assert!(!real.join("old.txt").exists());
+        assert_eq!(fs::read_to_string(real.join(".git/HEAD")).unwrap(), "ref");
+        assert!(real.join("node_modules/x").exists());
+    }
+
+    #[test]
+    fn symlink_to_ancestor_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let skills = t.path().join("skills");
+        write(&skills.join("other/SKILL.md"), "keep");
+        let link = skills.join("loop");
+        if !try_dir_symlink(&skills, &link) {
+            eprintln!("skipped: cannot create symlinks");
+            return;
+        }
+        let prepared = skills.join(".loop.memdock-new-1");
+        write(&prepared.join("new.txt"), "new");
+        assert!(atomic_replace_dir(&prepared, &link).is_err());
+        assert_eq!(
+            fs::read_to_string(skills.join("other/SKILL.md")).unwrap(),
+            "keep"
+        );
+        assert!(prepared.exists());
+    }
+
+    #[test]
+    fn backup_never_prunes_the_new_one() {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("src");
+        write(&src.join("SKILL.md"), "x");
+        let root = t.path().join("bk");
+        let future = now_millis() + 10_000_000_000;
+        for i in 0..MAX_BACKUPS as i64 {
+            write(
+                &root.join("demo").join((future + i).to_string()).join("f"),
+                "f",
+            );
+        }
+        let info = backup_dir(&src, &root, "demo").unwrap();
+        assert!(root.join("demo").join(&info.id).join("SKILL.md").exists());
+        assert_eq!(list_backups(&root, "demo").len(), MAX_BACKUPS);
+    }
+
+    #[test]
+    fn cleanup_leftovers_removes_only_old_memdock_temp() {
+        let t = tempfile::tempdir().unwrap();
+        let old = t.path().join(".x.memdock-old-1-2");
+        let fresh = t.path().join(".x.memdock-new-1-2");
+        let keep = t.path().join("x");
+        let dotfile = t.path().join(".hidden");
+        write(&old, "o");
+        write(&fresh.join("f"), "f");
+        write(&keep.join("f"), "k");
+        write(&dotfile, "h");
+        let f = fs::File::options().write(true).open(&old).unwrap();
+        f.set_modified(SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+        drop(f);
+        cleanup_leftovers(t.path());
+        assert!(!old.exists());
+        assert!(fresh.exists() && keep.exists() && dotfile.exists());
     }
 }

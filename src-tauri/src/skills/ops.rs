@@ -13,8 +13,8 @@ use crate::paths::AgentPaths;
 use crate::projects::normalize_path;
 use crate::skills::frontmatter::parse_frontmatter;
 use crate::skills::fsops::{
-    MAX_ZIP_BYTES, atomic_replace_dir, backup_dir, copy_dir, copy_dir_confined, extract_zip,
-    now_millis, remove_any,
+    MAX_ZIP_BYTES, atomic_replace_dir, backup_dir, cleanup_leftovers, copy_dir, copy_dir_confined,
+    extract_zip, now_millis, remove_any,
 };
 use crate::skills::git::{GitError, GitRunner};
 use crate::skills::git_cache::{CACHE_MAX_AGE, cache_dir_for, cleanup_cache, is_complete_cache};
@@ -321,6 +321,14 @@ fn prepare(ctx: &OpsCtx, from: &InstallFrom, staging: &Path) -> Result<Prepared,
                     "skill path not found in repository: {skill_path}"
                 )));
             }
+            // A symlinked skill directory must not lead outside the clone.
+            let real_src = fs::canonicalize(&skill_src)?;
+            let real_cache = fs::canonicalize(&cache)?;
+            if !real_src.starts_with(&real_cache) {
+                return Err(invalid(format!(
+                    "skill path resolves outside the repository: {skill_path}"
+                )));
+            }
             copy_dir_confined(&skill_src, &content, &cache)?;
             let fallback = if sub.as_os_str().is_empty() {
                 last_segment(url)
@@ -336,7 +344,8 @@ fn prepare(ctx: &OpsCtx, from: &InstallFrom, staging: &Path) -> Result<Prepared,
                 source: Some((
                     SkillSource {
                         url: url.clone(),
-                        git_ref: Some(commit),
+                        git_ref: git_ref.map(str::to_string),
+                        commit: Some(commit),
                         skill_path: sub
                             .components()
                             .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -370,6 +379,7 @@ fn place(
         .parent()
         .ok_or_else(|| invalid("target has no parent"))?;
     fs::create_dir_all(parent)?;
+    cleanup_leftovers(parent);
     let sibling = parent.join(format!(
         ".{name}.memdock-new-{}-{}",
         std::process::id(),
@@ -427,6 +437,7 @@ fn update_registry(
         }) {
             e.installs.extend(records);
             e.source.git_ref = src.git_ref.clone();
+            e.source.commit = src.commit.clone();
             e.clone_url = Some(clone_url.clone());
             e.content_hash = hash;
             e.updated_at = now;
@@ -670,7 +681,7 @@ mod tests {
         let s = &reg.skills[0];
         assert_eq!(s.source.url, url);
         assert_eq!(s.source.skill_path, "skills/x");
-        assert_eq!(s.source.git_ref.as_deref(), Some(head.as_str()));
+        assert_eq!(s.source.commit.as_deref(), Some(head.as_str()));
         assert_eq!(s.clone_url.as_deref(), Some(url.as_str()));
         assert_eq!(s.content_hash, dir_content_hash(&dir).unwrap());
         // Second install reuses the complete cache (remote may vanish).
@@ -989,5 +1000,69 @@ mod tests {
         let v = serde_json::to_value(OpsError::Git(GitError::Timeout)).unwrap();
         assert_eq!(v["code"], "git");
         assert_eq!(v["kind"], "timeout");
+    }
+
+    #[test]
+    fn registry_keeps_tracking_ref_and_old_commit_after_remote_moves() {
+        let e = env();
+        let (url, work) = repo_with_skill(&e);
+        let old_head = git(&work, &["rev-parse", "HEAD"]);
+        let from = InstallFrom::Git {
+            url: url.clone(),
+            clone_url: url.clone(),
+            git_ref: Some("main".into()),
+            skill_path: "skills/x".into(),
+        };
+        install(&e.ctx, from, &[claude()], false).unwrap();
+        crate::skills::git::testutil::commit_file(&work, "later.txt");
+        git(&work, &["push", "-q", "origin", "main"]);
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        let s = &reg.skills[0].source;
+        assert_eq!(s.git_ref.as_deref(), Some("main"));
+        assert_eq!(s.commit.as_deref(), Some(old_head.as_str()));
+        let remote_head = e
+            .ctx
+            .git
+            .ls_remote_head(&url, s.git_ref.as_deref())
+            .unwrap();
+        assert_ne!(remote_head, old_head);
+    }
+
+    #[test]
+    fn symlinked_skill_dir_outside_repo_rejected() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, git_from(&url, "skills/x"), &[claude()], false).unwrap();
+        // Turn the cached skills/x into a link that leaves the clone.
+        let cache = fs::read_dir(e.ctx.cache_root())
+            .unwrap()
+            .flatten()
+            .map(|d| d.path())
+            .next()
+            .unwrap();
+        let outside = e.root.join("outside");
+        write(&outside.join("SKILL.md"), "---\nname: x\n---\n");
+        let inner = cache.join("skills/x");
+        fs::remove_dir_all(&inner).unwrap();
+        #[cfg(unix)]
+        let ok = std::os::unix::fs::symlink(&outside, &inner).is_ok();
+        #[cfg(windows)]
+        let ok = std::os::windows::fs::symlink_dir(&outside, &inner).is_ok()
+            || std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(inner.to_string_lossy().replace('/', "\\"))
+                .arg(outside.to_string_lossy().replace('/', "\\"))
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+        if !ok {
+            eprintln!("skipped: cannot create symlinks");
+            return;
+        }
+        let r = install(&e.ctx, git_from(&url, "skills/x"), &[codex()], false);
+        assert!(matches!(r, Err(OpsError::Invalid { .. })), "{r:?}");
+        assert!(!e.ctx.paths.codex_home.join("skills/x").exists());
     }
 }

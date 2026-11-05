@@ -76,6 +76,7 @@ pub fn read_skill_lock(home: &Path) -> Vec<(String, SkillSource)> {
             SkillSource {
                 url: normalize_url(url),
                 git_ref: None,
+                commit: None,
                 skill_path,
                 origin: SourceOrigin::SkillLock,
             },
@@ -114,7 +115,8 @@ fn from_repo(dir: &Path, origin: SourceOrigin, git: &dyn GitRunner) -> Option<Sk
     let root = git.repo_root(dir)?;
     Some(SkillSource {
         url: normalize_url(&url),
-        git_ref: git.head_commit(dir),
+        git_ref: None,
+        commit: git.head_commit(dir),
         skill_path: rel_path(&root, dir)?,
         origin,
     })
@@ -240,6 +242,7 @@ mod tests {
             SkillSource {
                 url: "https://github.com/l/l".into(),
                 git_ref: None,
+                commit: None,
                 skill_path: "skills/x".into(),
                 origin: SourceOrigin::SkillLock,
             },
@@ -319,6 +322,7 @@ mod tests {
                 source: SkillSource {
                     url: "https://github.com/reg/reg".into(),
                     git_ref: Some("r1".into()),
+                    commit: None,
                     skill_path: "p".into(),
                     origin: SourceOrigin::Manual,
                 },
@@ -358,7 +362,7 @@ mod tests {
         let s = infer_source(&e, &Registry::default(), &[lock_entry("demo")], &git).unwrap();
         assert_eq!(s.url, "https://github.com/o/r");
         assert_eq!(s.skill_path, "skills/demo");
-        assert_eq!(s.git_ref.as_deref(), Some("c0ffee"));
+        assert_eq!(s.commit.as_deref(), Some("c0ffee"));
         assert_eq!(s.origin, SourceOrigin::GitDir);
         // Skill at the repo root -> empty path.
         let root = entry("demo", tmp.path());

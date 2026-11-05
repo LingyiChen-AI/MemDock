@@ -30,18 +30,32 @@
 | `--muted` | `#272F42` | `#F1F5F9` | 次级底色、hover 行 |
 | `--muted-foreground` | `#94A3B8` | `#475569` | 次要文字（亮色用 #475569 保证 4.5:1） |
 | `--border` | `#334155` | `#E2E8F0` | 分隔线、卡片边框 |
-| `--primary` | `#22C55E` | `#16A34A` | 主按钮底色、选中态、焦点环 |
+| `--primary` | `#22C55E` | `#15803D` | 主按钮底色、选中态、焦点环 |
 | `--primary-foreground` | `#0F172A` | `#FFFFFF` | 主按钮文字 |
 | `--accent-text` | `#4ADE80` | `#15803D` | 绿色文字/链接（满足 4.5:1） |
 | `--destructive` | `#EF4444` | `#DC2626` | 删除、驳回、错误 |
 | `--warning` | `#F59E0B` | `#B45309` | 外部修改、未知价格、待同步 |
-| `--ring` | `#4ADE80` | `#16A34A` | 键盘焦点环 |
+| `--ring` | `#4ADE80` | `#15803D` | 键盘焦点环 |
+
+**主题色（可切换，用户 2026-11-05 要求）**：只替换 `--primary`、`--primary-foreground`、`--accent-text`、`--ring` 四个变量，其余不变。默认「绿」。
+
+| 主题色 | 暗色 primary / accent-text | 亮色 primary / accent-text | primary-foreground（暗 / 亮） |
+|---|---|---|---|
+| 绿 green（默认） | `#22C55E` / `#4ADE80` | `#15803D` / `#15803D` | `#0F172A` / `#FFFFFF` |
+| 蓝 blue | `#3B82F6` / `#60A5FA` | `#2563EB` / `#1D4ED8` | `#0F172A` / `#FFFFFF` |
+| 紫 violet | `#A78BFA` / `#C4B5FD` | `#7C3AED` / `#6D28D9` | `#0F172A` / `#FFFFFF` |
+| 橙 orange | `#F97316` / `#FB923C` | `#C2410C` / `#C2410C` | `#0F172A` / `#FFFFFF` |
+| 青 teal | `#14B8A6` / `#2DD4BF` | `#0F766E` / `#0F766E` | `#0F172A` / `#FFFFFF` |
+
+> 2026-11-05 修订：按主按钮文字对比度 ≥ 4.5:1 校正（实测：暗色 blue 4.85、violet 6.56；亮色 green 5.02、orange 5.18、teal 5.47，其余均 ≥ 5）。亮色默认绿也随之由 `#16A34A` 改为 `#15803D`，第 3 节主表中亮色 `--primary` / `--ring` 同此值。
+
+`--ring` 暗色取 accent-text、亮色取 primary。实现方式：`<html data-accent="blue">` + CSS 属性选择器覆盖。
 
 **工具标识色**（标签、图表系列；必须同时配文字标签，不能只靠颜色）：
 
 | 变量 | 暗色 | 亮色 | 标签文字 |
 |---|---|---|---|
-| `--tool-claude` | `#F59E0B` | `#D97706` | `CC` / Claude Code |
+| `--tool-claude` | `#F59E0B` | `#D97706` | `Claude Code` |
 | `--tool-codex` | `#38BDF8` | `#0284C7` | `Codex` |
 
 **变更类型色**（待审核卡片、diff）：新增 `--primary`；修改 `--warning`；过时 `--destructive`。diff 行底色用对应颜色 15% 透明度。
@@ -55,7 +69,10 @@
 | 页面标题 | 同上 | 18px / 26px / 600 |
 | 区块标题 | 同上 | 14px / 20px / 600 |
 | 数字指标 | 同上，`font-variant-numeric: tabular-nums` | 22px / 28px / 600 |
-| 代码、路径、编辑器 | `"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace` | 12.5px / 20px |
+| 记忆内容（编辑器、预览、diff 正文、搜索结果预览） | `"Inter Variable", "LXGW WenKai Screen", "PingFang SC", "Microsoft YaHei UI", sans-serif` | 编辑器 13.5px / 24px；预览 14px / 25px |
+| 代码、路径、行号 | `"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace` | 12.5px / 20px |
+
+> 2026-11-05 用户选定霞鹜文楷（LXGW WenKai Screen，OFL 开源，npm `lxgw-wenkai-screen-webfont`，按 unicode-range 子集本地打包）作为记忆内容的中文字体。原因：编辑器原先整体用等宽字体，JetBrains Mono 不含中文，中文回落到别的字体导致中英不齐、观感怪。等宽字体只用于行内代码、代码块、路径和行号。界面框架（导航、按钮、标签）仍用界面正文字体。
 
 > 桌面工具 13px 正文是 macOS/VS Code 的惯例；可在设置里提供「界面缩放 90% / 100% / 110%」。
 
@@ -66,6 +83,8 @@
 - 阴影：仅弹层（Dialog、Popover、Dropdown）使用一层柔和阴影；卡片只用 1px 边框。
 - 窗口布局：侧栏宽 208px（可折叠为 52px 图标栏）；内容区左右内边距 20px；双栏页面（记忆树 + 编辑器）左栏 280px，可拖动 220–420px。
 - 最小窗口尺寸 1024×640。
+- **首次启动窗口大小**：当前显示器工作区宽度的 70%、高度的 75%（不小于最小尺寸），居中显示；之后记住用户调整过的大小和位置（用户 2026-11-05 要求）。
+- 工具标签文字用全称「Claude Code」/「Codex」，不用缩写 CC（用户 2026-11-05 要求）。
 
 ## 6. 动效
 
@@ -81,6 +100,14 @@
 - **记忆树**：节点 28px 高，选中态为 `--muted` 底 + 左侧 2px `--primary` 竖条；不存在 / 未创建的条目用 `--muted-foreground` 加删除线或「未创建」小字。
 - **编辑器**：CodeMirror 主题跟随 `--card` / `--foreground`，行号 `--muted-foreground`；顶栏 40px，放路径（等宽、可复制）、token 数、保存 / 历史按钮；未保存时标题前显示圆点。
 - **待审核卡片**：左侧 3px 变更类型色条；diff 用等宽字体；依据区为 `--muted` 底的引用块。
+- **diff 展示**（用户 2026-11-05 确认）：
+  - 默认**左右分栏**：左「当前」、右「建议改为」，行号对齐；一侧没有对应行时用斜纹空行占位。
+  - 卡片右上角「上下 / 左右」分段切换，选择记在本地设置里，下次沿用（同 GitHub Split / Unified）。
+  - 卡片可用宽度小于 760px 时自动改为上下（单列）显示。
+  - 两种布局都做**词级高亮**：整行用对应色 12% 底，真正变化的字词再叠 45% 底。
+  - 显示改动前后各 1 行上下文（灰色）。
+  - 同一套 diff 组件也用于历史版本对比和同步冲突处理。
+  - 参考稿：`.superpowers/brainstorm/1459-1793865330/content/review-diff-v2.html`。
 - **空状态**：居中 lucide 图标（32px，`--muted-foreground`）+ 一句说明 + 一个主操作。
 - **横幅提示**（外部修改、未安装工具）：`--warning` 15% 底 + 左侧图标 + 行内操作按钮。
 - **图表**：每日金额用按工具堆叠的柱状图（Recharts `BarChart`），工具色 + 图例文字；悬停 tooltip 显示两工具分项与合计；图下必须有同数据的表格（可访问性兜底）。
@@ -92,3 +119,12 @@
 - 可点击元素 `cursor: pointer`，hover 有 150ms 过渡。
 - 不靠颜色单独表达含义（工具、变更类型都带文字）。
 - 中英两种语言下检查文字溢出（英文通常更长），按钮宽度不写死。
+
+## 9. 外观设置入口与滚动同步（2026-11-05 用户反馈）
+
+- **外观面板**：侧栏底部（「收起侧栏」同一行）放一个调色板图标按钮（lucide `Palette`，带 tooltip「外观 / Appearance」），点开 Popover：
+  - 「模式」分段控件：暗色 / 亮色 / 跟随系统；
+  - 「主题色」5 个圆形色块（同设置页）；
+  - 「语言」分段控件：中文 / English / 跟随系统。
+  - 侧栏折叠成图标栏时按钮仍在。任何页面都能打开。
+- **分栏滚动同步**：编辑器与预览按 Markdown 源码行号对应（预览块级元素带 `data-line`），滚动一侧时另一侧把对应块对齐到顶部；用「谁先滚谁是主」的锁避免互相触发抖动；只在「分栏」模式生效，提供一个默认开启的「同步滚动」开关，记在 localStorage `memdock.syncScroll`。

@@ -349,10 +349,34 @@ memdock/  (仓库根 = C:\codes\cc-memory)
 - Consumes: `searchMemories`、`listSnapshots`、`readSnapshot`、`writeMemoryFile`
 - Produces:
   - `<SearchPanel onOpen(fileId: string, line: number) => void>`：输入框 300ms 去抖调用 `searchMemories`；结果按文件分组，显示行号与预览，命中词高亮；点击打开文件并滚动到该行。
-  - `<HistoryDrawer path: string; currentText: string; onRestored(text: string) => void>`：列出快照（时间、大小）；选中显示与当前内容的行级 diff（`diff` npm 包 `diffLines`）；「恢复此版本」= `readSnapshot` 后以当前 hash 调 `writeMemoryFile`。
+  - `<HistoryDrawer path: string; currentText: string; onRestored(text: string) => void>`：列出快照（时间、大小）；选中显示与当前内容的 diff（用下面的 `DiffView`）；「恢复此版本」= `readSnapshot` 后以当前 hash 调 `writeMemoryFile`。
+  - 可复用组件 `src/components/diff/DiffView.tsx`：`<DiffView oldText: string; newText: string; oldLabel?: string; newLabel?: string; context?: number /*默认 1*/>`，按设计规范第 7 节「diff 展示」实现：默认左右分栏、可切换上下、偏好存 `localStorage` 键 `memdock.diffLayout`、容器宽度 < 760px 自动上下、行级（`diffLines`）+ 词级（`diffWordsWithSpace`）高亮、空行斜纹占位。计划 3 的待审核与计划 4 的冲突处理复用它。
 
-- [ ] **Step 1: 写失败测试**：`search debounces and groups by file`；`clicking hit calls onOpen with line`；`history lists snapshots newest first`；`restore writes snapshot content with current hash`。
+- [ ] **Step 1: 写失败测试**：`search debounces and groups by file`；`clicking hit calls onOpen with line`；`history lists snapshots newest first`；`restore writes snapshot content with current hash`；`DiffView defaults to split and remembers unified choice`；`DiffView falls back to unified when narrow`；`DiffView highlights changed words only`。
 - [ ] **Step 2:** `pnpm test src/pages/memory`，预期 FAIL。
 - [ ] **Step 3:** 实现。
 - [ ] **Step 4:** 预期 PASS；`pnpm test` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 全部 PASS；CI 在 macOS 与 Windows 上均绿。
 - [ ] **Step 5: Commit** `feat: memory search and snapshot history`
+
+---
+
+### Task 13: 主题色切换与首次启动窗口尺寸（用户 2026-11-05 追加）
+
+**Files:**
+- Modify: `src-tauri/src/settings.rs`（`Settings` 增加 `accent: Option<String>`）、`src-tauri/src/commands.rs`（`update_ui_prefs` 增加 `accent` 参数）、`src-tauri/src/lib.rs`（启动时设置窗口尺寸）、`src-tauri/tauri.conf.json`、`src/styles/globals.css`、`src/prefs/PrefsProvider.tsx`、`src/theme/ThemeProvider.tsx`、`src/pages/Placeholder.tsx`、`src/api/memory.ts`、`src/api/types.ts`、i18n 文件
+- Test: Rust `commands.rs` 内测试；`src/theme/ThemeProvider.test.tsx`、`src/prefs/PrefsProvider.test.tsx`
+
+**Interfaces:**
+- Consumes: Task 9 的 `update_ui_prefs`、Task 10 的 PrefsProvider / ThemeProvider
+- Produces:
+  - `Settings.accent`：取值 `"green" | "blue" | "violet" | "orange" | "teal"`，空 = `"green"`；`update_ui_prefs(language, theme, accent)`，非法值返回 `invalid`；TS `updateUiPrefs(language?, theme?, accent?)`。
+  - `globals.css` 按设计规范第 3 节「主题色」表，用 `html[data-accent="…"]` 与 `html.dark[data-accent="…"]` 覆盖 `--primary`、`--primary-foreground`、`--accent-text`、`--ring`；green 即现有默认值。
+  - ThemeProvider 在 `<html>` 上设置 `data-accent`；PrefsProvider 增加 `accent` 字段，沿用按字段采纳与失败回滚。
+  - Placeholder 页（计划 5 设置页接手前）增加「主题色」选择：5 个 24px 圆形色块（`aria-label` 为颜色名，选中带 2px `--ring` 外环）。
+  - 窗口：`tauri.conf.json` 主窗口 `visible: false`、`center: true`；`setup` 中若无已保存的窗口状态，按当前显示器工作区宽 70%、高 75%（不小于 1024×640）设置尺寸并居中，然后 `show()`；用 `tauri-plugin-window-state` 记住之后的大小与位置。
+
+- [ ] **Step 1: 写失败测试**：Rust `update_ui_prefs_accent_roundtrip`、`update_ui_prefs_rejects_unknown_accent`；TS `accent defaults to green data attribute`、`choosing accent sets data-accent and persists`、`accent failure rolls back`；纯函数 `initial_window_size(work_area_w, work_area_h) -> (w, h)` 的测试 `initial_window_is_70pct_width_75pct_height` 与 `initial_window_respects_minimum`。
+- [ ] **Step 2:** 运行测试，预期 FAIL。
+- [ ] **Step 3:** 实现。
+- [ ] **Step 4:** `pnpm test`、`pnpm build`、`cargo test --manifest-path src-tauri/Cargo.toml` 全部 PASS；切换 5 种主题色在亮 / 暗下各截图一张核对对比度。
+- [ ] **Step 5: Commit** `feat: accent color themes and initial window size`

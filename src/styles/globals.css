@@ -1,0 +1,250 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Inter Variable", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-content: "Inter Variable", "LXGW WenKai Screen", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-text: var(--accent-text);
+  --color-destructive: var(--destructive);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-tool-claude: var(--tool-claude);
+  --color-tool-codex: var(--tool-codex);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Type scale (design system section 4); rem base stays 16px */
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 18px;
+  --text-lg--line-height: 26px;
+  --text-xl: 18px;
+  --text-xl--line-height: 26px;
+  --text-2xl: 22px;
+  --text-2xl--line-height: 28px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+}
+
+/* Light theme (design system section 3) */
+:root {
+  --radius: 0.5rem;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --sidebar: #f1f5f9;
+  --sidebar-foreground: #0f172a;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #e2e8f0;
+  --sidebar-accent-foreground: #0f172a;
+  --sidebar-border: #e2e8f0;
+  --sidebar-ring: var(--ring);
+  --muted: #f1f5f9;
+  --muted-foreground: #475569;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --primary: #15803d;
+  --primary-foreground: #ffffff;
+  --accent-text: #15803d;
+  --destructive: #dc2626;
+  --warning: #b45309;
+  --ring: #15803d;
+  --swatch-green: #15803d;
+  --swatch-blue: #2563eb;
+  --swatch-violet: #7c3aed;
+  --swatch-orange: #c2410c;
+  --swatch-teal: #0f766e;
+  --tool-claude: #d97706;
+  --tool-codex: #0284c7;
+}
+
+/* Dark theme (design system section 3) */
+.dark {
+  --background: #0f172a;
+  --foreground: #f8fafc;
+  --card: #1b2336;
+  --card-foreground: #f8fafc;
+  --popover: #1b2336;
+  --popover-foreground: #f8fafc;
+  --sidebar: #0b1222;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #272f42;
+  --sidebar-accent-foreground: #f8fafc;
+  --sidebar-border: #334155;
+  --sidebar-ring: var(--ring);
+  --muted: #272f42;
+  --muted-foreground: #94a3b8;
+  --secondary: #272f42;
+  --secondary-foreground: #f8fafc;
+  --accent: #272f42;
+  --accent-foreground: #f8fafc;
+  --border: #334155;
+  --input: #334155;
+  --primary: #22c55e;
+  --primary-foreground: #0f172a;
+  --accent-text: #4ade80;
+  --destructive: #ef4444;
+  --warning: #f59e0b;
+  --ring: #4ade80;
+  --swatch-green: #22c55e;
+  --swatch-blue: #3b82f6;
+  --swatch-violet: #a78bfa;
+  --swatch-orange: #f97316;
+  --swatch-teal: #14b8a6;
+  --tool-claude: #f59e0b;
+  --tool-codex: #38bdf8;
+}
+
+/* Accent colors (design system section 3). Green is the default in :root / .dark above.
+   Only --primary, --primary-foreground, --accent-text and --ring change; --ring = accent-text in dark, primary in light. */
+html[data-accent="blue"] {
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --accent-text: #1d4ed8;
+  --ring: #2563eb;
+}
+html.dark[data-accent="blue"] {
+  --primary: #3b82f6;
+  --primary-foreground: #0f172a;
+  --accent-text: #60a5fa;
+  --ring: #60a5fa;
+}
+html[data-accent="violet"] {
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --accent-text: #6d28d9;
+  --ring: #7c3aed;
+}
+html.dark[data-accent="violet"] {
+  --primary: #a78bfa;
+  --primary-foreground: #0f172a;
+  --accent-text: #c4b5fd;
+  --ring: #c4b5fd;
+}
+html[data-accent="orange"] {
+  --primary: #c2410c;
+  --primary-foreground: #ffffff;
+  --accent-text: #c2410c;
+  --ring: #c2410c;
+}
+html.dark[data-accent="orange"] {
+  --primary: #f97316;
+  --primary-foreground: #0f172a;
+  --accent-text: #fb923c;
+  --ring: #fb923c;
+}
+html[data-accent="teal"] {
+  --primary: #0f766e;
+  --primary-foreground: #ffffff;
+  --accent-text: #0f766e;
+  --ring: #0f766e;
+}
+html.dark[data-accent="teal"] {
+  --primary: #14b8a6;
+  --primary-foreground: #0f172a;
+  --accent-text: #2dd4bf;
+  --ring: #2dd4bf;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-size: 13px;
+    line-height: 20px;
+    font-weight: 400;
+  }
+  code,
+  kbd,
+  pre,
+  samp {
+    @apply font-mono;
+    font-size: 12.5px;
+    line-height: 20px;
+  }
+
+  /* Thin themed scrollbars everywhere (editor, preview, tree, popovers, drawer): 8px gutter,
+     6px rounded thumb inset by a transparent border, no arrow buttons, transparent track/corner.
+     WebView2 (Windows) and WKWebView (macOS) both honour ::-webkit-scrollbar. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    background: transparent;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent);
+    background-clip: padding-box;
+    border: 1px solid transparent;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+  }
+  /* Standard properties only where the pseudo-elements are unsupported: in Chromium, setting
+     scrollbar-width / scrollbar-color switches the ::-webkit-scrollbar styling above off. */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent) transparent;
+    }
+  }
+}

@@ -25,6 +25,7 @@ dirs = "7.0.0"
 walkdir = "2"
 zstd = "0.13"
 sha2 = "0.10"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

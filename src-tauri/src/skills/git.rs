@@ -1,8 +1,9 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use crate::fsutil::tmp_sibling;
 use crate::proc::WaitError;
 
 use serde::Serialize;
@@ -110,18 +111,6 @@ pub fn redact(s: &str) -> String {
         }
     }
     masked.chars().take(2000).collect()
-}
-
-fn tmp_sibling(dest: &Path) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let name = dest
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "clone".into());
-    dest.with_file_name(format!("{name}.tmp-{}-{nanos}", std::process::id()))
 }
 
 impl SystemGit {

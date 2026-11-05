@@ -8,11 +8,14 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use base64::Engine;
 use serde::Serialize;
+use sha1::{Digest, Sha1};
 
+use crate::fsutil::tmp_sibling;
 use crate::proc::WaitError;
 use crate::skills::git::redact;
 
@@ -33,8 +36,11 @@ pub enum SyncGitError {
 }
 
 fn failed(msg: impl AsRef<str>) -> SyncGitError {
+    // Mask `Authorization: basic <b64>` headers (e.g. from GIT_CURL_VERBOSE output).
+    let re = regex::Regex::new(r"(?i)(authorization:\s*basic\s+)\S+").expect("static regex");
+    let masked = re.replace_all(msg.as_ref(), "${1}***");
     SyncGitError::Failed {
-        stderr: redact(msg.as_ref()),
+        stderr: redact(&masked),
     }
 }
 
@@ -44,6 +50,39 @@ fn check_arg(s: &str) -> Result<(), SyncGitError> {
         return Err(failed("invalid argument"));
     }
     Ok(())
+}
+
+/// Remote URL: may contain spaces (local paths) but no option-like start or control breaks.
+fn check_url(s: &str) -> Result<(), SyncGitError> {
+    if s.is_empty() || s.starts_with('-') || s.chars().any(|c| matches!(c, '\0' | '\n' | '\r')) {
+        return Err(failed("invalid argument"));
+    }
+    Ok(())
+}
+
+/// Git config keys read from the user's real global config and forwarded as
+/// `-c` so proxy / TLS settings keep working while everything else is isolated.
+const FORWARDED_KEYS: [&str; 5] = [
+    "http.proxy",
+    "https.proxy",
+    "http.https://github.com.proxy",
+    "http.sslCAInfo",
+    "http.sslBackend",
+];
+
+/// Turns `(key, value)` pairs into `-c key=value` args, skipping empty or
+/// multi-line values.
+fn forward_args(values: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (k, v) in values {
+        let v = v.trim();
+        if v.is_empty() || v.contains(['\n', '\r', '\0']) {
+            continue;
+        }
+        out.push("-c".to_string());
+        out.push(format!("{k}={v}"));
+    }
+    out
 }
 
 /// Repository-relative path used as a tree entry.
@@ -61,10 +100,11 @@ fn check_repo_path(p: &str) -> Result<(), SyncGitError> {
 
 fn classify(stderr: &str) -> SyncGitError {
     let low = stderr.to_lowercase();
-    if low.contains("non-fast-forward")
-        || low.contains("fetch first")
-        || low.contains("[rejected]")
-        || low.contains("failed to push some refs") && low.contains("rejected")
+    // `[remote rejected]` (push protection, rules, hooks) is a real failure, not a race.
+    if !low.contains("[remote rejected]")
+        && (low.contains("non-fast-forward")
+            || low.contains("fetch first")
+            || low.contains("[rejected]"))
     {
         return SyncGitError::Rejected;
     }
@@ -80,18 +120,6 @@ fn classify(stderr: &str) -> SyncGitError {
         return SyncGitError::Unauthorized;
     }
     failed(stderr.trim())
-}
-
-fn tmp_sibling(dest: &Path) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let name = dest
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "clone".into());
-    dest.with_file_name(format!("{name}.tmp-{}-{nanos}", std::process::id()))
 }
 
 #[cfg(windows)]
@@ -120,6 +148,16 @@ pub struct CommitInfo {
 pub struct SyncGit {
     pub program: PathBuf,
     pub timeout: Duration,
+    /// Proxy / TLS settings read once from the user's real global git config.
+    forwarded: OnceLock<Vec<String>>,
+}
+
+/// Git blob id of `data` (SHA-1 of `blob <len>\0` + bytes).
+fn blob_sha(data: &[u8]) -> String {
+    let mut h = Sha1::new();
+    h.update(format!("blob {}\0", data.len()).as_bytes());
+    h.update(data);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Default for SyncGit {
@@ -137,7 +175,36 @@ impl SyncGit {
         SyncGit {
             program,
             timeout: Duration::from_secs(60),
+            forwarded: OnceLock::new(),
         }
+    }
+
+    /// `-c key=value` args for the user's proxy / TLS settings (cached).
+    fn forwarded_args(&self) -> &[String] {
+        self.forwarded.get_or_init(|| {
+            let mut vals = Vec::new();
+            for key in FORWARDED_KEYS {
+                let mut cmd = Command::new(&self.program);
+                cmd.args(["config", "--global", "--get", key])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+                let Ok(child) = crate::proc::spawn_hidden(&mut cmd) else {
+                    break;
+                };
+                if let Ok(out) =
+                    crate::proc::wait_with_timeout(child, Duration::from_secs(5), None)
+                {
+                    if out.status.success() {
+                        vals.push((
+                            key.to_string(),
+                            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                        ));
+                    }
+                }
+            }
+            forward_args(&vals)
+        })
     }
 
     /// Spawns git with the hardened base configuration and returns the raw
@@ -163,7 +230,25 @@ impl SyncGit {
             "-c",
         ])
         .arg(format!("core.hooksPath={NULL_DEVICE}"))
+        // Empty value clears the helper list so GCM never sees (or erases) the
+        // user's own stored credentials.
+        .args(["-c", "credential.helper="])
+        .args(self.forwarded_args())
         .args(args)
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS")
+        .env_remove("GIT_TRACE")
+        .env_remove("GIT_TRACE_CURL")
+        .env_remove("GIT_TRACE_PACKET")
+        .env_remove("GIT_CURL_VERBOSE")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_NAMESPACE")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .stdin(if stdin.is_some() {
@@ -238,7 +323,7 @@ impl SyncGit {
     /// Clones `url` into `dest` (via a temporary sibling directory). Empty
     /// remote repositories are fine.
     pub fn clone(&self, url: &str, dest: &Path, auth: &Auth) -> Result<(), SyncGitError> {
-        check_arg(url)?;
+        check_url(url)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| failed(e.to_string()))?;
         }
@@ -247,9 +332,18 @@ impl SyncGit {
             let tmp_s = tmp.to_string_lossy().into_owned();
             self.run_bytes(None, &["clone", "-q", "--", url, &tmp_s], auth, &[], None)?;
             if dest.exists() {
-                std::fs::remove_dir_all(dest).map_err(|e| failed(e.to_string()))?;
+                // Move the old clone aside first so a failed swap can be undone.
+                let old = tmp_sibling(dest);
+                std::fs::rename(dest, &old).map_err(|e| failed(e.to_string()))?;
+                if let Err(e) = std::fs::rename(&tmp, dest) {
+                    let _ = std::fs::rename(&old, dest);
+                    return Err(failed(e.to_string()));
+                }
+                let _ = std::fs::remove_dir_all(&old);
+                Ok(())
+            } else {
+                std::fs::rename(&tmp, dest).map_err(|e| failed(e.to_string()))
             }
-            std::fs::rename(&tmp, dest).map_err(|e| failed(e.to_string()))
         })();
         if result.is_err() {
             let _ = std::fs::remove_dir_all(&tmp);
@@ -291,8 +385,13 @@ impl SyncGit {
     ) -> Result<Option<Vec<u8>>, SyncGitError> {
         check_arg(commit)?;
         check_repo_path(path)?;
+        let commit_spec = format!("{commit}^{{commit}}");
+        let c = self.probe(repo, &["rev-parse", "--verify", "-q", &commit_spec])?;
+        if !c.status.success() {
+            return Err(failed(format!("unknown commit: {commit}")));
+        }
         let spec = format!("{commit}:{path}");
-        let probe = self.probe(repo, &["rev-parse", "--verify", "-q", &spec])?;
+        let probe =self.probe(repo, &["rev-parse", "--verify", "-q", &spec])?;
         if !probe.status.success() {
             let err = String::from_utf8_lossy(&probe.stderr);
             if err.trim().is_empty() {
@@ -355,16 +454,35 @@ impl SyncGit {
         index: &Path,
     ) -> Result<String, SyncGitError> {
         let idx_env: [(&str, &OsStr); 1] = [("GIT_INDEX_FILE", index.as_os_str())];
+        // Blobs already present in the parent commit are reused, not re-hashed.
+        let mut known: BTreeMap<String, String> = BTreeMap::new();
+        if let Some(p) = parent {
+            let out = self.run_bytes(Some(repo), &["ls-tree", "-r", "-z", p, "--"], &None, &[], None)?;
+            for rec in out.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+                let rec = String::from_utf8_lossy(rec);
+                if let Some((meta, path)) = rec.split_once('\t') {
+                    let mut it = meta.split(' ');
+                    if let (Some("100644"), Some("blob"), Some(sha)) = (it.next(), it.next(), it.next()) {
+                        known.insert(path.to_string(), sha.to_string());
+                    }
+                }
+            }
+        }
         let mut info: Vec<u8> = Vec::new();
         for (path, content) in files {
-            let sha = self.run_bytes(
-                Some(repo),
-                &["hash-object", "-w", "--no-filters", "--stdin"],
-                &None,
-                &[],
-                Some(content.clone()),
-            )?;
-            let sha = String::from_utf8_lossy(&sha).trim().to_string();
+            let want = blob_sha(content);
+            let sha = if known.get(path) == Some(&want) {
+                want
+            } else {
+                let sha = self.run_bytes(
+                    Some(repo),
+                    &["hash-object", "-w", "--no-filters", "--stdin"],
+                    &None,
+                    &[],
+                    Some(content.clone()),
+                )?;
+                String::from_utf8_lossy(&sha).trim().to_string()
+            };
             info.extend_from_slice(format!("100644 {sha}\t{path}").as_bytes());
             info.push(0);
         }
@@ -438,7 +556,7 @@ impl SyncGit {
                 t.as_os_str(),
             ]
             .to_vec();
-            let out = self.exec(None, &args, &None, &[], None)?;
+            let out = self.exec(Some(&dir), &args, &None, &[], None)?;
             match out.status.code() {
                 // 0 = clean; 1..=127 = number of conflicts; anything else is an error.
                 Some(c) if (0..=127).contains(&c) => Ok(Merge3 {
@@ -754,5 +872,81 @@ mod tests {
         assert!(g.clone("file:///does/not/exist", &dest, &None).is_err());
         assert!(g.clone("--evil", &dest, &None).is_err());
         assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn classify_remote_rejected_is_failure_not_retry() {
+        let s = " ! [remote rejected] a -> main (push declined due to repository rule violations)\nerror: failed to push some refs to 'x'";
+        assert!(matches!(classify(s), SyncGitError::Failed { .. }));
+        assert_eq!(
+            classify(" ! [rejected] a -> main (non-fast-forward)\nerror: failed to push some refs"),
+            SyncGitError::Rejected
+        );
+    }
+
+    #[test]
+    fn forward_args_skips_empty_and_multiline() {
+        let v = vec![
+            ("http.proxy".to_string(), " http://p:1 \n".to_string()),
+            ("https.proxy".to_string(), "".to_string()),
+            ("http.sslCAInfo".to_string(), "a\nb".to_string()),
+        ];
+        assert_eq!(forward_args(&v), vec!["-c", "http.proxy=http://p:1"]);
+    }
+
+    #[test]
+    fn user_config_is_isolated_but_proxy_forwarded() {
+        let t = tempfile::tempdir().unwrap();
+        let prog = fake_program(
+            t.path(),
+            "@echo off\r\necho %* >> \"%~dp0args.txt\"\r\nset >> \"%~dp0env.txt\"\r\necho http://proxy.test:8080\r\nexit /b 0\r\n",
+            "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/args.txt\"\nenv >> \"$(dirname \"$0\")/env.txt\"\necho http://proxy.test:8080\nexit 0\n",
+        );
+        let repo = t.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let g = SyncGit::with_program(prog);
+        let _ = g.fetch(&repo, &None);
+        let args = std::fs::read_to_string(t.path().join("args.txt")).unwrap();
+        let env = std::fs::read_to_string(t.path().join("env.txt")).unwrap();
+        assert!(args.contains("credential.helper="), "{args}");
+        assert!(args.contains("http.proxy=http://proxy.test:8080"), "{args}");
+        assert!(env.contains("GIT_CONFIG_GLOBAL="), "{env}");
+        assert!(env.contains("GIT_SSH_COMMAND=ssh -oBatchMode=yes"), "{env}");
+    }
+
+    #[test]
+    fn failed_masks_authorization_header() {
+        let SyncGitError::Failed { stderr } =
+            failed("> Authorization: basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0\n< HTTP/1.1 401")
+        else {
+            panic!()
+        };
+        assert!(!stderr.contains("eC1hY2Nl"), "{stderr}");
+        assert!(stderr.contains("401"));
+    }
+
+    #[test]
+    fn read_at_bad_commit_is_error_and_clone_replaces_existing() {
+        let t = tempfile::tempdir().unwrap();
+        let url = empty_bare(t.path());
+        let g = SyncGit::new();
+        let a = t.path().join("a");
+        g.clone(&url, &a, &None).unwrap();
+        let zeros = "0".repeat(40);
+        assert!(g.read_at(&a, &zeros, "x.md").is_err());
+        let c = g.commit_tree(&a, None, &files(&[("x.md", "1")]), "m", AUTHOR).unwrap();
+        // Reusing an unchanged blob from the parent still yields the exact tree.
+        let c2 = g
+            .commit_tree(&a, Some(&c), &files(&[("x.md", "1"), ("y.md", "2")]), "m2", AUTHOR)
+            .unwrap();
+        let mut l = g.list_at(&a, &c2).unwrap();
+        l.sort();
+        assert_eq!(l, vec!["x.md", "y.md"]);
+        // Re-clone over an existing destination leaves exactly one directory.
+        g.clone(&url, &a, &None).unwrap();
+        assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 2);
+        // URLs may contain spaces but not option-like starts.
+        assert!(check_url("file:///a b/c.git").is_ok());
+        assert!(check_url("--upload-pack=x").is_err());
     }
 }

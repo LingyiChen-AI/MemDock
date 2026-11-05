@@ -124,3 +124,17 @@ pub fn save_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Result<()> 
     }
     res
 }
+
+/// Unique temporary sibling path of `dest` (`<name>.tmp-<pid>-<nanos>`), used
+/// to build a directory next to its final location and rename it into place.
+pub(crate) fn tmp_sibling(dest: &Path) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "clone".into());
+    dest.with_file_name(format!("{name}.tmp-{}-{nanos}", std::process::id()))
+}

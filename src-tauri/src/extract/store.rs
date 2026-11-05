@@ -47,6 +47,10 @@ pub enum ProjectFilter {
     Selected(Vec<String>),
 }
 
+fn one() -> u32 {
+    1
+}
+
 fn default_true() -> bool {
     true
 }
@@ -145,6 +149,7 @@ struct Watermark {
 
 #[derive(Serialize, Deserialize)]
 struct ConfigFile {
+    #[serde(default = "one")]
     version: u32,
     #[serde(default)]
     config: ExtractConfig,
@@ -152,6 +157,7 @@ struct ConfigFile {
 
 #[derive(Serialize, Deserialize)]
 struct SuggestionsFile {
+    #[serde(default = "one")]
     version: u32,
     #[serde(default)]
     suggestions: Vec<Suggestion>,
@@ -160,6 +166,7 @@ struct SuggestionsFile {
 /// Run records and watermarks share one file.
 #[derive(Serialize, Deserialize)]
 struct RunsFile {
+    #[serde(default = "one")]
     version: u32,
     #[serde(default)]
     runs: Vec<RunRecord>,
@@ -281,18 +288,20 @@ impl Store {
         if non_pending <= MAX_NON_PENDING {
             return;
         }
-        let mut idx: Vec<(i64, usize)> = self
+        let mut idx: Vec<(bool, i64, usize)> = self
             .suggestions
             .iter()
             .enumerate()
             .filter(|(_, s)| s.status != SuggestionStatus::Pending)
-            .map(|(i, s)| (s.created_at, i))
+            .map(|(i, s)| (s.status == SuggestionStatus::Rejected, s.created_at, i))
             .collect();
-        idx.sort(); // oldest first, stable by position
+        // Accepted/Stale first (oldest first), Rejected last: rejected ones
+        // are what stops the same suggestion from coming back.
+        idx.sort();
         let drop: HashSet<usize> = idx
             .into_iter()
             .take(non_pending - MAX_NON_PENDING)
-            .map(|(_, i)| i)
+            .map(|(_, _, i)| i)
             .collect();
         let mut i = 0usize;
         self.suggestions.retain(|_| {
@@ -626,5 +635,40 @@ mod tests {
         let err = Store::load(tmp.path()).err().unwrap();
         assert!(err.contains("version 2"), "{err}");
         assert!(tmp.path().join("suggestions.json.bak").exists());
+    }
+
+    #[test]
+    fn missing_version_field_means_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("extract-config.json"), r#"{"config": {"lookback_days": 3}}"#).unwrap();
+        fs::write(tmp.path().join("suggestions.json"), r#"{"suggestions": []}"#).unwrap();
+        fs::write(tmp.path().join("extract-runs.json"), r#"{"runs": []}"#).unwrap();
+        let s = Store::load(tmp.path()).unwrap();
+        assert_eq!(s.config().lookback_days, 3);
+        assert!(!tmp.path().join("extract-config.json.bak").exists());
+    }
+
+    #[test]
+    fn retention_drops_rejected_last() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = Store::load(tmp.path()).unwrap();
+        let mut batch = Vec::new();
+        for i in 0..MAX_NON_PENDING {
+            let mut x = sug(&format!("r{i}"), &format!("fr{i}"));
+            x.status = SuggestionStatus::Rejected;
+            x.created_at = i as i64; // oldest overall
+            batch.push(x);
+        }
+        for i in 0..10 {
+            let mut x = sug(&format!("a{i}"), &format!("fa{i}"));
+            x.status = if i % 2 == 0 { SuggestionStatus::Accepted } else { SuggestionStatus::Stale };
+            x.created_at = 1_000_000 + i as i64; // newer than every rejected one
+            batch.push(x);
+        }
+        s.add_suggestions(batch);
+        // 10 over the cap: the 10 Accepted/Stale go, not the older Rejected.
+        assert_eq!(s.suggestions().len(), MAX_NON_PENDING);
+        assert!(s.suggestions().iter().all(|x| x.status == SuggestionStatus::Rejected));
+        assert!(s.suggestions().iter().any(|x| x.id == "r0"));
     }
 }

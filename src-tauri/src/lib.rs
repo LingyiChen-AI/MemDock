@@ -97,6 +97,7 @@ pub fn run() {
             commands_extract::get_extract_config,
             commands_extract::set_extract_config,
             commands_extract::extract_runners,
+            commands_extract::reset_extract_data,
             commands_extract::start_extraction,
             commands_extract::cancel_extraction,
             commands_extract::list_extract_runs,

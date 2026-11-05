@@ -12,7 +12,8 @@
 //! `memory-changed` (after a suggestion was written into a memory file).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -26,7 +27,9 @@ use crate::extract::job::{
 use crate::extract::prompt::{redact, Evidence, Suggestion, SuggestionStatus};
 use crate::extract::runner::{CliRunner, RunError};
 use crate::extract::sessions::{context_around, Turn};
-use crate::extract::store::{ExtractConfig, ProjectFilter, RunRecord, RunTrigger, Schedule, Store};
+use crate::extract::store::{
+    reset_unloadable, ExtractConfig, ProjectFilter, RunRecord, RunTrigger, Schedule, Store,
+};
 use crate::model::{MemoryIndex, MemoryKind, Tool};
 use crate::projects::normalize_path;
 
@@ -47,15 +50,54 @@ struct Inner {
     scheduler: Arc<Scheduler>,
 }
 
+/// Adjusts a freshly built `ExtractCtx` (tests inject turn sources / clocks).
+type Customize = Arc<dyn Fn(&mut ExtractCtx) + Send + Sync>;
+/// Finds the installed CLI runners (production: PATH scan).
+pub type Detect = Arc<dyn Fn() -> Vec<Arc<dyn CliRunner>> + Send + Sync>;
+
 /// Extraction runtime managed by Tauri next to `AppState`. When the store files
-/// could not be loaded (corrupt), every command fails with an `io` error that
-/// carries the reason; nothing is silently reset.
+/// could not be loaded (corrupt), every command fails with a
+/// `store_unavailable` error that carries the reason; nothing is silently
+/// reset. The user can explicitly reset (`reset_extract_data`): unloadable
+/// files are removed once their `.bak` copy is verified, and the store is
+/// rebuilt in place.
 pub struct ExtractState {
     app: Arc<AppState>,
-    inner: Result<Inner, String>,
+    inner: RwLock<Result<Arc<Inner>, String>>,
     /// Kept outside `inner` so availability is reported even when the store is unusable.
-    runners: Vec<Arc<dyn CliRunner>>,
+    runners: RwLock<Vec<Arc<dyn CliRunner>>>,
+    /// Re-run on every `extract_runners` call so a newly installed CLI is
+    /// picked up without a restart. `None`: runners are fixed (tests).
+    detect: Option<Detect>,
+    customize: Customize,
+    scheduler_started: AtomicBool,
     emitter: Mutex<Option<Emit>>,
+}
+
+fn read<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|e| e.into_inner())
+}
+
+fn write<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|e| e.into_inner())
+}
+
+fn make_inner(
+    app: &Arc<AppState>,
+    runners: Vec<Arc<dyn CliRunner>>,
+    customize: &Customize,
+) -> Result<Inner, String> {
+    Store::load(&app.data_dir).map(|store| {
+        let store = Arc::new(Mutex::new(store));
+        let mut ctx = ExtractCtx::new(app.paths.clone(), app.home.clone(), store.clone(), runners);
+        let a = app.clone();
+        ctx.index = Arc::new(move || a.snapshot_index());
+        customize(&mut ctx);
+        let ctx = Arc::new(ctx);
+        let apply = ApplyCtx::new(store.clone(), app.snapshots.clone(), app.write_lock.clone());
+        let scheduler = Scheduler::new(ctx.clone());
+        Inner { store, ctx, apply, scheduler }
+    })
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
@@ -172,32 +214,53 @@ impl ExtractState {
     pub fn build(
         app: Arc<AppState>,
         runners: Vec<Arc<dyn CliRunner>>,
-        customize: impl FnOnce(&mut ExtractCtx),
+        customize: impl Fn(&mut ExtractCtx) + Send + Sync + 'static,
     ) -> ExtractState {
-        let inner = Store::load(&app.data_dir).map(|store| {
-            let store = Arc::new(Mutex::new(store));
-            let mut ctx =
-                ExtractCtx::new(app.paths.clone(), app.home.clone(), store.clone(), runners.clone());
-            let a = app.clone();
-            ctx.index = Arc::new(move || a.snapshot_index());
-            customize(&mut ctx);
-            let ctx = Arc::new(ctx);
-            let apply = ApplyCtx::new(store.clone(), app.snapshots.clone(), app.write_lock.clone());
-            let scheduler = Scheduler::new(ctx.clone());
-            Inner { store, ctx, apply, scheduler }
-        });
-        ExtractState { app, inner, runners, emitter: Mutex::new(None) }
+        let customize: Customize = Arc::new(customize);
+        let inner = make_inner(&app, runners.clone(), &customize).map(Arc::new);
+        ExtractState {
+            app,
+            inner: RwLock::new(inner),
+            runners: RwLock::new(runners),
+            detect: None,
+            customize,
+            scheduler_started: AtomicBool::new(false),
+            emitter: Mutex::new(None),
+        }
     }
 
-    /// Production state: CLI runners found on PATH.
+    /// Re-detects runners with `detect` on every `extract_runners` call.
+    pub fn with_detector(mut self, detect: Detect) -> Self {
+        self.detect = Some(detect);
+        self
+    }
+
+    /// Production state: CLI runners found on PATH (re-detected on demand).
     pub fn new(app: Arc<AppState>) -> ExtractState {
-        Self::build(app, crate::extract::runner::detect_runners_from_env(), |_| {})
+        use crate::extract::runner::detect_runners_from_env;
+        Self::build(app, detect_runners_from_env(), |_| {})
+            .with_detector(Arc::new(detect_runners_from_env))
     }
 
-    fn inner(&self) -> Result<&Inner, CommandError> {
-        self.inner
-            .as_ref()
-            .map_err(|e| CommandError::new("io", format!("extraction data unavailable: {e}")))
+    fn inner(&self) -> Result<Arc<Inner>, CommandError> {
+        match &*read(&self.inner) {
+            Ok(i) => Ok(i.clone()),
+            Err(e) => Err(CommandError::new(
+                "store_unavailable",
+                format!("extraction data unavailable: {e}"),
+            )),
+        }
+    }
+
+    /// Re-detects the CLI runners (when a detector is set) and hands them to
+    /// the extraction context.
+    fn refresh_runners(&self) {
+        let Some(detect) = &self.detect else { return };
+        let fresh = detect();
+        *write(&self.runners) = fresh.clone();
+        if let Ok(inner) = self.inner() {
+            inner.ctx.set_runners(fresh);
+        }
     }
 
     pub fn store(&self) -> Result<Arc<Mutex<Store>>, CommandError> {
@@ -209,6 +272,10 @@ impl ExtractState {
     pub fn set_emitter(&self, emit: Emit) {
         *lock(&self.emitter) = Some(emit.clone());
         let Ok(inner) = self.inner() else { return };
+        self.wire_hooks(&inner, emit);
+    }
+
+    fn wire_hooks(&self, inner: &Inner, emit: Emit) {
         let (e1, e2) = (emit.clone(), emit);
         let app = self.app.clone();
         let store = inner.store.clone();
@@ -242,6 +309,7 @@ impl ExtractState {
     }
 
     pub fn start_scheduler(&self) {
+        self.scheduler_started.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(inner) = self.inner() {
             inner.scheduler.start();
         }
@@ -292,7 +360,8 @@ pub fn set_extract_config_impl(
     config: ExtractConfig,
 ) -> Result<ExtractConfig, CommandError> {
     validate_config(&config)?;
-    let mut st = lock(&es.inner()?.store);
+    let inner = es.inner()?;
+    let mut st = lock(&inner.store);
     let old = st.config().clone();
     st.set_config(config);
     if let Err(e) = st.save() {
@@ -302,14 +371,52 @@ pub fn set_extract_config_impl(
     Ok(st.config().clone())
 }
 
+/// Re-detects installed CLIs first (cheap PATH scan), so installing one does
+/// not need a restart.
 pub fn extract_runners_impl(es: &ExtractState) -> Vec<RunnerInfo> {
+    es.refresh_runners();
+    let runners = read(&es.runners).clone();
     [Tool::Claude, Tool::Codex]
         .into_iter()
-        .map(|tool| match es.runners.iter().find(|r| r.tool() == tool) {
+        .map(|tool| match runners.iter().find(|r| r.tool() == tool) {
             Some(r) => RunnerInfo { tool, available: r.available(), program: r.program() },
             None => RunnerInfo { tool, available: false, program: None },
         })
         .collect()
+}
+
+/// Recovers from a store that failed to load: removes the unloadable files
+/// (only after verifying each has an identical `.bak` copy) and rebuilds the
+/// store in place. Refused (`invalid`) when the store loaded fine.
+pub fn reset_extract_data_impl(es: &ExtractState) -> Result<(), CommandError> {
+    let fresh = {
+        let mut slot = write(&es.inner);
+        if slot.is_ok() {
+            return Err(CommandError::new("invalid", "extraction data is not in an error state"));
+        }
+        reset_unloadable(&es.app.data_dir).map_err(|e| CommandError::new("io", e))?;
+        let runners = read(&es.runners).clone();
+        match make_inner(&es.app, runners, &es.customize) {
+            Ok(i) => {
+                let i = Arc::new(i);
+                *slot = Ok(i.clone());
+                i
+            }
+            Err(e) => {
+                *slot = Err(e.clone());
+                return Err(CommandError::new("store_unavailable", e));
+            }
+        }
+    };
+    let emit = lock(&es.emitter).clone();
+    if let Some(e) = emit {
+        es.wire_hooks(&fresh, e);
+    }
+    if es.scheduler_started.load(std::sync::atomic::Ordering::SeqCst) {
+        fresh.scheduler.start();
+    }
+    es.emit_summary();
+    Ok(())
 }
 
 // -------------------------------------------------------------------- runs
@@ -537,6 +644,11 @@ pub fn set_extract_config(es: Es, config: ExtractConfig) -> Result<ExtractConfig
 #[tauri::command(async)]
 pub fn extract_runners(es: Es) -> Vec<RunnerInfo> {
     extract_runners_impl(&es)
+}
+
+#[tauri::command(async)]
+pub fn reset_extract_data(es: Es) -> Result<(), CommandError> {
+    reset_extract_data_impl(&es)
 }
 
 #[tauri::command(async)]

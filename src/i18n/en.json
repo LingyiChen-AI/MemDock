@@ -407,7 +407,23 @@
     "runUnsavedConfirm": "Save and run",
     "runUnsavedCancel": "Cancel",
     "runInvalid": "Settings are invalid, fix them first",
-    "runNoRunner": "The selected tool was not detected, cannot run"
+    "runNoRunner": "The selected tool was not detected, cannot run",
+    "errorCodes": {
+      "not_installed": "Command-line tool not found",
+      "not_logged_in": "Command-line tool is not logged in; log in from a terminal first",
+      "timeout": "Command-line tool timed out",
+      "cancelled": "Cancelled",
+      "invalid_output": "Model output could not be parsed",
+      "io": "Could not read or write the data files",
+      "other": "Command-line tool failed"
+    },
+    "resetData": "Reset extraction data",
+    "resetTitle": "Reset extraction data?",
+    "resetBody": "The extraction data files are corrupt and cannot be read. Resetting deletes the unreadable files (already backed up as .bak files in the same folder) and keeps the intact ones. Suggestions and run records in the deleted files will no longer be shown.",
+    "resetConfirm": "Reset",
+    "resetCancel": "Cancel",
+    "resetDone": "Extraction data was reset",
+    "resetFailed": "Reset failed: {message}"
   },
   "review": {
     "title": "Review",

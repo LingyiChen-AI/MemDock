@@ -31,6 +31,12 @@ export function startExtraction(): Promise<RunRecord> {
   return invoke<RunRecord>("start_extraction");
 }
 
+/** Only when the data files failed to load (`store_unavailable`): removes the
+ * unloadable files after verifying their `.bak` copies, then reloads. */
+export function resetExtractData(): Promise<void> {
+  return invoke<void>("reset_extract_data");
+}
+
 export function cancelExtraction(): Promise<void> {
   return invoke<void>("cancel_extraction");
 }

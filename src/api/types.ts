@@ -77,7 +77,9 @@ export type CommandErrorCode =
   | "not_logged_in"
   | "stale"
   | "not_found"
-  | "not_pending";
+  | "not_pending"
+  /** The extraction data files could not be loaded; `reset_extract_data` recovers. */
+  | "store_unavailable";
 
 /** Error thrown by failing commands. `current_hash` is set for `disk_changed`. */
 export interface CommandError {
@@ -296,6 +298,8 @@ export interface RunnerInfo {
 
 export type RunTrigger = "manual" | "scheduled";
 export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+/** Why a run failed; mapped to localized text (the raw `error` stays as detail). */
+export type RunErrorCode = "not_installed" | "not_logged_in" | "timeout" | "cancelled" | "invalid_output" | "io" | "other";
 
 export interface RunRecord {
   id: string;
@@ -308,7 +312,10 @@ export interface RunRecord {
   projects: number;
   suggestions_new: number;
   warnings: string[];
+  /** Raw (English) detail. */
   error: string | null;
+  /** Absent in records written by older builds. */
+  error_code?: RunErrorCode | null;
 }
 
 export interface ExtractProgress {

@@ -14,6 +14,7 @@ vi.mock("@/api/extract", () => ({
   extractRunners: vi.fn(),
   startExtraction: vi.fn(),
   cancelExtraction: vi.fn(),
+  resetExtractData: vi.fn(),
   listExtractRuns: vi.fn(),
   onExtractProgress: vi.fn(),
   onExtractFinished: vi.fn(),
@@ -27,6 +28,7 @@ import {
   listExtractRuns,
   onExtractFinished,
   onExtractProgress,
+  resetExtractData,
   setExtractConfig,
   startExtraction,
 } from "@/api/extract";
@@ -55,6 +57,7 @@ const run = (over: Partial<RunRecord> = {}): RunRecord => ({
   suggestions_new: 4,
   warnings: [],
   error: null,
+  error_code: null,
   ...over,
 });
 
@@ -279,6 +282,56 @@ describe("ExtractPage fix round 1", () => {
     (listExtractRuns as Mock).mockResolvedValue([run({ id: "s1", status: "running", finished_at: null, trigger: "scheduled" })]);
     act(() => progressCb({ project: "alpha", index: 1, total: 3 }));
     expect(await screen.findByText("运行中… 第 1 / 3 个项目")).toBeInTheDocument();
+  });
+
+  it("failed run shows a localized error with the raw detail as tooltip", async () => {
+    (listExtractRuns as Mock).mockResolvedValue([
+      run({ id: "f1", status: "failed", error: "alpha: CLI timed out", error_code: "timeout", suggestions_new: 0 }),
+    ]);
+    renderApp(<ExtractPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "展开详情" }));
+    const msg = screen.getByText("命令行工具运行超时");
+    expect(msg).toHaveAttribute("title", "alpha: CLI timed out");
+  });
+
+  it("failed run toast uses the localized error code", async () => {
+    renderApp(<ExtractPage />);
+    await screen.findByText("还没有运行记录");
+    act(() =>
+      finishedCb(run({ id: "f2", status: "failed", error: "CLI not logged in: Please run /login", error_code: "not_logged_in" })),
+    );
+    expect(await screen.findByText("提取失败：命令行工具未登录，请先在终端登录")).toBeInTheDocument();
+    expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
+  });
+
+  it("corrupt store: reset after confirmation reloads the page", async () => {
+    (getExtractConfig as Mock).mockRejectedValueOnce({ code: "store_unavailable", message: "suggestions.json is corrupt" });
+    (resetExtractData as Mock).mockResolvedValue(undefined);
+    renderApp(<ExtractPage />);
+    const reset = await screen.findByRole("button", { name: "重置提取数据" });
+    await userEvent.click(reset);
+    expect(resetExtractData).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "重置" }));
+    await waitFor(() => expect(resetExtractData).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("button", { name: "立即运行" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置提取数据" })).not.toBeInTheDocument();
+  });
+
+  it("corrupt store: cancelling the dialog does not reset", async () => {
+    (getExtractConfig as Mock).mockRejectedValueOnce({ code: "store_unavailable", message: "bad" });
+    renderApp(<ExtractPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "重置提取数据" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(resetExtractData).not.toHaveBeenCalled();
+  });
+
+  it("other load errors offer retry but no reset", async () => {
+    (getExtractConfig as Mock).mockRejectedValueOnce({ code: "io", message: "disk" });
+    renderApp(<ExtractPage />);
+    expect(await screen.findByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置提取数据" })).not.toBeInTheDocument();
   });
 
   it("removes its listeners on unmount", async () => {

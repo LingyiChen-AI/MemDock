@@ -7,6 +7,7 @@ import {
   listExtractRuns,
   onExtractFinished,
   onExtractProgress,
+  resetExtractData,
   setExtractConfig,
   startExtraction,
 } from "@/api/extract";
@@ -21,7 +22,7 @@ import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { ExtractConfigForm, type DraftState } from "./ExtractConfigForm";
-import { RunsTable } from "./RunsTable";
+import { RunsTable, runErrorText } from "./RunsTable";
 
 export interface ExtractPageProps {
   onNavigate?: (key: NavKey) => void;
@@ -37,6 +38,10 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [runs, setRuns] = React.useState<RunRecord[] | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  /** The data files could not be loaded: offer a reset. */
+  const [storeBroken, setStoreBroken] = React.useState(false);
+  const [confirmReset, setConfirmReset] = React.useState(false);
+  const [resetting, setResetting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
   const [cancelling, setCancelling] = React.useState(false);
@@ -67,6 +72,7 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
 
   const load = React.useCallback(async () => {
     setLoadError(null);
+    setStoreBroken(false);
     try {
       const [c, rn, rs, idx] = await Promise.all([getExtractConfig(), extractRunners(), listExtractRuns(), listMemories()]);
       setConfig(c);
@@ -75,6 +81,7 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
       setProjects(idx.projects.map((p) => p.project));
     } catch (e) {
       setLoadError(errorMessage(e));
+      setStoreBroken(asCommandError(e)?.code === "store_unavailable");
     }
   }, []);
 
@@ -108,7 +115,10 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
         setRuns((l) => (l ? l.map((o) => (o.id === r.id ? r : o)) : l));
         const m = xRef.current;
         if (r.status === "succeeded") push("success", fmt(m.finishedOk, { n: r.suggestions_new }));
-        else if (r.status === "failed") push("error", r.error ? `${m.finishedFailed}：${r.error}` : m.finishedFailed);
+        else if (r.status === "failed") {
+          const text = runErrorText(m, r);
+          push("error", text ? `${m.finishedFailed}：${text}` : m.finishedFailed);
+        }
         else if (r.status === "cancelled") push("warning", m.finishedCancelled);
         else if (r.status === "interrupted") push("warning", m.finishedInterrupted);
         listExtractRuns()
@@ -185,6 +195,20 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
     }
   };
 
+  const reset = async () => {
+    setConfirmReset(false);
+    setResetting(true);
+    try {
+      await resetExtractData();
+      push("success", x.resetDone);
+      await load();
+    } catch (e) {
+      push("error", fmt(x.resetFailed, { message: errorMessage(e) }));
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const runningLabel = progress ? fmt(x.runningProgress, { i: progress.index, n: progress.total }) : x.running;
 
   return (
@@ -225,9 +249,22 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
             <p role="alert" className="max-w-md text-center text-sm text-destructive">
               {fmt(x.loadFailed, { message: loadError })}
             </p>
-            <Button type="button" variant="outline" onClick={() => void load()} className="h-7 cursor-pointer bg-card px-3 text-xs hover:bg-muted">
-              {x.retry}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" onClick={() => void load()} className="h-7 cursor-pointer bg-card px-3 text-xs hover:bg-muted">
+                {x.retry}
+              </Button>
+              {storeBroken ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={resetting}
+                  onClick={() => setConfirmReset(true)}
+                  className="h-7 cursor-pointer bg-card px-3 text-xs text-destructive hover:bg-muted"
+                >
+                  {x.resetData}
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : (
           <>
@@ -272,6 +309,16 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
         cancelLabel={x.runUnsavedCancel}
         onConfirm={() => void saveAndRun()}
         onCancel={() => setConfirmRun(false)}
+      />
+      <ConfirmDialog
+        open={confirmReset}
+        title={x.resetTitle}
+        body={x.resetBody}
+        confirmLabel={x.resetConfirm}
+        cancelLabel={x.resetCancel}
+        destructive
+        onConfirm={() => void reset()}
+        onCancel={() => setConfirmReset(false)}
       />
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </div>

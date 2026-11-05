@@ -36,7 +36,7 @@ use super::prompt::{
 };
 use super::runner::{CliRunner, RunError};
 use super::sessions::{read_claude_turns, read_codex_turns, Turn};
-use super::store::{RunRecord, RunStatus, RunTrigger, Schedule, Store};
+use super::store::{RunErrorCode, RunRecord, RunStatus, RunTrigger, Schedule, Store};
 use crate::memory::io::read_memory;
 use crate::memory::scan::scan_all;
 use crate::model::{MemoryFile, MemoryIndex, MemoryKind, Tool};
@@ -80,7 +80,8 @@ pub struct ExtractCtx {
     pub home: PathBuf,
     /// Loaded once at startup; never reloaded during a run.
     pub store: Arc<Mutex<Store>>,
-    pub runners: Vec<Arc<dyn CliRunner>>,
+    /// Swappable: the app re-detects installed CLIs on demand (`set_runners`).
+    runners: Mutex<Vec<Arc<dyn CliRunner>>>,
     pub clock: Clock,
     pub index: IndexProvider,
     pub turns: TurnSource,
@@ -132,7 +133,7 @@ impl ExtractCtx {
             paths,
             home,
             store,
-            runners,
+            runners: Mutex::new(runners),
             clock: Arc::new(system_now_ms),
             index,
             turns,
@@ -140,6 +141,11 @@ impl ExtractCtx {
             hooks: Mutex::new(Hooks::default()),
             running: Mutex::new(None),
         }
+    }
+
+    /// Replaces the CLI runners (a run already in progress keeps its runner).
+    pub fn set_runners(&self, runners: Vec<Arc<dyn CliRunner>>) {
+        *lock(&self.runners) = runners;
     }
 
     pub fn set_hooks(&self, hooks: Hooks) {
@@ -235,8 +241,27 @@ fn describe(e: &RunError) -> String {
     }
 }
 
+fn code_of(e: &RunError) -> RunErrorCode {
+    match e {
+        RunError::NotInstalled => RunErrorCode::NotInstalled,
+        RunError::NotLoggedIn(_) => RunErrorCode::NotLoggedIn,
+        RunError::Timeout => RunErrorCode::Timeout,
+        RunError::Cancelled => RunErrorCode::Cancelled,
+        RunError::Failed { .. } => RunErrorCode::Other,
+    }
+}
+
+/// Sets `error` + `error_code` unless an error is already recorded.
+fn set_error(rec: &mut RunRecord, code: RunErrorCode, msg: String) {
+    if rec.error.is_none() {
+        rec.error = Some(msg);
+        rec.error_code = Some(code);
+    }
+}
+
 pub fn choose_runner(ctx: &ExtractCtx, want: Option<Tool>) -> Option<Arc<dyn CliRunner>> {
-    let pick = |t: Tool| ctx.runners.iter().find(|r| r.tool() == t && r.available()).cloned();
+    let runners = lock(&ctx.runners).clone();
+    let pick = |t: Tool| runners.iter().find(|r| r.tool() == t && r.available()).cloned();
     match want {
         Some(t) => pick(t),
         None => pick(Tool::Claude).or_else(|| pick(Tool::Codex)),
@@ -336,7 +361,7 @@ fn finish(ctx: &ExtractCtx, rec: &mut RunRecord) {
     if let Err(e) = st.save() {
         let m = format!("could not save run record: {e}");
         rec.warnings.push(m.clone());
-        rec.error.get_or_insert(m);
+        set_error(rec, RunErrorCode::Io, m);
         st.update_run(rec.clone());
     }
 }
@@ -364,6 +389,7 @@ impl Drop for PanicGuard<'_> {
             r.status = RunStatus::Failed;
             r.finished_at = Some((self.ctx.clock)());
             r.error = Some("panicked during extraction".into());
+            r.error_code = Some(RunErrorCode::Other);
             st.update_run(r);
             let _ = st.save();
         }
@@ -395,6 +421,7 @@ fn execute(
         suggestions_new: 0,
         warnings: Vec::new(),
         error: None,
+        error_code: None,
     };
     {
         let mut st = lock(&ctx.store);
@@ -409,6 +436,7 @@ fn execute(
     let Some(runner) = runner else {
         rec.status = RunStatus::Failed;
         rec.error = Some("not_installed".into());
+        rec.error_code = Some(RunErrorCode::NotInstalled);
         rec.finished_at = Some((ctx.clock)());
         finish(ctx, &mut rec);
         guard.disarm();
@@ -498,10 +526,10 @@ fn execute(
     let total = projects.len() as u32;
 
     let mut cancelled = false;
-    let mut fatal: Option<String> = None;
+    let mut fatal: Option<(RunErrorCode, String)> = None;
     let mut attempted = 0u32;
     let mut ok = 0u32;
-    let mut first_failure: Option<String> = None;
+    let mut first_failure: Option<(RunErrorCode, String)> = None;
     let mut save_error: Option<String> = None;
 
     for (i, b) in projects.iter().enumerate() {
@@ -555,12 +583,12 @@ fn execute(
                     break;
                 }
                 Err(e @ (RunError::NotInstalled | RunError::NotLoggedIn(_))) => {
-                    fatal = Some(describe(&e));
+                    fatal = Some((code_of(&e), describe(&e)));
                     break;
                 }
                 Err(e) => {
                     let m = format!("{}: {}", b.name, describe(&e));
-                    first_failure.get_or_insert_with(|| m.clone());
+                    first_failure.get_or_insert_with(|| (code_of(&e), m.clone()));
                     rec.warnings.push(m);
                     project_failed = true;
                     break;
@@ -570,7 +598,7 @@ fn execute(
             rec.warnings.extend(parsed.warnings.into_iter().map(|w| format!("{}: {w}", b.name)));
             if parsed.unusable {
                 let m = format!("{}: model output unusable", b.name);
-                first_failure.get_or_insert_with(|| m.clone());
+                first_failure.get_or_insert_with(|| (RunErrorCode::InvalidOutput, m.clone()));
                 rec.warnings.push(m);
                 project_failed = true;
                 break;
@@ -608,18 +636,20 @@ fn execute(
 
     rec.status = if cancelled {
         RunStatus::Cancelled
-    } else if let Some(f) = fatal {
-        rec.error = Some(f);
+    } else if let Some((code, m)) = fatal {
+        set_error(&mut rec, code, m);
         RunStatus::Failed
     } else if attempted > 0 && ok == 0 {
-        rec.error = first_failure;
+        if let Some((code, m)) = first_failure {
+            set_error(&mut rec, code, m);
+        }
         RunStatus::Failed
     } else {
         RunStatus::Succeeded
     };
     rec.finished_at = Some((ctx.clock)());
-    if rec.error.is_none() {
-        rec.error = save_error;
+    if let Some(m) = save_error {
+        set_error(&mut rec, RunErrorCode::Io, m);
     }
     finish(ctx, &mut rec);
     guard.disarm();
@@ -989,6 +1019,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_runs_carry_an_error_code() {
+        let code = |f: Fake| go(&two_with(f)).error_code;
+        let mut missing = Fake::ok();
+        missing.avail = false;
+        assert_eq!(code(missing), Some(RunErrorCode::NotInstalled));
+        assert_eq!(code(Fake::with(Box::new(|_| Err(RunError::NotLoggedIn("x".into()))))), Some(RunErrorCode::NotLoggedIn));
+        assert_eq!(code(Fake::with(Box::new(|_| Err(RunError::NotInstalled)))), Some(RunErrorCode::NotInstalled));
+        assert_eq!(code(Fake::with(Box::new(|_| Err(RunError::Timeout)))), Some(RunErrorCode::Timeout));
+        assert_eq!(
+            code(Fake::with(Box::new(|_| Err(RunError::Failed { code: Some(1), stderr: "boom".into() })))),
+            Some(RunErrorCode::Other)
+        );
+        assert_eq!(code(Fake::with(Box::new(|_| Ok("not json".into())))), Some(RunErrorCode::InvalidOutput));
+        assert_eq!(code(Fake::ok()), None);
+        // the raw detail is kept next to the code
+        let rec = go(&two_with(Fake::with(Box::new(|_| Err(RunError::Timeout)))));
+        assert!(rec.error.as_deref().is_some_and(|e| e.contains("timed out")), "{rec:?}");
+        // old records without the field still load
+        let r: RunRecord = serde_json::from_value(serde_json::json!({
+            "id": "x", "started_at": 1, "finished_at": null, "trigger": "manual", "tool": "claude",
+            "status": "failed", "sessions_read": 0, "projects": 0, "suggestions_new": 0, "error": "boom"
+        }))
+        .unwrap();
+        assert_eq!(r.error_code, None);
+    }
+
+    #[test]
+    fn save_failure_has_io_code() {
+        let e = two();
+        let data = e._tmp.path().join("data");
+        fs::remove_dir_all(&data).unwrap();
+        fs::write(&data, "x").unwrap();
+        assert_eq!(go(&e).error_code, Some(RunErrorCode::Io));
+    }
+
+    #[test]
     fn cancel_marks_cancelled() {
         let mut f = Fake::ok();
         f.cancel_on_call = true;
@@ -1042,6 +1108,7 @@ mod tests {
             suggestions_new: 0,
             warnings: vec![],
             error: None,
+            error_code: None,
         };
         let mut s = Store::load(tmp.path()).unwrap();
         s.push_run(rec);

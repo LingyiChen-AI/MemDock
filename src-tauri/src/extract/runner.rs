@@ -138,7 +138,8 @@ pub(crate) fn exec(
     if cancel.load(Ordering::SeqCst) {
         return Err(RunError::Cancelled);
     }
-    let resolved = resolve_program(program, &path_dirs());
+    let dirs = path_dirs();
+    let resolved = resolve_program(program, &dirs);
     let is_batch = resolved
         .extension()
         .and_then(|e| e.to_str())
@@ -155,6 +156,13 @@ pub(crate) fn exec(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // npm-installed CLIs are `#!/usr/bin/env node` scripts: they need the
+    // same augmented PATH (node) that was used to find them.
+    if cfg!(target_os = "macos") {
+        if let Ok(p) = std::env::join_paths(&dirs) {
+            cmd.env("PATH", p);
+        }
+    }
     let mut child = proc::spawn_hidden(&mut cmd).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RunError::NotInstalled
@@ -176,9 +184,102 @@ pub(crate) fn exec(
     })
 }
 
-fn path_dirs() -> Vec<PathBuf> {
+fn env_path_dirs() -> Vec<PathBuf> {
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default()
+}
+
+/// Directories searched for the CLIs and given to them as `PATH`. On macOS an
+/// app started from Finder / the Dock gets a minimal `PATH` without Homebrew,
+/// npm or nvm, so the login shell's `PATH` (resolved once) and well-known
+/// install directories are added; elsewhere it is the process `PATH`.
+fn path_dirs() -> Vec<PathBuf> {
+    // `cfg!` (not `#[cfg]`) so the macOS branch is type-checked everywhere.
+    if !cfg!(target_os = "macos") {
+        return env_path_dirs();
+    }
+    static LOGIN: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    let login = LOGIN.get_or_init(|| login_shell_path().unwrap_or_default());
+    let home = dirs::home_dir().unwrap_or_default();
+    let known = known_cli_dirs(&home, &nvm_versions(&home));
+    merge_path_dirs(&[login, &env_path_dirs(), &known])
+}
+
+/// Marker printed before the login shell's `PATH`, so rc-file noise is ignored.
+const PATH_MARKER: &str = "__MEMDOCK_PATH__";
+
+/// Extracts the `PATH` printed after `PATH_MARKER` (Unix `:`-separated).
+pub fn parse_login_path(out: &str) -> Option<Vec<PathBuf>> {
+    let (_, rest) = out.rsplit_once(PATH_MARKER)?;
+    let v: Vec<PathBuf> = rest
+        .trim()
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    (!v.is_empty()).then_some(v)
+}
+
+/// `$SHELL -lc` printing `PATH`, with a 3 s timeout; `None` on any failure.
+/// Only called on macOS.
+fn login_shell_path() -> Option<Vec<PathBuf>> {
+    let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+    let mut cmd = Command::new(shell);
+    cmd.arg("-lc")
+        .arg(format!("printf '{PATH_MARKER}%s' \"$PATH\""))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let child = proc::spawn_hidden(&mut cmd).ok()?;
+    let out = proc::wait_with_timeout(child, Duration::from_secs(3), None).ok()?;
+    parse_login_path(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Concatenates directory lists in priority order, dropping empty entries
+/// and later duplicates.
+pub fn merge_path_dirs(lists: &[&[PathBuf]]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for d in lists.iter().flat_map(|l| l.iter()) {
+        if !d.as_os_str().is_empty() && !out.contains(d) {
+            out.push(d.clone());
+        }
+    }
+    out
+}
+
+/// Where the Claude Code / Codex CLIs and node usually live on macOS.
+/// `nvm_versions`: directory names under `~/.nvm/versions/node`; the newest
+/// one's `bin` is added.
+pub fn known_cli_dirs(home: &Path, nvm_versions: &[String]) -> Vec<PathBuf> {
+    let mut v = vec![
+        home.join(".local/bin"),
+        home.join(".claude/local"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        home.join(".npm-global/bin"),
+    ];
+    if let Some(latest) = latest_node_version(nvm_versions) {
+        v.push(home.join(".nvm/versions/node").join(latest).join("bin"));
+    }
+    v
+}
+
+/// Highest `vX.Y.Z` (numeric comparison); names that do not parse are ignored.
+pub fn latest_node_version(names: &[String]) -> Option<String> {
+    let key = |n: &str| -> Option<Vec<u64>> {
+        n.strip_prefix('v')?.split('.').map(|p| p.parse::<u64>().ok()).collect()
+    };
+    names
+        .iter()
+        .filter_map(|n| key(n).map(|k| (k, n)))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, n)| n.clone())
+}
+
+fn nvm_versions(home: &Path) -> Vec<String> {
+    std::fs::read_dir(home.join(".nvm/versions/node"))
+        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
         .unwrap_or_default()
 }
 
@@ -391,12 +492,10 @@ pub fn detect_runners(dirs: &[PathBuf]) -> Vec<Arc<dyn CliRunner>> {
     v
 }
 
-/// `detect_runners` over the process `PATH`.
+/// `detect_runners` over the process `PATH` (on macOS augmented with the login
+/// shell `PATH` and well-known install directories, see `path_dirs`).
 pub fn detect_runners_from_env() -> Vec<Arc<dyn CliRunner>> {
-    let dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
-        .unwrap_or_default();
-    detect_runners(&dirs)
+    detect_runners(&path_dirs())
 }
 
 #[cfg(test)]
@@ -670,6 +769,59 @@ mod tests {
             x.run("p", &json!({}), SECS5, &no_cancel()).unwrap_err(),
             RunError::NotInstalled
         );
+    }
+
+    fn pb(v: &[&str]) -> Vec<PathBuf> {
+        v.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn merge_path_dirs_keeps_order_and_drops_duplicates() {
+        let login = pb(&["/opt/homebrew/bin", "/usr/bin"]);
+        let env = pb(&["/usr/bin", "", "/bin"]);
+        let known = pb(&["/opt/homebrew/bin", "/Users/u/.local/bin"]);
+        assert_eq!(
+            merge_path_dirs(&[&login, &env, &known]),
+            pb(&["/opt/homebrew/bin", "/usr/bin", "/bin", "/Users/u/.local/bin"])
+        );
+        assert!(merge_path_dirs(&[]).is_empty());
+    }
+
+    #[test]
+    fn latest_node_version_compares_numerically() {
+        let names: Vec<String> = ["v9.11.2", "v20.9.1", "v20.10.0", "system", "v18.x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(latest_node_version(&names).as_deref(), Some("v20.10.0"));
+        assert_eq!(latest_node_version(&[]), None);
+        assert_eq!(latest_node_version(&["junk".to_string()]), None);
+    }
+
+    #[test]
+    fn known_cli_dirs_cover_common_installs() {
+        let home = Path::new("/Users/u");
+        let d = known_cli_dirs(home, &["v18.0.0".into(), "v22.1.0".into()]);
+        for want in [
+            home.join(".local/bin"),
+            home.join(".claude/local"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            home.join(".npm-global/bin"),
+            home.join(".nvm/versions/node").join("v22.1.0").join("bin"),
+        ] {
+            assert!(d.contains(&want), "{want:?} missing from {d:?}");
+        }
+        assert!(!d.iter().any(|p| p.to_string_lossy().contains("v18")));
+        assert_eq!(known_cli_dirs(home, &[]).len(), 5);
+    }
+
+    #[test]
+    fn login_path_parsed_after_marker_ignoring_noise() {
+        let out = "Welcome!\nlast login...\n__MEMDOCK_PATH__/opt/homebrew/bin:/usr/bin::/bin";
+        assert_eq!(parse_login_path(out), Some(pb(&["/opt/homebrew/bin", "/usr/bin", "/bin"])));
+        assert_eq!(parse_login_path("no marker here"), None);
+        assert_eq!(parse_login_path("__MEMDOCK_PATH__"), None);
     }
 
     #[test]

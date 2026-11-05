@@ -3,7 +3,14 @@ import { Ban, ChevronDown, ChevronRight, CircleCheck, CircleX, Loader2, Triangle
 import type { RunRecord, RunStatus } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
+import type { Messages } from "@/i18n";
 import { ToolTag } from "@/pages/memory/ToolTag";
+
+/** Localized text for a failed run: its `error_code` when known, else the raw detail. */
+export function runErrorText(x: Messages["extract"], r: Pick<RunRecord, "error" | "error_code">): string | null {
+  if (r.error_code) return x.errorCodes[r.error_code] ?? r.error;
+  return r.error;
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -118,7 +125,14 @@ export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenRev
                       {r.error ? (
                         <div className="mb-2">
                           <p className="mb-1 text-xs font-medium text-muted-foreground">{x.errorLabel}</p>
-                          <p className="font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap text-destructive">{r.error}</p>
+                          {r.error_code ? (
+                            <>
+                              <p title={r.error} className="text-xs text-destructive">{runErrorText(x, r)}</p>
+                              <p className="mt-0.5 font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap text-muted-foreground">{r.error}</p>
+                            </>
+                          ) : (
+                            <p className="font-mono text-xs [overflow-wrap:anywhere] whitespace-pre-wrap text-destructive">{r.error}</p>
+                          )}
                         </div>
                       ) : null}
                       {r.warnings.length > 0 ? (

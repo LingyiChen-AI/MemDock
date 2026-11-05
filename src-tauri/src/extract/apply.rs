@@ -8,7 +8,11 @@
 //! serialized; writes go through `write_memory` (hash check + snapshot +
 //! BOM/CRLF preservation); a missing target file is only created when its
 //! parent directory already exists; applying is idempotent (a block that is
-//! already present is never added twice).
+//! already present is never added twice). After a successful write, other
+//! Pending suggestions on the same file that were based on the pre-write hash
+//! are rebased onto the new hash, so accepting several suggestions for one
+//! file (bulk or one by one) does not ask for confirmation; edits made outside
+//! MemDock still do.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -87,6 +91,18 @@ fn transition(ctx: &ApplyCtx, id: &str, status: SuggestionStatus) -> Result<bool
     }
     st.set_status(id, status);
     st.save().map(|_| true).map_err(|e| e.to_string())
+}
+
+/// After our own successful write of `id` (file went `old_hash` -> `new_hash`):
+/// marks it Accepted and rebases sibling Pending suggestions on the same file
+/// that shared `old_hash`, in one store update + save. Returns whether the
+/// save succeeded. Siblings with another base hash (the file had been edited
+/// outside MemDock) keep it and still ask for confirmation.
+fn mark_applied(ctx: &ApplyCtx, id: &str, path: &str, old_hash: &str, new_hash: &str) -> bool {
+    let mut st = lock_store(ctx);
+    st.set_status(id, SuggestionStatus::Accepted);
+    st.rebase_pending(path, old_hash, new_hash);
+    st.save().is_ok()
 }
 
 /// Like `transition` but a failed save is reverted and reported as an error.
@@ -256,7 +272,7 @@ fn apply_inner(
     before_write();
     match write_memory(&path, &result_text, &cur.hash, &ctx.snapshots) {
         Ok(fc) => {
-            let saved = matches!(transition(ctx, id, SuggestionStatus::Accepted), Ok(true));
+            let saved = mark_applied(ctx, id, &s.path, &cur.hash, &fc.hash);
             Ok(ApplyOutcome::Applied { hash: fc.hash, saved })
         }
         Err(WriteError::DiskChanged { .. }) => Ok(ApplyOutcome::NeedsConfirm { reason: "disk_changed".into() }),
@@ -413,10 +429,59 @@ mod tests {
         fs::write(&p, "one\n\ntwo\n").unwrap();
         put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
         put(&e, "b", SuggestionKind::Modify, &p, Some("two"), Some("2"));
+        // MemDock's own write rebases the sibling: no confirm needed.
+        assert!(matches!(apply(&e.ctx, "a", None, false).unwrap(), ApplyOutcome::Applied { .. }));
+        assert!(matches!(apply(&e.ctx, "b", None, false).unwrap(), ApplyOutcome::Applied { .. }));
+        assert_eq!(fs::read_to_string(&p).unwrap(), "1\n\n2\n");
+    }
+
+    #[test]
+    fn bulk_accept_several_on_one_file_all_apply() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        let other = e.root.join("proj/AGENTS.md");
+        fs::write(&p, "use npm\n").unwrap();
+        fs::write(&other, "o\n").unwrap();
+        put(&e, "add1", SuggestionKind::Add, &p, None, Some("first"));
+        put(&e, "add2", SuggestionKind::Add, &p, None, Some("second"));
+        put(&e, "mod", SuggestionKind::Modify, &p, Some("use npm"), Some("use pnpm"));
+        put(&e, "oth", SuggestionKind::Add, &other, None, Some("x"));
+        let other_base = e.ctx.store.lock().unwrap().suggestions().iter().find(|s| s.id == "oth").unwrap().base_hash.clone();
+        let ids: Vec<String> = ["add1", "add2", "mod"].iter().map(|s| s.to_string()).collect();
+        let r = accept_many(&e.ctx, &ids);
+        for (id, res) in &r {
+            assert!(matches!(res, Ok(ApplyOutcome::Applied { .. })), "{id}: {res:?}");
+        }
+        assert_eq!(disk(&p), "use pnpm\n\nfirst\n\nsecond\n");
+        // A suggestion on another file is untouched.
+        let st = e.ctx.store.lock().unwrap();
+        assert_eq!(st.suggestions().iter().find(|s| s.id == "oth").unwrap().base_hash, other_base);
+    }
+
+    #[test]
+    fn external_edit_between_accepts_still_needs_confirm() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "one\n\ntwo\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
+        put(&e, "b", SuggestionKind::Modify, &p, Some("two"), Some("2"));
+        assert!(matches!(apply(&e.ctx, "a", None, false).unwrap(), ApplyOutcome::Applied { .. }));
+        fs::write(&p, "1\n\ntwo\n\nedited outside\n").unwrap();
+        assert!(matches!(apply(&e.ctx, "b", None, false).unwrap(), ApplyOutcome::NeedsConfirm { .. }));
+        assert_eq!(status(&e, "b"), SuggestionStatus::Pending);
+    }
+
+    #[test]
+    fn external_edit_before_first_accept_is_not_masked_by_rebase() {
+        // b was based on an older version than a: a's write must not rebase b.
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "one\n\ntwo\n").unwrap();
+        put(&e, "b", SuggestionKind::Modify, &p, Some("two"), Some("2"));
+        fs::write(&p, "one\n\ntwo\n\nextra\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
         assert!(matches!(apply(&e.ctx, "a", None, false).unwrap(), ApplyOutcome::Applied { .. }));
         assert!(matches!(apply(&e.ctx, "b", None, false).unwrap(), ApplyOutcome::NeedsConfirm { .. }));
-        assert!(matches!(apply(&e.ctx, "b", None, true).unwrap(), ApplyOutcome::Applied { .. }));
-        assert_eq!(fs::read_to_string(&p).unwrap(), "1\n\n2\n");
     }
 
     #[test]
@@ -627,7 +692,8 @@ mod tests {
             });
             assert_eq!(disk(&p), "1\n\n2\n");
         }
-        // without confirmation exactly one wins, the other asks
+        // without confirmation both still apply: the winner's write rebases
+        // the other (serialized by apply_lock)
         let e = env();
         let p = e.root.join("proj/CLAUDE.md");
         fs::write(&p, "one\n\ntwo\n").unwrap();
@@ -638,9 +704,9 @@ mod tests {
             let hb = sc.spawn(|| apply(&e.ctx, "b", None, false).unwrap());
             (ha.join().unwrap(), hb.join().unwrap())
         });
-        let applied = [&ra, &rb].iter().filter(|r| matches!(r, ApplyOutcome::Applied { .. })).count();
-        let asked = [&ra, &rb].iter().filter(|r| matches!(r, ApplyOutcome::NeedsConfirm { .. })).count();
-        assert_eq!((applied, asked), (1, 1));
+        assert!(matches!(ra, ApplyOutcome::Applied { .. }));
+        assert!(matches!(rb, ApplyOutcome::Applied { .. }));
+        assert_eq!(disk(&p), "1\n\n2\n");
     }
 
     #[test]

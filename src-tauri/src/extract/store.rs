@@ -123,6 +123,20 @@ pub enum RunStatus {
     Interrupted,
 }
 
+/// Machine-readable cause of a failed run; the UI maps it to localized text
+/// and keeps `RunRecord::error` (raw English detail) as a tooltip.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum RunErrorCode {
+    NotInstalled,
+    NotLoggedIn,
+    Timeout,
+    Cancelled,
+    InvalidOutput,
+    Io,
+    Other,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct RunRecord {
     pub id: String,
@@ -138,6 +152,9 @@ pub struct RunRecord {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Set together with `error`; absent in records written by older builds.
+    #[serde(default)]
+    pub error_code: Option<RunErrorCode>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -193,6 +210,57 @@ fn load_file<T: serde::de::DeserializeOwned>(dir: &Path, name: &str) -> Result<O
             path.display()
         )),
     }
+}
+
+/// True when a backup next to `path` (`<name>.bak` or `<name>.<ms>.bak`, as
+/// written by `load_json_or_backup`) has exactly the bytes of `path`.
+fn has_identical_backup(path: &Path) -> bool {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    let prefix = format!("{name}.");
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    entries.flatten().any(|e| {
+        let n = e.file_name().to_string_lossy().into_owned();
+        n.starts_with(&prefix)
+            && n.ends_with(".bak")
+            && std::fs::read(e.path()).is_ok_and(|b| b == bytes)
+    })
+}
+
+/// Removes `path` only after verifying an identical backup exists.
+fn remove_backed_up(path: &Path) -> Result<(), String> {
+    if !has_identical_backup(path) {
+        return Err(format!("no verified backup of {}; nothing was removed", path.display()));
+    }
+    std::fs::remove_file(path).map_err(|e| format!("cannot remove {}: {e}", path.display()))
+}
+
+/// Recovery for a store that failed to load: removes every store file that
+/// cannot be loaded (corrupt or too new), after verifying that each has an
+/// identical `.bak` copy next to it (a missing backup is made first, as on a
+/// normal load). Loadable files are kept. When any backup cannot be verified
+/// nothing is removed. Returns the removed paths.
+pub fn reset_unloadable(appdata: &Path) -> Result<Vec<PathBuf>, String> {
+    let bad = [
+        (CONFIG_FILE, load_file::<ConfigFile>(appdata, CONFIG_FILE).is_err()),
+        (SUGGESTIONS_FILE, load_file::<SuggestionsFile>(appdata, SUGGESTIONS_FILE).is_err()),
+        (RUNS_FILE, load_file::<RunsFile>(appdata, RUNS_FILE).is_err()),
+    ];
+    let paths: Vec<PathBuf> = bad
+        .iter()
+        .filter(|(_, b)| *b)
+        .map(|(n, _)| appdata.join(n))
+        .filter(|p| p.exists())
+        .collect();
+    if let Some(p) = paths.iter().find(|p| !has_identical_backup(p)) {
+        return Err(format!("no verified backup of {}; nothing was removed", p.display()));
+    }
+    for p in &paths {
+        remove_backed_up(p)?;
+    }
+    Ok(paths)
 }
 
 impl Store {
@@ -322,6 +390,22 @@ impl Store {
         }
     }
 
+    /// After MemDock itself rewrote `path` from `old_hash` to `new_hash`:
+    /// Pending suggestions on that file that were based on exactly `old_hash`
+    /// now count as based on `new_hash` (MemDock's own write is not an
+    /// external change). Suggestions based on any other hash are left alone,
+    /// so external edits still require confirmation. Returns how many moved.
+    pub fn rebase_pending(&mut self, path: &str, old_hash: &str, new_hash: &str) -> u32 {
+        let mut n = 0;
+        for s in self.suggestions.iter_mut() {
+            if s.status == SuggestionStatus::Pending && s.path == path && s.base_hash == old_hash {
+                s.base_hash = new_hash.to_string();
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn pending_count(&self) -> u32 {
         self.suggestions
             .iter()
@@ -420,6 +504,7 @@ mod tests {
             suggestions_new: 0,
             warnings: vec![],
             error: None,
+            error_code: None,
         }
     }
 
@@ -507,6 +592,26 @@ mod tests {
         // Duplicates inside one batch too.
         assert_eq!(s.add_suggestions(vec![sug("3", "c"), sug("4", "c")]), 1);
         assert_eq!(s.pending_count(), 2);
+    }
+
+    #[test]
+    fn rebase_pending_moves_only_matching_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = Store::load(tmp.path()).unwrap();
+        let a = sug("1", "a"); // /p/CLAUDE.md, base h
+        let mut b = sug("2", "b");
+        b.base_hash = "older".into();
+        let mut c = sug("3", "c");
+        c.path = "/q/CLAUDE.md".into();
+        let mut d = sug("4", "d");
+        d.status = SuggestionStatus::Rejected;
+        s.add_suggestions(vec![a, b, c, d]);
+        assert_eq!(s.rebase_pending("/p/CLAUDE.md", "h", "h2"), 1);
+        let base = |id: &str| s.suggestions().iter().find(|x| x.id == id).unwrap().base_hash.clone();
+        assert_eq!(base("1"), "h2");
+        assert_eq!(base("2"), "older");
+        assert_eq!(base("3"), "h");
+        assert_eq!(base("4"), "h");
     }
 
     #[test]
@@ -625,6 +730,39 @@ mod tests {
             assert_eq!(fs::read_to_string(tmp.path().join(format!("{name}.bak"))).unwrap(), "{ oops");
             assert_eq!(fs::read_to_string(&path).unwrap(), "{ oops", "original left in place");
         }
+    }
+
+    #[test]
+    fn reset_unloadable_removes_only_backed_up_corrupt_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut good = Store::load(tmp.path()).unwrap();
+        good.push_run(run("keep"));
+        good.save().unwrap();
+        fs::write(tmp.path().join("suggestions.json"), "{ oops").unwrap();
+        assert!(Store::load(tmp.path()).is_err()); // makes the .bak
+        let removed = reset_unloadable(tmp.path()).unwrap();
+        assert_eq!(removed, vec![tmp.path().join("suggestions.json")]);
+        assert_eq!(fs::read_to_string(tmp.path().join("suggestions.json.bak")).unwrap(), "{ oops");
+        let s = Store::load(tmp.path()).unwrap();
+        assert_eq!(s.runs().len(), 1, "loadable files are kept");
+        // nothing to do on a healthy store
+        assert!(reset_unloadable(tmp.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_refuses_without_identical_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("suggestions.json");
+        fs::write(&p, "{ oops").unwrap();
+        assert!(remove_backed_up(&p).is_err());
+        assert!(p.exists());
+        // a backup with different bytes does not count
+        fs::write(tmp.path().join("suggestions.json.bak"), "other").unwrap();
+        assert!(remove_backed_up(&p).is_err());
+        assert!(p.exists());
+        fs::write(tmp.path().join("suggestions.json.123.bak"), "{ oops").unwrap();
+        remove_backed_up(&p).unwrap();
+        assert!(!p.exists());
     }
 
     #[test]

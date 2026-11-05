@@ -275,7 +275,7 @@ const extractRuns = [
   ...(extractRunning
     ? [{ id: "r5", started_at: Date.now() - 90_000, finished_at: null, trigger: "manual", tool: "claude", status: "running", sessions_read: 0, projects: 0, suggestions_new: 0, warnings: [], error: null }]
     : []),
-  { id: "r4", started_at: hoursAgo(5), finished_at: hoursAgo(5) + 240_000, trigger: "scheduled", tool: "claude", status: "failed", sessions_read: 9, projects: 3, suggestions_new: 0, warnings: ["synergy: 会话文件过大，已跳过 2 个", "omin-kube: 模型输出无法解析，重试 1 次后放弃"], error: "claude 退出码 1：Error: rate limit exceeded, retry after 3600s" },
+  { id: "r4", started_at: hoursAgo(5), finished_at: hoursAgo(5) + 240_000, trigger: "scheduled", tool: "claude", status: "failed", sessions_read: 9, projects: 3, suggestions_new: 0, warnings: ["synergy: 会话文件过大，已跳过 2 个", "omin-kube: 模型输出无法解析，重试 1 次后放弃"], error: "claude 退出码 1：Error: rate limit exceeded, retry after 3600s", error_code: "other" },
   { id: "r3", started_at: hoursAgo(29), finished_at: hoursAgo(29) + 410_000, trigger: "scheduled", tool: "claude", status: "succeeded", sessions_read: 31, projects: 5, suggestions_new: 7, warnings: [], error: null },
   { id: "r2", started_at: hoursAgo(53), finished_at: hoursAgo(53) + 20_000, trigger: "manual", tool: "codex", status: "cancelled", sessions_read: 2, projects: 1, suggestions_new: 0, warnings: [], error: null },
   { id: "r1", started_at: hoursAgo(77), finished_at: hoursAgo(77) + 60_000, trigger: "manual", tool: "claude", status: "interrupted", sessions_read: 4, projects: 2, suggestions_new: 1, warnings: [], error: null },
@@ -427,6 +427,8 @@ mockIPC(
       case "start_extraction":
         return extractRuns[0];
       case "cancel_extraction":
+        return null;
+      case "reset_extract_data":
         return null;
       case "list_suggestions":
         return pendingList;

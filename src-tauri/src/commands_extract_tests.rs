@@ -295,12 +295,67 @@ fn run_error_codes() {
 }
 
 #[test]
-fn unavailable_store_reports_io() {
+fn unavailable_store_reports_store_unavailable() {
     let tmp = tempfile::tempdir().unwrap();
     let a = app(tmp.path());
     fs::write(tmp.path().join("data").join("suggestions.json"), "{ not json").unwrap();
     let es = ExtractState::build(a, vec![], |_| {});
-    assert_eq!(get_extract_config_impl(&es).unwrap_err().code, "io");
+    assert_eq!(get_extract_config_impl(&es).unwrap_err().code, "store_unavailable");
+}
+
+#[test]
+fn reset_extract_data_recovers_from_corrupt_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = app(tmp.path());
+    let data = tmp.path().join("data");
+    fs::write(data.join("extract-config.json"), r#"{"version":1,"config":{"lookback_days":3}}"#).unwrap();
+    fs::write(data.join("suggestions.json"), "{ not json").unwrap();
+    let (es, events) = extract_state(a, vec![]);
+    assert!(list_suggestions_impl(&es, None).is_err());
+    reset_extract_data_impl(&es).unwrap();
+    // usable again, without a restart; the readable config was kept
+    assert_eq!(get_extract_config_impl(&es).unwrap().lookback_days, 3);
+    assert!(list_suggestions_impl(&es, None).unwrap().is_empty());
+    assert!(!data.join("suggestions.json").exists());
+    assert_eq!(fs::read_to_string(data.join("suggestions.json.bak")).unwrap(), "{ not json");
+    assert!(names(&events).contains(&"suggestions-changed".to_string()));
+    // the new store persists normally
+    set_extract_config_impl(&es, ExtractConfig { lookback_days: 5, ..ExtractConfig::default() }).unwrap();
+    assert_eq!(Store::load(&data).unwrap().config().lookback_days, 5);
+}
+
+#[test]
+fn reset_extract_data_only_in_error_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (es, _) = extract_state(app(tmp.path()), vec![]);
+    add(&es, sug("a", "/x/CLAUDE.md", "h", "- one"));
+    es.store().unwrap().lock().unwrap().save().unwrap();
+    assert_eq!(reset_extract_data_impl(&es).unwrap_err().code, "invalid");
+    assert_eq!(list_suggestions_impl(&es, None).unwrap().len(), 1);
+    assert!(tmp.path().join("data").join("suggestions.json").exists());
+}
+
+#[test]
+fn extract_runners_redetects_installed_clis() {
+    let tmp = tempfile::tempdir().unwrap();
+    let installed = Arc::new(AtomicBool::new(false));
+    let flag = installed.clone();
+    let (es, _) = extract_state(app(tmp.path()), vec![]);
+    let es = es.with_detector(Arc::new(move || {
+        if flag.load(Ordering::SeqCst) {
+            vec![Arc::new(BlockingRunner::default()) as Arc<dyn CliRunner>]
+        } else {
+            vec![]
+        }
+    }));
+    assert!(extract_runners_impl(&es).iter().all(|r| !r.available));
+    assert_eq!(start_extraction_impl(&es).unwrap_err().code, "not_installed");
+    installed.store(true, Ordering::SeqCst);
+    let r = extract_runners_impl(&es);
+    assert!(r.iter().any(|x| x.tool == Tool::Claude && x.available));
+    // the run itself sees the new runner too
+    start_extraction_impl(&es).unwrap();
+    es.shutdown();
 }
 
 #[test]

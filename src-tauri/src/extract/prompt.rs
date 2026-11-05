@@ -539,7 +539,13 @@ pub fn parse_output_full(
                 (Some(old), new_text)
             }
         };
-        let reason = str_field(item, "reason").map(|s| s.trim().to_string()).unwrap_or_default();
+        // Never store secrets: text that would be written into a memory file
+        // must survive redaction unchanged; the reason is just redacted.
+        if new_text.as_deref().is_some_and(|t| redact(t) != t) {
+            warnings.push(format!("#{n}: new_text looks like it contains a secret, dropped"));
+            continue;
+        }
+        let reason = str_field(item, "reason").map(|s| redact(s.trim())).unwrap_or_default();
         if reason.is_empty() {
             warnings.push(format!("#{n}: missing reason"));
             continue;
@@ -815,6 +821,28 @@ mod tests {
         assert_eq!(s[0].evidence[0].session_id, "s1");
         assert_eq!(s[0].evidence[0].ts, 200);
         assert_eq!(w.len(), 4);
+    }
+
+    #[test]
+    fn secrets_in_model_output_are_not_stored() {
+        let (targets, turns) = fixture();
+        let refs: Vec<&Turn> = turns.iter().collect();
+        let raw = json!({"suggestions":[
+            {"kind":"add","file_id":"f1","new_text":"db password=hunter2","reason":"r",
+                "evidence":[{"session_id":"s1","ts":100,"quote":"always"}]},
+            {"kind":"add","file_id":"f1","new_text":"Use pnpm","reason":"user said password=hunter2",
+                "evidence":[{"session_id":"s1","ts":100,"quote":"always"}]}
+        ]})
+        .to_string();
+        let (s, w) = parse_output(&raw, &targets, Tool::Claude, &refs);
+        // new_text with a secret: dropped with a warning
+        assert_eq!(s.len(), 1, "{w:?}");
+        assert!(w.iter().any(|x| x.contains("#1") && x.contains("secret")), "{w:?}");
+        assert!(!w.iter().any(|x| x.contains("hunter2")), "{w:?}");
+        // a secret in the reason is redacted, the suggestion is kept
+        assert_eq!(s[0].new_text.as_deref(), Some("Use pnpm"));
+        assert!(!s[0].reason.contains("hunter2"), "{}", s[0].reason);
+        assert!(s[0].reason.contains("[REDACTED]"));
     }
 
     #[test]

@@ -407,7 +407,23 @@
     "runUnsavedConfirm": "保存并运行",
     "runUnsavedCancel": "取消",
     "runInvalid": "配置无效，请先修正",
-    "runNoRunner": "所选工具未检测到，无法运行"
+    "runNoRunner": "所选工具未检测到，无法运行",
+    "errorCodes": {
+      "not_installed": "未检测到命令行工具",
+      "not_logged_in": "命令行工具未登录，请先在终端登录",
+      "timeout": "命令行工具运行超时",
+      "cancelled": "已取消",
+      "invalid_output": "模型输出无法解析",
+      "io": "读写数据文件失败",
+      "other": "命令行工具运行出错"
+    },
+    "resetData": "重置提取数据",
+    "resetTitle": "重置提取数据？",
+    "resetBody": "提取数据文件已损坏，无法读取。重置会删除无法读取的文件（已自动备份为同目录下的 .bak 文件），未损坏的文件保留。被删除文件中的建议和运行记录将不再显示。",
+    "resetConfirm": "重置",
+    "resetCancel": "取消",
+    "resetDone": "提取数据已重置",
+    "resetFailed": "重置失败：{message}"
   },
   "review": {
     "title": "待审核",

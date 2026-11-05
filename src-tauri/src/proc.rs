@@ -31,12 +31,26 @@ pub fn spawn_hidden(cmd: &mut Command) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
-fn drain<R: Read + Send + 'static>(mut r: R) -> thread::JoinHandle<Vec<u8>> {
+/// Reader thread handle; `join` waits at most `DRAIN_JOIN_WAIT` so a grandchild
+/// still holding the pipe cannot hang the caller.
+struct Drain(std::sync::mpsc::Receiver<Vec<u8>>);
+
+const DRAIN_JOIN_WAIT: Duration = Duration::from_secs(5);
+
+impl Drain {
+    fn join(self) -> Vec<u8> {
+        self.0.recv_timeout(DRAIN_JOIN_WAIT).unwrap_or_default()
+    }
+}
+
+fn drain<R: Read + Send + 'static>(mut r: R) -> Drain {
+    let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = r.read_to_end(&mut buf);
-        buf
-    })
+        let _ = tx.send(buf);
+    });
+    Drain(rx)
 }
 
 /// Kills the child and its descendants, then reaps it.
@@ -95,8 +109,8 @@ pub fn wait_with_timeout(
             }
         }
     };
-    let stdout = out.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
-    let stderr = err.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+    let stdout = out.map(|h| h.join()).unwrap_or_default();
+    let stderr = err.map(|h| h.join()).unwrap_or_default();
     Ok(Output {
         status,
         stdout,

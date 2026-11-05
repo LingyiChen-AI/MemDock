@@ -62,9 +62,16 @@ fn failed(code: Option<i32>, stderr: &str) -> RunError {
 
 fn looks_not_logged_in(s: &str) -> bool {
     let l = s.to_lowercase();
-    ["login", "please run /login", "invalid api key", "not logged in"]
-        .iter()
-        .any(|p| l.contains(p))
+    [
+        "not logged in",
+        "please run /login",
+        "/login",
+        "invalid api key",
+        "authentication_error",
+        "401 unauthorized",
+    ]
+    .iter()
+    .any(|p| l.contains(p))
 }
 
 /// Command-line arguments (after the program) for each tool. For Claude `schema`
@@ -81,7 +88,7 @@ pub fn args_for(tool: Tool, schema: &str, out_file: &str) -> Vec<String> {
             "--tools",
             "",
             "--no-session-persistence",
-            "--bare",
+            "--strict-mcp-config",
         ],
         Tool::Codex => vec![
             "exec",
@@ -127,7 +134,18 @@ pub(crate) fn exec(
     if cancel.load(Ordering::SeqCst) {
         return Err(RunError::Cancelled);
     }
-    let mut cmd = Command::new(program);
+    let resolved = resolve_program(program, &path_dirs());
+    let is_batch = resolved
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    if is_batch && args.iter().any(|a| a.contains('%')) {
+        return Err(failed(
+            None,
+            "argument contains '%', which cannot be passed safely through a .cmd/.bat wrapper",
+        ));
+    }
+    let mut cmd = Command::new(&resolved);
     cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -154,15 +172,32 @@ pub(crate) fn exec(
     })
 }
 
+fn path_dirs() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default()
+}
+
+fn is_bare(program: &Path) -> bool {
+    program.components().count() == 1 && !program.is_absolute()
+}
+
+/// A bare name is resolved over `dirs` (exe / cmd / bat on Windows); a path is kept.
+fn resolve_program(program: &Path, dirs: &[PathBuf]) -> PathBuf {
+    if is_bare(program) {
+        if let Some(p) = find_program(program.as_os_str(), dirs) {
+            return p;
+        }
+    }
+    program.to_path_buf()
+}
+
 /// True when `program` is an existing file, or (bare name) found on PATH.
 fn program_exists(program: &Path) -> bool {
-    if program.components().count() > 1 || program.is_absolute() {
-        return program.is_file();
+    if is_bare(program) {
+        return find_program(program.as_os_str(), &path_dirs()).is_some();
     }
-    let dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
-        .unwrap_or_default();
-    find_program(program.as_os_str(), &dirs).is_some()
+    program.is_file()
 }
 
 /// Finds executable `name` in `dirs`. Windows prefers `.exe`, then npm `.cmd` / `.bat`
@@ -250,7 +285,12 @@ impl CliRunner for ClaudeCli {
             }
         }
         if !out.status.success() {
-            let msg = format!("{stderr}\n{stdout}");
+            let result_text = parsed
+                .as_ref()
+                .and_then(|v| v.get("result"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let msg = format!("{stderr}\n{result_text}");
             return Err(if looks_not_logged_in(&msg) {
                 RunError::NotLoggedIn(clean(&msg))
             } else {
@@ -350,6 +390,7 @@ pub fn detect_runners_from_env() -> Vec<Arc<dyn CliRunner>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::prompt::output_schema;
     use serde_json::json;
     use std::time::Instant;
 
@@ -387,7 +428,8 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--json-schema", "{\"type\":\"object\"}"]));
         assert!(a.windows(2).any(|w| w == ["--tools", ""]));
         assert!(a.contains(&"--no-session-persistence".to_string()));
-        assert!(a.contains(&"--bare".to_string()));
+        assert!(a.contains(&"--strict-mcp-config".to_string()));
+        assert!(!a.contains(&"--bare".to_string()));
     }
 
     #[test]
@@ -436,12 +478,12 @@ mod tests {
     fn codex_reads_output_file_in_empty_cwd() {
         let t = tempfile::tempdir().unwrap();
         // Args: exec --sandbox read-only --skip-git-repo-check --output-schema S --output-last-message O -
-        // Windows batch: %7 is the O path; the cwd must contain no files.
+        // Windows batch: %8 is the O path; the cwd must contain no files.
         let s = script(
             t.path(),
             "codex-fake",
             "dir /b | findstr \"^\" >nul && (echo cwd not empty 1>&2 & exit /b 3)\r\nfindstr \"^\" > %8",
-            "[ -z \"$(ls -A)\" ] || { echo cwd not empty >&2; exit 3; }\ncat > \"$7\"",
+            "[ -z \"$(ls -A)\" ] || { echo cwd not empty >&2; exit 3; }\ncat > \"$8\"",
         );
         let r = CodexCli::with_program(s)
             .run("{\"x\":2}", &json!({"type":"object"}), SECS5, &no_cancel())
@@ -552,6 +594,57 @@ mod tests {
             code: None,
             stderr: "x".repeat(2000)
         });
+    }
+
+    #[test]
+    fn successful_result_mentioning_login_is_not_login_error() {
+        let t = tempfile::tempdir().unwrap();
+        let s = script(
+            t.path(),
+            "login-shell-ok",
+            "echo {\"is_error\":false,\"result\":\"fix the login shell\"}",
+            "echo '{\"is_error\":false,\"result\":\"fix the login shell\"}'",
+        );
+        let r = ClaudeCli::with_program(s)
+            .run("p", &json!({}), SECS5, &no_cancel())
+            .unwrap();
+        assert_eq!(r, "fix the login shell");
+        let s = script(
+            t.path(),
+            "login-shell-fail",
+            "echo {\"is_error\":false,\"result\":\"login shell\"}\r\nexit /b 2",
+            "echo '{\"is_error\":false,\"result\":\"login shell\"}'; exit 2",
+        );
+        let e = ClaudeCli::with_program(s)
+            .run("p", &json!({}), SECS5, &no_cancel())
+            .unwrap_err();
+        assert!(matches!(e, RunError::Failed { code: Some(2), .. }), "{e:?}");
+    }
+
+    #[test]
+    fn bare_name_resolves_cmd_wrapper_on_fake_path() {
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_program(Path::new("claude"), &[t.path().to_path_buf()]),
+            PathBuf::from("claude")
+        );
+        let p = script(t.path(), "claude", "echo x", "echo x");
+        assert_eq!(
+            resolve_program(Path::new("claude"), &[t.path().to_path_buf()]),
+            p
+        );
+    }
+
+    #[test]
+    fn percent_in_args_rejected_for_batch_wrapper() {
+        assert!(!output_schema().to_string().contains('%'));
+        let t = tempfile::tempdir().unwrap();
+        let s = script(t.path(), "pct", "echo hi", "echo hi");
+        let r = ClaudeCli::with_program(s).run("p", &json!({"a":"100%"}), SECS5, &no_cancel());
+        #[cfg(windows)]
+        assert!(matches!(r.unwrap_err(), RunError::Failed { .. }));
+        #[cfg(unix)]
+        let _ = r;
     }
 
     #[test]

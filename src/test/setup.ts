@@ -3,6 +3,7 @@ import { beforeEach } from "vitest";
 
 // jsdom has no matchMedia; install a light-scheme, never-changing default before each test.
 beforeEach(() => {
+  localStorage.clear();
   window.matchMedia = ((query: string) => ({
     matches: false,
     media: query,

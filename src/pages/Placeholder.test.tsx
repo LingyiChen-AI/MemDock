@@ -25,6 +25,21 @@ describe("accent swatches", () => {
     expect(screen.getByRole("radio", { name: "蓝" })).toHaveAttribute("aria-checked", "true");
     expect(updateUiPrefs).toHaveBeenCalledWith(undefined, undefined, "blue");
     expect(screen.getByRole("radio", { name: "蓝" })).toHaveFocus();
+  });
+
+  it("selects on click and ArrowLeft wraps to the last swatch", async () => {
+    renderApp(<Placeholder icon={SettingsIcon} />);
+    const green = await screen.findByRole("radio", { name: "绿" });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("radio", { name: "紫" }));
+    });
+    expect(updateUiPrefs).toHaveBeenLastCalledWith(undefined, undefined, "violet");
+    green.focus();
     (updateUiPrefs as Mock).mockClear();
+    await act(async () => {
+      await userEvent.keyboard("{ArrowLeft}");
+    });
+    expect(updateUiPrefs).toHaveBeenCalledWith(undefined, undefined, "teal");
+    expect(screen.getByRole("radio", { name: "青" })).toHaveFocus();
   });
 });

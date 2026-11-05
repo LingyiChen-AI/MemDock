@@ -14,6 +14,29 @@ interface Prefs {
   setAccent: (accent: string) => void;
 }
 
+const KEY_THEME = "memdock.theme";
+const KEY_ACCENT = "memdock.accent";
+const KEY_LANG = "memdock.lang";
+
+function readCache(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Mirrors the resolved prefs so index.html can apply them before first paint. */
+function writeCache(language: string | null, theme: string | null, accent: string | null) {
+  try {
+    localStorage.setItem(KEY_LANG, language ?? "system");
+    localStorage.setItem(KEY_THEME, theme ?? "dark");
+    localStorage.setItem(KEY_ACCENT, accent ?? "green");
+  } catch {
+    // Storage unavailable: first paint falls back to dark + green.
+  }
+}
+
 const PrefsContext = React.createContext<Prefs | null>(null);
 
 /**
@@ -21,9 +44,17 @@ const PrefsContext = React.createContext<Prefs | null>(null);
  * adopts the stored values once getSettings resolves.
  */
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
-  const [language, setLanguageState] = React.useState<string | null>(null);
-  const [theme, setThemeState] = React.useState<string | null>(null);
-  const [accent, setAccentState] = React.useState<string | null>(null);
+  const [language, setLanguageState] = React.useState<string | null>(() => {
+    const v = readCache(KEY_LANG);
+    return v && v !== "system" ? v : null;
+  });
+  const [theme, setThemeState] = React.useState<string | null>(() => readCache(KEY_THEME));
+  const [accent, setAccentState] = React.useState<string | null>(() => readCache(KEY_ACCENT));
+  // Only mirror to the cache once real values are known, so defaults never overwrite it.
+  const [synced, setSynced] = React.useState(false);
+  React.useEffect(() => {
+    if (synced) writeCache(language, theme, accent);
+  }, [synced, language, theme, accent]);
   // Once the user changes something, a late getSettings result must not overwrite it.
   const touched = React.useRef(false);
 
@@ -31,6 +62,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     setLanguageState(s.language);
     setThemeState(s.theme);
     setAccentState(s.accent ?? null);
+    setSynced(true);
   }, []);
 
   React.useEffect(() => {
@@ -60,6 +92,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setLanguage = React.useCallback((next: string) => {
     touched.current = true;
+    setSynced(true);
     const prev = langRef.current;
     const seq = ++langSeq.current;
     setLanguageState(next === "system" ? null : next);
@@ -76,6 +109,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setTheme = React.useCallback((next: string) => {
     touched.current = true;
+    setSynced(true);
     const prev = themeRef.current;
     const seq = ++themeSeq.current;
     setThemeState(next);
@@ -92,6 +126,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setAccent = React.useCallback((next: string) => {
     touched.current = true;
+    setSynced(true);
     const prev = accentRef.current;
     const seq = ++accentSeq.current;
     setAccentState(next);

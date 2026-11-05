@@ -48,11 +48,11 @@ function Segmented({
 }
 
 const SWATCHES = [
-  { value: "green", color: "#22c55e" },
-  { value: "blue", color: "#3b82f6" },
-  { value: "violet", color: "#8b5cf6" },
-  { value: "orange", color: "#f97316" },
-  { value: "teal", color: "#14b8a6" },
+  { value: "green", color: "var(--swatch-green)" },
+  { value: "blue", color: "var(--swatch-blue)" },
+  { value: "violet", color: "var(--swatch-violet)" },
+  { value: "orange", color: "var(--swatch-orange)" },
+  { value: "teal", color: "var(--swatch-teal)" },
 ] as const;
 
 function AccentPicker({

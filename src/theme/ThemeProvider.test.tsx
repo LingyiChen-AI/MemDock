@@ -82,4 +82,14 @@ describe("accent color", () => {
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
     expect(document.documentElement.dataset.accent).toBe("green");
   });
+
+  it("first render uses the cached accent and theme (no flash)", async () => {
+    localStorage.setItem("memdock.accent", "violet");
+    localStorage.setItem("memdock.theme", "light");
+    (getSettings as Mock).mockReturnValue(new Promise(() => {}));
+    document.documentElement.classList.add("dark");
+    setup();
+    expect(document.documentElement.dataset.accent).toBe("violet");
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+  });
 });

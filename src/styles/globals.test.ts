@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 const css = readFileSync(resolve(process.cwd(), "src/styles/globals.css"), "utf8");
 
@@ -59,5 +60,31 @@ describe("accent colors", () => {
     expect(ratio(v["accent-text"], bg)).toBeGreaterThanOrEqual(4.5);
     // ring: accent-text in dark, primary in light
     expect(v["ring"]).toBe(mode === "dark" ? v["accent-text"] : v["primary"]);
+  });
+});
+
+describe("accent swatches and raw hex guard", () => {
+  const vars = (body: string) => Object.fromEntries([...body.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
+  const accents = ["green", "blue", "violet", "orange", "teal"];
+
+  it.each(accents)("--swatch-%s equals that accent's primary in light and dark", (a) => {
+    const light = vars(rule(a === "green" ? ":root" : `html\\[data-accent="${a}"\\]`));
+    const dark = vars(rule(a === "green" ? "\\.dark" : `html\\.dark\\[data-accent="${a}"\\]`));
+    expect(vars(rule(":root"))[`swatch-${a}`]).toBe(light["primary"]);
+    expect(vars(rule("\\.dark"))[`swatch-${a}`]).toBe(dark["primary"]);
+  });
+
+  it("no raw hex colors in non-test tsx components", () => {
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (p.endsWith(".tsx") && !p.endsWith(".test.tsx") && !p.includes(join("src", "dev"))) files.push(p);
+      }
+    };
+    walk(resolve(process.cwd(), "src"));
+    const offenders = files.filter((f) => /#[0-9a-f]{3,8}\b/i.test(readFileSync(f, "utf8")));
+    expect(offenders).toEqual([]);
   });
 });

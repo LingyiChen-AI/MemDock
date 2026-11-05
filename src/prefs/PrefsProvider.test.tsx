@@ -79,4 +79,28 @@ describe("PrefsProvider", () => {
     // Fields other than accent are not taken from the accent response.
     expect(screen.getByTestId("state")).toHaveTextContent("zh|dark");
   });
+
+  it("mirrors resolved prefs into localStorage and seeds state from it", async () => {
+    await setup();
+    await waitFor(() => expect(localStorage.getItem("memdock.accent")).toBe("green"));
+    expect(localStorage.getItem("memdock.theme")).toBe("dark");
+    expect(localStorage.getItem("memdock.lang")).toBe("zh");
+    (updateUiPrefs as Mock).mockResolvedValue({ ...base, accent: "teal" });
+    await click("accent");
+    await waitFor(() => expect(localStorage.getItem("memdock.accent")).toBe("teal"));
+  });
+
+  it("does not overwrite the cache with defaults before settings load", async () => {
+    localStorage.setItem("memdock.accent", "orange");
+    localStorage.setItem("memdock.theme", "light");
+    (getSettings as Mock).mockReturnValue(new Promise(() => {}));
+    render(
+      <PrefsProvider>
+        <Probe />
+      </PrefsProvider>,
+    );
+    expect(screen.getByTestId("accent")).toHaveTextContent("orange");
+    expect(screen.getByTestId("state")).toHaveTextContent("null|light");
+    expect(localStorage.getItem("memdock.accent")).toBe("orange");
+  });
 });

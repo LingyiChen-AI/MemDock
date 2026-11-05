@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Memdock</title>
+    <script>
+      // Apply cached prefs before first paint (mirrored by PrefsProvider); defaults: dark, green, system language.
+      (function () {
+        var d = document.documentElement;
+        try {
+          var t = localStorage.getItem("memdock.theme") || "dark";
+          var dark = t === "system" ? !window.matchMedia || window.matchMedia("(prefers-color-scheme: dark)").matches : t !== "light";
+          d.classList.toggle("dark", dark);
+          d.setAttribute("data-accent", localStorage.getItem("memdock.accent") || "green");
+          var l = localStorage.getItem("memdock.lang") || "system";
+          if (l === "system") l = navigator.language;
+          d.lang = String(l).toLowerCase().indexOf("zh") === 0 ? "zh-CN" : "en";
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>

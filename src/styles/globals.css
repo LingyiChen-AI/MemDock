@@ -91,6 +91,11 @@
   --destructive: #dc2626;
   --warning: #b45309;
   --ring: #15803d;
+  --swatch-green: #15803d;
+  --swatch-blue: #2563eb;
+  --swatch-violet: #7c3aed;
+  --swatch-orange: #c2410c;
+  --swatch-teal: #0f766e;
   --tool-claude: #d97706;
   --tool-codex: #0284c7;
 }
@@ -125,6 +130,11 @@
   --destructive: #ef4444;
   --warning: #f59e0b;
   --ring: #4ade80;
+  --swatch-green: #22c55e;
+  --swatch-blue: #3b82f6;
+  --swatch-violet: #a78bfa;
+  --swatch-orange: #f97316;
+  --swatch-teal: #14b8a6;
   --tool-claude: #f59e0b;
   --tool-codex: #38bdf8;
 }

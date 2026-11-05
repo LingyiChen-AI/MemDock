@@ -197,6 +197,9 @@ pub fn target_dir(
                 .find(|p| p.id == *project_id || normalize_path(&p.path) == key)
                 .ok_or_else(|| format!("unknown project: {project_id}"))?;
             let root = Path::new(&p.path);
+            if !root.is_dir() {
+                return Err(format!("project directory not found: {}", p.path));
+            }
             match t.tool {
                 Tool::Claude => root.join(".claude").join("skills").join(name),
                 Tool::Codex => root.join(".agents").join("skills").join(name),
@@ -410,6 +413,7 @@ fn update_registry(
     installed: &[(InstallTarget, PathBuf)],
     name: &str,
     source: Option<&(SkillSource, String)>,
+    clean: bool,
 ) -> Result<(), OpsError> {
     if installed.is_empty() {
         return Ok(());
@@ -434,18 +438,24 @@ fn update_registry(
                 dir: d.to_string_lossy().into_owned(),
             })
             .collect();
-        let hash = dir_content_hash(&installed[0].1)?;
+        // An empty hash means "local state unknown": updates ask first.
+        let hash = if clean {
+            dir_content_hash(&installed[0].1)?
+        } else {
+            String::new()
+        };
+        // Merge only into an entry with the same baseline; a shared entry's
+        // content_hash is never rewritten.
         if let Some(e) = reg.skills.iter_mut().find(|e| {
             e.name == name
                 && e.source.url == src.url
                 && e.source.skill_path == src.skill_path
                 && e.source.commit == src.commit
+                && e.content_hash == hash
         }) {
             e.installs.extend(records);
             e.source.git_ref = src.git_ref.clone();
-            e.source.commit = src.commit.clone();
             e.clone_url = Some(clone_url.clone());
-            e.content_hash = hash;
             e.updated_at = now;
         } else {
             reg.skills.push(RegistryEntry {
@@ -532,7 +542,7 @@ pub fn install(
         }
     }
     // Record what was installed even if a later target failed.
-    let reg_result = update_registry(ctx, &done, &name, prepared.source.as_ref());
+    let reg_result = update_registry(ctx, &done, &name, prepared.source.as_ref(), true);
     if matches!(from, InstallFrom::Git { .. }) {
         cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
     }
@@ -973,7 +983,20 @@ pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEn
 /// Deletes a skill after backing it up. A symlinked skill loses only the link;
 /// the link target (and its files) stay. The registry forgets the install.
 pub fn delete(ctx: &OpsCtx, skill_id: &str) -> Result<BackupInfo, OpsError> {
-    let (entry, _) = lookup(ctx, skill_id)?;
+    let entry = match lookup(ctx, skill_id) {
+        Ok((e, _)) => e,
+        Err(err) => {
+            // A dangling link is not scanned as a skill; it can still go.
+            let Some(link) = find_dangling_link(ctx, skill_id) else {
+                return Err(err);
+            };
+            load_registry(&ctx.registry_path).map_err(io_msg)?;
+            remove_any(&link)?;
+            forget_install(ctx, skill_id)
+                .map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))?;
+            return Ok(no_backup());
+        }
+    };
     if entry.readonly {
         return Err(OpsError::ReadOnly);
     }
@@ -981,13 +1004,57 @@ pub fn delete(ctx: &OpsCtx, skill_id: &str) -> Result<BackupInfo, OpsError> {
     // Fail early on an unreadable registry, before touching any file.
     load_registry(&ctx.registry_path).map_err(io_msg)?;
     let dir = PathBuf::from(&entry.dir);
-    // Back up the real contents (the link target for symlinked skills).
-    let info = backup_dir(&real_dir(&entry), &ctx.backups_root(), &key)?;
+    // Back up the real contents (the link target for symlinked skills); a link
+    // whose target vanished has nothing to back up.
+    let real = real_dir(&entry);
+    let info = if entry.is_symlink && !real.is_dir() {
+        no_backup()
+    } else {
+        backup_dir(&real, &ctx.backups_root(), &key)?
+    };
     // remove_any never follows a link: remove_file / remove_dir for links,
     // remove_dir_all only for real directories.
     remove_any(&dir)?;
     forget_install(ctx, &entry.id).map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))?;
     Ok(info)
+}
+
+fn no_backup() -> BackupInfo {
+    BackupInfo {
+        id: String::new(),
+        created_at: now_millis(),
+        size_bytes: 0,
+    }
+}
+
+/// A symlink with id `id` directly inside a skills folder whose target no
+/// longer holds a SKILL.md.
+fn find_dangling_link(ctx: &OpsCtx, id: &str) -> Option<PathBuf> {
+    let mut roots = vec![
+        ctx.paths.claude_home.join("skills"),
+        ctx.paths.codex_home.join("skills"),
+    ];
+    for p in &ctx.projects {
+        roots.push(Path::new(&p.path).join(".claude").join("skills"));
+        roots.push(Path::new(&p.path).join(".agents").join("skills"));
+    }
+    for root in roots {
+        let Ok(rd) = fs::read_dir(&root) else {
+            continue;
+        };
+        for ent in rd.flatten() {
+            let path = ent.path();
+            let is_link = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+            if is_link
+                && normalize_path(&path.to_string_lossy()) == id
+                && !path.join("SKILL.md").is_file()
+                && ent.file_name() != "synced"
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn forget_install(ctx: &OpsCtx, id: &str) -> Result<(), OpsError> {
@@ -1045,7 +1112,10 @@ pub fn sync_to(
     }
     place(ctx, &content, &dir, &key, overwrite)?;
     let installed = [(target, dir.clone())];
-    update_registry(ctx, &installed, &key, source.as_ref())
+    // The copy inherits the source's local state: a clean baseline only when
+    // the source matches its recorded hash.
+    let (modified, _) = local_state(&entry, find_reg(&reg, &entry.id));
+    update_registry(ctx, &installed, &key, source.as_ref(), !modified)
         .map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))?;
     rescan_entry(ctx, &normalize_path(&dir.to_string_lossy()))
 }
@@ -2453,6 +2523,67 @@ v2
         );
     }
 
+    /// Makes saving the registry fail while loading still works; restores on drop.
+    struct LockedRegistry(PathBuf);
+
+    impl LockedRegistry {
+        fn new(path: &Path) -> LockedRegistry {
+            #[cfg(windows)]
+            {
+                // Renaming over a read-only file fails.
+                let mut p = fs::metadata(path).unwrap().permissions();
+                p.set_readonly(true);
+                fs::set_permissions(path, p).unwrap();
+                LockedRegistry(path.to_path_buf())
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let parent = path.parent().unwrap();
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o555)).unwrap();
+                LockedRegistry(parent.to_path_buf())
+            }
+        }
+    }
+
+    impl Drop for LockedRegistry {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let mut p = fs::metadata(&self.0).unwrap().permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = fs::set_permissions(&self.0, p);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    fn io_message(r: Result<impl std::fmt::Debug, OpsError>) -> String {
+        match r {
+            Err(OpsError::Io { message }) => message,
+            other => panic!("expected Io error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_refuses_when_registry_unreadable() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let dir = installed_x(&e);
+        let id = normalize_path(&dir.to_string_lossy());
+        fs::remove_file(&e.ctx.registry_path).unwrap();
+        fs::create_dir_all(&e.ctx.registry_path).unwrap();
+        let r = delete(&e.ctx, &id);
+        assert!(matches!(r, Err(OpsError::Io { .. })), "{r:?}");
+        assert!(dir.join("SKILL.md").is_file());
+    }
+
     #[test]
     fn delete_registry_save_failure_reports_files_updated() {
         let e = env();
@@ -2460,12 +2591,162 @@ v2
         install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
         let dir = installed_x(&e);
         let id = normalize_path(&dir.to_string_lossy());
-        // Make the registry path unwritable by replacing it with a directory.
-        fs::remove_file(&e.ctx.registry_path).unwrap();
-        fs::create_dir_all(&e.ctx.registry_path).unwrap();
-        // An unreadable registry makes delete refuse before touching files.
-        let r = delete(&e.ctx, &id);
-        assert!(matches!(r, Err(OpsError::Io { .. })), "{r:?}");
-        assert!(dir.join("SKILL.md").is_file());
+        let guard = LockedRegistry::new(&e.ctx.registry_path);
+        let m = io_message(delete(&e.ctx, &id));
+        drop(guard);
+        assert!(m.contains("files updated, registry not saved"), "{m}");
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn sync_registry_save_failure_reports_files_updated() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let id = normalize_path(&installed_x(&e).to_string_lossy());
+        let guard = LockedRegistry::new(&e.ctx.registry_path);
+        let m = io_message(sync_to(&e.ctx, &id, codex(), false));
+        drop(guard);
+        assert!(m.contains("files updated, registry not saved"), "{m}");
+        assert!(e.ctx.paths.codex_home.join("skills/x/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn delete_dangling_symlink_skips_backup() {
+        let e = env();
+        let target = e.root.join("real-skill");
+        write(
+            &target.join("SKILL.md"),
+            "---\nname: linked\ndescription: l\n---\n",
+        );
+        let link = e.ctx.paths.claude_home.join("skills").join("linked");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if !make_link(&target, &link) {
+            eprintln!("skipped: cannot create symlinks or junctions");
+            return;
+        }
+        let id = normalize_path(&link.to_string_lossy());
+        fs::remove_dir_all(&target).unwrap();
+        assert!(fs::symlink_metadata(&link).is_ok());
+        let info = delete(&e.ctx, &id).unwrap();
+        assert!(info.id.is_empty());
+        assert!(fs::symlink_metadata(&link).is_err());
+        assert!(!e.ctx.backups_root().join("linked").exists());
+        // Once gone, the id is unknown again.
+        assert!(delete(&e.ctx, &id).is_err());
+    }
+
+    fn with_project(e: &mut Env, name: &str, create: bool) -> (PathBuf, InstallTarget) {
+        let proj = e.root.join(name);
+        if create {
+            fs::create_dir_all(&proj).unwrap();
+        }
+        let p = Project {
+            id: normalize_path(&proj.to_string_lossy()),
+            path: proj.to_string_lossy().into_owned(),
+            name: name.into(),
+            exists: create,
+            sources: Vec::new(),
+        };
+        let t = InstallTarget {
+            tool: Tool::Claude,
+            scope: SkillScope::Project {
+                project_id: p.id.clone(),
+            },
+        };
+        e.ctx.projects.push(p);
+        (proj, t)
+    }
+
+    #[test]
+    fn missing_project_root_is_not_recreated() {
+        let mut e = env();
+        let (proj, t) = with_project(&mut e, "gone", false);
+        let src = folder_skill(&e, "demo", "demo", "v1");
+        let r = install(
+            &e.ctx,
+            InstallFrom::Folder { path: src },
+            std::slice::from_ref(&t),
+            false,
+        );
+        match r {
+            Err(OpsError::Invalid { message }) => {
+                assert!(message.contains("project directory not found"), "{message}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(!proj.exists());
+        let (_dir, id) = install_demo(&e, claude());
+        match sync_to(&e.ctx, &id, t, false) {
+            Err(OpsError::Invalid { message }) => {
+                assert!(message.contains("project directory not found"), "{message}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(!proj.exists());
+    }
+
+    #[test]
+    fn sync_copy_inherits_local_modification() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let id = normalize_path(&installed_x(&e).to_string_lossy());
+        write(&installed_x(&e).join("mine.txt"), "mine");
+        sync_to(&e.ctx, &id, codex(), false).unwrap();
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        assert_eq!(reg.skills.len(), 2);
+        let cid = normalize_path(&e.ctx.paths.codex_home.join("skills/x").to_string_lossy());
+        assert!(find_reg(&reg, &cid).unwrap().content_hash.is_empty());
+        assert!(!find_reg(&reg, &id).unwrap().content_hash.is_empty());
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        let c = st.iter().find(|s| s.skill_id == cid).unwrap();
+        assert!(c.local_modified && c.local_state_unknown, "{c:?}");
+    }
+
+    #[test]
+    fn sync_copy_of_clean_source_is_clean() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let id = normalize_path(&installed_x(&e).to_string_lossy());
+        sync_to(&e.ctx, &id, codex(), false).unwrap();
+        let cid = normalize_path(&e.ctx.paths.codex_home.join("skills/x").to_string_lossy());
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        let c = st.iter().find(|s| s.skill_id == cid).unwrap();
+        assert!(!c.local_modified && !c.local_state_unknown, "{c:?}");
+    }
+
+    #[test]
+    fn sync_merge_never_rewrites_sibling_baseline() {
+        let mut e = env();
+        let (url, _w) = repo_with_skill(&e);
+        let (_proj, pt) = with_project(&mut e, "proj", true);
+        install(
+            &e.ctx,
+            tracked(&url, "skills/x"),
+            &[claude(), codex()],
+            false,
+        )
+        .unwrap();
+        // Split the shared entry: claude keeps a different (sentinel) baseline
+        // and comes first; codex keeps the real one.
+        let mut reg = load_registry(&e.ctx.registry_path).unwrap();
+        let mut codex_entry = reg.skills[0].clone();
+        reg.skills[0].installs.retain(|i| i.tool == Tool::Claude);
+        reg.skills[0].content_hash = "sentinel".into();
+        codex_entry.installs.retain(|i| i.tool == Tool::Codex);
+        reg.skills.push(codex_entry);
+        save_registry(&e.ctx.registry_path, &reg).unwrap();
+        // Sync the clean codex copy to the project.
+        let cdir = e.ctx.paths.codex_home.join("skills/x");
+        let cid = normalize_path(&cdir.to_string_lossy());
+        sync_to(&e.ctx, &cid, pt, false).unwrap();
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        assert_eq!(reg.skills.len(), 2);
+        assert_eq!(reg.skills[0].content_hash, "sentinel");
+        assert_eq!(reg.skills[0].installs.len(), 1);
+        assert_eq!(reg.skills[1].installs.len(), 2);
+        assert_eq!(reg.skills[1].content_hash, dir_content_hash(&cdir).unwrap());
     }
 }

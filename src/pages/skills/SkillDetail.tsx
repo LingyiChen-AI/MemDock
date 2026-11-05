@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Dialog } from "radix-ui";
-import { Check, Copy, CopyPlus, History, Pencil, RefreshCw, RefreshCcw, Trash2, TriangleAlert } from "lucide-react";
+import { Check, Copy, CopyPlus, History, Loader2, Pencil, RefreshCw, RefreshCcw, Trash2, TriangleAlert } from "lucide-react";
 import { registerSkillSource } from "@/api/skills";
 import type { SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,8 @@ export interface SkillDetailProps {
   gitOk?: boolean;
   /** The skill is gone from disk but has unsaved file edits; the editor stays with a warning. */
   removed?: boolean;
+  /** An update of this skill is running. */
+  updating?: boolean;
   onUpdate: (entry: SkillEntry) => void;
   onSync: (entry: SkillEntry) => void;
   onDelete: (entry: SkillEntry) => void;
@@ -46,6 +48,7 @@ export function SkillDetail({
   update,
   gitOk = true,
   removed = false,
+  updating = false,
   onUpdate,
   onSync,
   onDelete,
@@ -81,7 +84,7 @@ export function SkillDetail({
         ) : null}
         <span className="flex-1" />
         {entry.readonly ? (
-          <Button type="button" variant="outline" onClick={() => onSync(entry)} className={actionBtn}>
+          <Button type="button" variant="outline" disabled={removed} onClick={() => onSync(entry)} className={actionBtn}>
             <CopyPlus className="size-4" aria-hidden="true" />
             {s.copyToWritable}
           </Button>
@@ -91,25 +94,30 @@ export function SkillDetail({
               <Button
                 type="button"
                 variant={update?.has_update ? "default" : "outline"}
-                disabled={updateBlock !== null}
+                disabled={updateBlock !== null || removed || updating}
                 onClick={() => onUpdate(entry)}
                 className={cn(actionBtn, update?.has_update && "bg-primary font-semibold hover:bg-primary/90")}
               >
-                <RefreshCw className="size-4" aria-hidden="true" />
-                {s.update}
+                {updating ? (
+                  <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="size-4" aria-hidden="true" />
+                )}
+                {updating ? s.updating : s.update}
               </Button>
             </span>
-            <Button type="button" variant="outline" onClick={() => showTab("files")} className={actionBtn}>
+            <Button type="button" variant="outline" disabled={removed} onClick={() => showTab("files")} className={actionBtn}>
               <Pencil className="size-4" aria-hidden="true" />
               {s.editFiles}
             </Button>
-            <Button type="button" variant="outline" onClick={() => onSync(entry)} className={actionBtn}>
+            <Button type="button" variant="outline" disabled={removed} onClick={() => onSync(entry)} className={actionBtn}>
               <RefreshCcw className="size-4" aria-hidden="true" />
               {s.syncTo}
             </Button>
             <Button
               type="button"
               variant="outline"
+              disabled={removed}
               onClick={() => onBackups(entry)}
               aria-label={s.backups}
               title={s.backups}
@@ -120,6 +128,7 @@ export function SkillDetail({
             <Button
               type="button"
               variant="outline"
+              disabled={removed}
               onClick={() => onDelete(entry)}
               className={cn(actionBtn, "text-destructive hover:text-destructive")}
             >

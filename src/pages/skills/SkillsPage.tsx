@@ -1,15 +1,20 @@
 import * as React from "react";
 import { Package, TriangleAlert } from "lucide-react";
 import { listMemories } from "@/api/memory";
-import { checkSkillUpdates, gitAvailable, listSkills, onSkillsChanged } from "@/api/skills";
+import { checkSkillUpdates, deleteSkill, gitAvailable, listSkills, onSkillsChanged, updateSkill } from "@/api/skills";
 import type { MemoryIndex, SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { basename, fmt } from "@/pages/memory/paths";
+import { AddSkillDialog } from "./AddSkillDialog";
+import { BackupsDrawer } from "./BackupsDrawer";
+import { PARTIAL_SAVE_PREFIX, describeError } from "./flowParts";
 import { SkillDetail } from "./SkillDetail";
 import { SkillList } from "./SkillList";
-import { entryKey, errorMessage, sameSkill, sortEntries } from "./skillUtils";
+import { SyncDialog } from "./SyncDialog";
+import { ToastRegion, useToasts } from "./Toasts";
+import { asCommandError, entryKey, errorMessage, sameSkill, shortCommit, sortEntries } from "./skillUtils";
 
 const WIDTH_KEY = "memdock.skillListWidth";
 const MIN_W = 280;
@@ -29,26 +34,11 @@ function loadWidth(): number {
 }
 
 export interface SkillsPageProps {
-  /** Plugged in by the add / update / sync / delete / rollback flows. */
-  onAdd?: () => void;
-  onUpdate?: (entry: SkillEntry) => void;
-  onSync?: (entry: SkillEntry) => void;
-  onDelete?: (entry: SkillEntry) => void;
-  onBackups?: (entry: SkillEntry) => void;
   /** Reports unsaved file edits so the app can confirm before leaving the page. */
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-const noop = () => {};
-
-export function SkillsPage({
-  onAdd = noop,
-  onUpdate = noop,
-  onSync = noop,
-  onDelete = noop,
-  onBackups = noop,
-  onDirtyChange,
-}: SkillsPageProps) {
+export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
   const { t } = useI18n();
   const s = t.skills;
   const [entries, setEntries] = React.useState<SkillEntry[] | null>(null);
@@ -62,6 +52,16 @@ export function SkillsPage({
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
   const [dirty, setDirty] = React.useState(false);
   const [pending, setPending] = React.useState<SkillEntry | null>(null);
+  // Flows: each one is opened for one concrete entry and never follows the selection afterwards.
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [syncEntry, setSyncEntry] = React.useState<SkillEntry | null>(null);
+  const [deleteEntry, setDeleteEntry] = React.useState<SkillEntry | null>(null);
+  const [backupsEntry, setBackupsEntry] = React.useState<SkillEntry | null>(null);
+  const [updateConfirm, setUpdateConfirm] = React.useState<{ entry: SkillEntry; unknown: boolean } | null>(null);
+  const [updatingId, setUpdatingId] = React.useState<string | null>(null);
+  const updatingRef = React.useRef(false);
+  const deletingRef = React.useRef(false);
+  const { toasts, push, dismiss } = useToasts();
   const [width, setWidth] = React.useState(loadWidth);
   const widthRef = React.useRef(width);
   widthRef.current = width;
@@ -153,6 +153,67 @@ export function SkillsPage({
     }
   };
 
+  const projects = React.useMemo(() => (index?.projects ?? []).map((p) => p.project), [index]);
+
+  const runUpdate = async (entry: SkillEntry, acceptLocalChanges: boolean) => {
+    if (updatingRef.current) return;
+    updatingRef.current = true;
+    setUpdatingId(entry.id);
+    try {
+      const res = await updateSkill(entry.id, acceptLocalChanges);
+      const commit = shortCommit(res.source?.commit);
+      push("success", commit ? fmt(s.updatedTo, { commit }) : s.updatedGeneric);
+      setUpdates((prev) => {
+        const next = new Map(prev);
+        next.delete(entry.id);
+        return next;
+      });
+      void load();
+    } catch (e) {
+      const ce = asCommandError(e);
+      if (ce?.code === "local_changes") {
+        setUpdateConfirm({ entry, unknown: updates.get(entry.id)?.local_state_unknown === true });
+      } else if (ce?.code === "io" && ce.message.startsWith(PARTIAL_SAVE_PREFIX)) {
+        const detail = ce.message.slice(PARTIAL_SAVE_PREFIX.length).replace(/^[: ]+/, "");
+        push("warning", fmt(s.partialSaved, { message: detail || ce.message }));
+        void load();
+      } else {
+        push("error", fmt(s.updateFailed, { message: describeError(e, s) }));
+      }
+    } finally {
+      updatingRef.current = false;
+      setUpdatingId(null);
+    }
+  };
+
+  const runDelete = async (entry: SkillEntry) => {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    try {
+      const backup = await deleteSkill(entry.id);
+      push("success", backup.id === "" ? s.deletedNoBackup : fmt(s.deleted, { name: entry.name }));
+      void load();
+    } catch (e) {
+      push("error", fmt(s.deleteFailed, { message: describeError(e, s) }));
+    } finally {
+      deletingRef.current = false;
+    }
+  };
+
+  const addDialog = (
+    <AddSkillDialog
+      open={addOpen}
+      onOpenChange={setAddOpen}
+      projects={projects}
+      gitOk={gitOk}
+      onInstalled={(installed) => {
+        push("success", installed.length === 1 ? fmt(s.installedOne, { name: installed[0].name }) : fmt(s.installedN, { n: installed.length }));
+        void load();
+        if (installed[0]) setSelectedKey(entryKey(installed[0]));
+      }}
+    />
+  );
+
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -211,10 +272,12 @@ export function SkillsPage({
             {s.retry}
           </Button>
         ) : (
-          <Button type="button" onClick={onAdd} className="h-7 cursor-pointer px-3 text-xs font-semibold">
+          <Button type="button" onClick={() => setAddOpen(true)} className="h-7 cursor-pointer px-3 text-xs font-semibold">
             {s.addSkill}
           </Button>
         )}
+        {addDialog}
+        <ToastRegion toasts={toasts} onDismiss={dismiss} />
       </div>
     );
   }
@@ -232,7 +295,7 @@ export function SkillsPage({
           checking={checking}
           checkedUpdates={checkedUpdates}
           onCheck={() => void check()}
-          onAdd={onAdd}
+          onAdd={() => setAddOpen(true)}
         />
         <div
           role="separator"
@@ -263,10 +326,11 @@ export function SkillsPage({
             update={updates.get(selected.id)}
             gitOk={gitOk}
             removed={removed}
-            onUpdate={onUpdate}
-            onSync={onSync}
-            onDelete={onDelete}
-            onBackups={onBackups}
+            updating={updatingId === selected.id}
+            onUpdate={(e) => void runUpdate(e, false)}
+            onSync={setSyncEntry}
+            onDelete={setDeleteEntry}
+            onBackups={setBackupsEntry}
             onChanged={() => void load()}
             onDirtyChange={setDirty}
           />
@@ -293,6 +357,66 @@ export function SkillsPage({
         }}
         onCancel={() => setPending(null)}
       />
+      {addDialog}
+      {syncEntry ? (
+        <SyncDialog
+          entry={syncEntry}
+          open
+          onOpenChange={(o) => !o && setSyncEntry(null)}
+          projects={projects}
+          onSynced={(res, label) => {
+            push("success", fmt(s.syncedTo, { target: label }));
+            void load();
+            setSelectedKey(entryKey(res));
+          }}
+        />
+      ) : null}
+      {backupsEntry ? (
+        <BackupsDrawer
+          entry={backupsEntry}
+          open
+          onOpenChange={(o) => !o && setBackupsEntry(null)}
+          onRestored={(_res, time) => {
+            push("success", fmt(s.restored, { time }));
+            void load();
+          }}
+        />
+      ) : null}
+      <ConfirmDialog
+        open={updateConfirm !== null}
+        title={s.updateLocalModifiedTitle}
+        body={updateConfirm?.unknown ? s.updateLocalUnknownBody : s.updateLocalModifiedBody}
+        confirmLabel={s.updateContinue}
+        cancelLabel={s.cancel}
+        destructive
+        onConfirm={() => {
+          const target = updateConfirm?.entry;
+          setUpdateConfirm(null);
+          if (target) void runUpdate(target, true);
+        }}
+        onCancel={() => setUpdateConfirm(null)}
+      />
+      <ConfirmDialog
+        open={deleteEntry !== null}
+        title={fmt(s.deleteTitle, { name: deleteEntry?.name ?? "" })}
+        body={
+          deleteEntry?.is_symlink
+            ? deleteEntry.symlink_target
+              ? fmt(s.deleteBodyLink, { target: deleteEntry.symlink_target })
+              : s.deleteBodyLinkNoTarget
+            : s.deleteBody
+        }
+        confirmLabel={s.deleteConfirm}
+        cancelLabel={s.cancel}
+        destructive
+        onConfirm={() => {
+          const target = deleteEntry;
+          setDeleteEntry(null);
+          if (target) void runDelete(target);
+        }}
+        onCancel={() => setDeleteEntry(null)}
+      />
+      <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

@@ -88,6 +88,18 @@ describe("SkillDetail", () => {
     expect(screen.getByText(/已被外部删除/)).toBeInTheDocument();
   });
 
+  it("disables every action while removed", () => {
+    setup(withSource, { removed: true });
+    for (const name of ["更新", "编辑文件", "同步到…", "备份与回滚", "删除"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+  });
+
+  it("shows a busy update button while updating", () => {
+    setup(withSource, { updating: true });
+    expect(screen.getByRole("button", { name: "更新中" })).toBeDisabled();
+  });
+
   it("readonly detail hides edit and delete", () => {
     setup(ro);
     expect(screen.queryByRole("button", { name: "编辑文件" })).toBeNull();

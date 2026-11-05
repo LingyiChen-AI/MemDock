@@ -227,6 +227,25 @@ Use this skill for architecture, UML, agent, cloud or workflow diagrams.
 3. Render and check the result
 `;
 
+const inspectResult = {
+  url: "https://github.com/anthropics/skills",
+  clone_url: "https://github.com/anthropics/skills.git",
+  git_ref: null,
+  commit: "c9d8e7f6a5b4",
+  preselected: null,
+  skills: [
+    { skill_path: "skills/pdf", name: "pdf", description: "Use this skill whenever the user wants to do anything with PDF files: read, merge, split, fill forms." },
+    { skill_path: "skills/xlsx", name: "xlsx", description: "Create, read, edit spreadsheets (.xlsx, .csv) with formulas and formatting." },
+    { skill_path: "skills/skill-creator", name: "skill-creator", description: "Create new skills, modify and improve existing skills, and measure skill performance." },
+    { skill_path: "document-skills/docx", name: "docx", description: "" },
+  ],
+};
+const skillBackups = [
+  { id: "1730800000000", created_at: NOW - 2 * 3600_000, size_bytes: 182_000 },
+  { id: "1730700000000", created_at: NOW - 30 * 3600_000, size_bytes: 176_400 },
+  { id: "1730100000000", created_at: NOW - 8 * 24 * 3600_000, size_bytes: 91_300 },
+];
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -267,6 +286,21 @@ mockIPC(
         return { text: String(a.relPath) === "SKILL.md" ? skillDoc : "print('hello')", hash: "sk1", has_bom: false, crlf: false, tokens: 120, imports: [], binary: false, too_large: false };
       case "register_skill_source":
         return skillsList[2];
+      case "inspect_git_source":
+        return new Promise((resolve) => setTimeout(() => resolve(inspectResult), 150));
+      case "install_skill":
+        return [];
+      case "update_skill":
+        if (!a.acceptLocalChanges) return Promise.reject({ code: "local_changes", message: "local changes" });
+        return { ...skillsList[0], source: { ...skillsList[0].source, commit: "0f1e2d3c4b5a" } };
+      case "delete_skill":
+        return { id: "1730800000000", created_at: Date.now(), size_bytes: 182_000 };
+      case "sync_skill":
+        return skillsList[0];
+      case "list_skill_backups":
+        return skillBackups;
+      case "rollback_skill":
+        return skillsList[0];
       case "plugin:dialog|open":
         return null;
       default:
@@ -328,4 +362,61 @@ if (selectName || params.get("skilltab") === "files" || params.get("check")) {
       setTimeout(() => document.querySelector<HTMLElement>('[role="radio"]:not([aria-checked="true"])')?.click(), 300);
     }
   }, 100);
+}
+
+// `?flow=add-gh|add-gh-pick|add-template|update|sync|delete|backups` drives the skill flows for screenshots.
+const flow = params.get("flow");
+if (flow) {
+  const wait = <T,>(find: () => T | null | undefined | false, then: (v: T) => void) => {
+    let tries = 0;
+    const timer = setInterval(() => {
+      const v = find();
+      if (v) {
+        clearInterval(timer);
+        then(v);
+      } else if (++tries > 100) clearInterval(timer);
+    }, 100);
+  };
+  const btn = (text: string) => () => Array.from(document.querySelectorAll<HTMLElement>("button")).find((b) => b.textContent?.trim() === text);
+  const setValue = (el: HTMLInputElement, value: string) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  wait(() => document.querySelector('[role="option"]'), () => {
+    if (flow.startsWith("add")) {
+      wait(btn("添加 skill"), (b) => {
+        b.click();
+        if (flow === "add-template") {
+          wait(() => Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]')).find((t) => t.textContent === "空白模板"), (t) => {
+            t.click();
+            setTimeout(() => {
+              const n = document.getElementById("add-tpl-name") as HTMLInputElement | null;
+              if (n) setValue(n, "My Skill");
+            }, 150);
+          });
+          return;
+        }
+        wait(() => document.getElementById("add-git-input") as HTMLInputElement | null, (input) => {
+          setValue(input, "anthropics/skills");
+          setTimeout(() => btn("解析")()?.click(), 100);
+          if (flow === "add-gh-pick") {
+            wait(() => document.querySelector<HTMLInputElement>('ul input[type="checkbox"]'), () => {
+              const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('ul input[type="checkbox"]'));
+              boxes[0].click();
+              boxes[2].click();
+            });
+          }
+        });
+      });
+      return;
+    }
+    if (flow === "delete") {
+      const row = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((r) => r.textContent?.includes("fireworks-tech-graph") && r.textContent.includes("Codex"));
+      row?.click();
+    }
+    if (flow === "update") wait(btn("更新"), (b) => b.click());
+    if (flow === "sync") wait(btn("同步到…"), (b) => b.click());
+    if (flow === "delete") setTimeout(() => btn("删除")()?.click(), 400);
+    if (flow === "backups") wait(() => document.querySelector<HTMLElement>('button[aria-label="备份与回滚"]'), (b) => b.click());
+  });
 }

@@ -16,7 +16,10 @@ vi.mock("@/api/skills", () => ({
   readSkillFile: vi.fn(),
   writeSkillFile: vi.fn(),
   registerSkillSource: vi.fn(),
+  inspectGitSource: vi.fn(),
+  installSkill: vi.fn(),
 }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({ value, onChange }: { value: string; onChange?: (v: string) => void }) => (
@@ -38,11 +41,10 @@ beforeEach(() => vi.clearAllMocks());
 describe("SkillsPage", () => {
   it("shows the empty state with an add button", async () => {
     (listSkills as Mock).mockResolvedValue([]);
-    const onAdd = vi.fn();
-    renderApp(<SkillsPage onAdd={onAdd} />);
+    renderApp(<SkillsPage />);
     expect(await screen.findByText("还没有 skill")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "添加 skill" }));
-    expect(onAdd).toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "添加 skill" })).toBeInTheDocument();
   });
 
   it("does not check updates until the button is clicked, then merges results into rows", async () => {

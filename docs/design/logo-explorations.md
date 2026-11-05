@@ -18,3 +18,11 @@
 ## 第 2 版（2026-11-05）
 
 草图：`.superpowers/brainstorm/1459-1793865330/content/logo-options-v2.html`
+
+第 2 版用户选 H（绳结），要求改成 Claude 配色 → H1–H4 变体（`logo-h-claude.html`），倾向 H2 整块陶土橙；
+随后要求从「记忆管理的 M + admin 的 A」出发做字母组合 → MA1–MA6（`logo-ma.html`）。
+
+## 当前选定（2026-11-05，暂定）
+
+**MA6 · 一笔连写**：近黑底 `#141413`，陶土橙 `#D97757` 丝带一笔写出 M 并滑成 A 的右腿，奶油白 `#FAF9F5` 横杠与落点补成 A。
+源文件：`assets/brand/memdock-logo.svg`。产品名写法同时改为驼峰 **MemDock**。

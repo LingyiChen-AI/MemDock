@@ -100,7 +100,7 @@ export function AppShell({ current, onNavigate, badges, status, children }: AppS
                     tooltip={label}
                     onClick={() => onNavigate(key)}
                     className={cn(
-                      "h-8 cursor-pointer gap-2.5 px-2.5 text-muted-foreground duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none",
+                      "h-8 cursor-pointer gap-2.5 px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none",
                       "data-active:bg-muted data-active:font-medium data-active:text-foreground data-active:shadow-[inset_2px_0_0_var(--primary)]",
                     )}
                   >
@@ -108,7 +108,7 @@ export function AppShell({ current, onNavigate, badges, status, children }: AppS
                     <span>{label}</span>
                   </SidebarMenuButton>
                   {count ? (
-                    <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground">
+                    <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground">
                       {count}
                     </SidebarMenuBadge>
                   ) : null}

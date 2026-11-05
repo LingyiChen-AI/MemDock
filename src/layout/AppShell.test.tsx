@@ -52,6 +52,10 @@ function mockMatchMedia(matches: boolean) {
   };
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   document.documentElement.className = "";
@@ -114,7 +118,6 @@ describe("AppShell", () => {
     vi.spyOn(window.navigator, "language", "get").mockReturnValue("zh-TW");
     setup();
     expect(await screen.findByText("记忆总览")).toBeInTheDocument();
-    vi.spyOn(window.navigator, "language", "get").mockReturnValue("en-US");
   });
 
   it("marks the current item with aria-current", async () => {

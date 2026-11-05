@@ -42,23 +42,45 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     };
   }, [adopt]);
 
-  const setLanguage = React.useCallback(
-    (next: string) => {
-      touched.current = true;
-      setLanguageState(next === "system" ? null : next);
-      updateUiPrefs(next, undefined).then(adopt, () => {});
-    },
-    [adopt],
-  );
+  // Per-field sequence counters: only the latest change of a field may adopt or roll back.
+  const langSeq = React.useRef(0);
+  const themeSeq = React.useRef(0);
+  const langRef = React.useRef<string | null>(null);
+  const themeRef = React.useRef<string | null>(null);
+  langRef.current = language;
+  themeRef.current = theme;
 
-  const setTheme = React.useCallback(
-    (next: string) => {
-      touched.current = true;
-      setThemeState(next);
-      updateUiPrefs(undefined, next).then(adopt, () => {});
-    },
-    [adopt],
-  );
+  const setLanguage = React.useCallback((next: string) => {
+    touched.current = true;
+    const prev = langRef.current;
+    const seq = ++langSeq.current;
+    setLanguageState(next === "system" ? null : next);
+    updateUiPrefs(next, undefined).then(
+      (s) => {
+        if (seq === langSeq.current) setLanguageState(s.language);
+      },
+      (err) => {
+        console.error("failed to save language preference", err);
+        if (seq === langSeq.current) setLanguageState(prev);
+      },
+    );
+  }, []);
+
+  const setTheme = React.useCallback((next: string) => {
+    touched.current = true;
+    const prev = themeRef.current;
+    const seq = ++themeSeq.current;
+    setThemeState(next);
+    updateUiPrefs(undefined, next).then(
+      (s) => {
+        if (seq === themeSeq.current) setThemeState(s.theme);
+      },
+      (err) => {
+        console.error("failed to save theme preference", err);
+        if (seq === themeSeq.current) setThemeState(prev);
+      },
+    );
+  }, []);
 
   const value = React.useMemo(
     () => ({ language, theme, setLanguage, setTheme }),

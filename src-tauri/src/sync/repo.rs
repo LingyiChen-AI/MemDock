@@ -203,6 +203,12 @@ impl SyncGit {
                     }
                 }
             }
+            let has_proxy = vals.iter().any(|(k, v)| k.ends_with("proxy") && !v.trim().is_empty());
+            if !has_proxy {
+                if let Some(p) = crate::sync::net::resolve_proxy_for_git() {
+                    vals.push(("http.proxy".to_string(), p));
+                }
+            }
             forward_args(&vals)
         })
     }

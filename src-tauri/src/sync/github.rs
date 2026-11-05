@@ -3,7 +3,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::Deserialize;
@@ -45,7 +45,7 @@ pub struct DeviceCode {
     pub expires_in: u64,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PollResult {
     Pending,
     /// GitHub may return a new minimum `interval`; `None` means "add 5 s".
@@ -53,6 +53,21 @@ pub enum PollResult {
     Token(String),
     Expired,
     Denied,
+    /// Any other OAuth error (device flow disabled, bad client id, ...).
+    Failed(String),
+}
+
+impl fmt::Debug for PollResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PollResult::Pending => f.write_str("Pending"),
+            PollResult::SlowDown(i) => write!(f, "SlowDown({i:?})"),
+            PollResult::Token(_) => f.write_str("Token(***)"),
+            PollResult::Expired => f.write_str("Expired"),
+            PollResult::Denied => f.write_str("Denied"),
+            PollResult::Failed(m) => write!(f, "Failed({m:?})"),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -65,6 +80,9 @@ pub struct GhRepo {
     pub private: bool,
     pub default_branch: String,
     pub clone_url: String,
+    pub description: Option<String>,
+    /// `owner/name`; empty when unknown.
+    pub full_name: String,
 }
 
 pub trait GitHubApi: Send + Sync {
@@ -89,6 +107,8 @@ pub trait GitHubApi: Send + Sync {
         bytes: &[u8],
         message: &str,
     ) -> Result<(), ApiError>;
+    /// Names of the entries in the repository root (empty repo -> empty).
+    fn list_root(&self, token: &str, owner: &str, name: &str) -> Result<Vec<String>, ApiError>;
 }
 
 // ---------------------------------------------------------------- HTTP impl
@@ -116,9 +136,11 @@ struct Raw {
 
 impl HttpGitHub {
     pub fn new() -> Self {
+        let proxy = crate::sync::net::resolve_proxy().and_then(|p| ureq::Proxy::new(&p).ok());
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
+            .proxy(proxy)
             .build()
             .into();
         HttpGitHub { agent }
@@ -163,13 +185,13 @@ impl HttpGitHub {
         Self::finish(res, Some(token))
     }
 
-    fn device_post(&self, url: &str, body: &Value) -> Result<Raw, ApiError> {
+    fn device_post(&self, url: &str, form: &[(&str, &str)]) -> Result<Raw, ApiError> {
         let res = self
             .agent
             .post(url)
             .header("Accept", "application/json")
             .header("User-Agent", "MemDock")
-            .send_json(body);
+            .send_form(form.iter().copied());
         Self::finish(res, None)
     }
 }
@@ -220,7 +242,38 @@ fn parse_repo(v: &Value) -> Result<GhRepo, ApiError> {
             .and_then(Value::as_str)
             .ok_or_else(bad)?
             .to_string(),
+        description: v
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        full_name: v
+            .get("full_name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     })
+}
+
+/// Percent-encodes one URL path segment.
+fn enc(seg: &str) -> String {
+    let mut out = String::new();
+    for b in seg.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Percent-encodes each segment of a `/`-separated path.
+fn enc_path(path: &str) -> String {
+    path.split('/').map(enc).collect::<Vec<_>>().join("/")
+}
+
+fn repo_url(owner: &str, name: &str) -> String {
+    format!("https://api.github.com/repos/{}/{}", enc(owner), enc(name))
 }
 
 #[derive(Deserialize)]
@@ -238,7 +291,7 @@ impl GitHubApi for HttpGitHub {
     fn device_code(&self, client_id: &str) -> Result<DeviceCode, ApiError> {
         let raw = self.device_post(
             "https://github.com/login/device/code",
-            &json!({"client_id": client_id, "scope": "repo"}),
+            &[("client_id", client_id), ("scope", "repo")],
         )?;
         if !is_ok(raw.status) {
             return Err(error_from(&raw, None));
@@ -257,11 +310,11 @@ impl GitHubApi for HttpGitHub {
     fn poll_token(&self, client_id: &str, device_code: &str) -> Result<PollResult, ApiError> {
         let raw = self.device_post(
             "https://github.com/login/oauth/access_token",
-            &json!({
-                "client_id": client_id,
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            }),
+            &[
+                ("client_id", client_id),
+                ("device_code", device_code),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ],
         )?;
         if !is_ok(raw.status) {
             return Err(error_from(&raw, None));
@@ -291,7 +344,7 @@ impl GitHubApi for HttpGitHub {
 
     fn get_repo(&self, token: &str, owner: &str, name: &str) -> Result<Option<GhRepo>, ApiError> {
         let raw = self.get(
-            &format!("https://api.github.com/repos/{owner}/{name}"),
+            &repo_url(owner, name),
             token,
             "application/vnd.github+json",
         )?;
@@ -330,7 +383,7 @@ impl GitHubApi for HttpGitHub {
         path: &str,
     ) -> Result<Option<Vec<u8>>, ApiError> {
         let raw = self.get(
-            &format!("https://api.github.com/repos/{owner}/{name}/contents/{path}"),
+            &format!("{}/contents/{}", repo_url(owner, name), enc_path(path)),
             token,
             "application/vnd.github.raw+json",
         )?;
@@ -352,7 +405,7 @@ impl GitHubApi for HttpGitHub {
         bytes: &[u8],
         message: &str,
     ) -> Result<(), ApiError> {
-        let url = format!("https://api.github.com/repos/{owner}/{name}/contents/{path}");
+        let url = format!("{}/contents/{}", repo_url(owner, name), enc_path(path));
         // An existing file needs its blob sha to be replaced.
         let existing = self.get(&url, token, "application/vnd.github+json")?;
         let mut body = json!({
@@ -372,6 +425,29 @@ impl GitHubApi for HttpGitHub {
         }
         Ok(())
     }
+
+    fn list_root(&self, token: &str, owner: &str, name: &str) -> Result<Vec<String>, ApiError> {
+        let raw = self.get(
+            &format!("{}/contents", repo_url(owner, name)),
+            token,
+            "application/vnd.github+json",
+        )?;
+        // 404 / 409: empty repository.
+        if raw.status == 404 || raw.status == 409 {
+            return Ok(Vec::new());
+        }
+        if !is_ok(raw.status) {
+            return Err(error_from(&raw, Some(token)));
+        }
+        let v = parse_json(&raw)?;
+        Ok(v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| e.get("name").and_then(Value::as_str).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
 }
 
 fn map_poll(v: &Value) -> PollResult {
@@ -382,8 +458,16 @@ fn map_poll(v: &Value) -> PollResult {
         Some("slow_down") => PollResult::SlowDown(v.get("interval").and_then(Value::as_u64)),
         Some("expired_token") => PollResult::Expired,
         Some("access_denied") => PollResult::Denied,
-        // authorization_pending and anything unknown: keep waiting until expiry.
-        _ => PollResult::Pending,
+        Some("authorization_pending") => PollResult::Pending,
+        Some(other) => {
+            let desc = v
+                .get("error_description")
+                .and_then(Value::as_str)
+                .filter(|d| !d.is_empty())
+                .unwrap_or(other);
+            PollResult::Failed(desc.to_string())
+        }
+        None => PollResult::Failed("unexpected response from GitHub".to_string()),
     }
 }
 
@@ -394,6 +478,7 @@ pub enum LoginError {
     Expired,
     Denied,
     Cancelled,
+    Failed(String),
     Api(ApiError),
 }
 
@@ -403,6 +488,7 @@ impl fmt::Display for LoginError {
             LoginError::Expired => write!(f, "the login code expired"),
             LoginError::Denied => write!(f, "authorization was denied"),
             LoginError::Cancelled => write!(f, "login cancelled"),
+            LoginError::Failed(m) => write!(f, "login failed: {m}"),
             LoginError::Api(e) => write!(f, "{e}"),
         }
     }
@@ -428,28 +514,36 @@ pub fn device_login(
 ) -> Result<String, LoginError> {
     let mut interval = code.interval;
     let mut elapsed: u64 = 0;
+    let started = Instant::now();
+    let mut net_errors = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Err(LoginError::Cancelled);
         }
-        match api.poll_token(client_id, &code.device_code)? {
-            PollResult::Token(t) => return Ok(t),
-            PollResult::Expired => return Err(LoginError::Expired),
-            PollResult::Denied => return Err(LoginError::Denied),
-            PollResult::Pending => {}
-            PollResult::SlowDown(new) => {
+        match api.poll_token(client_id, &code.device_code) {
+            Ok(PollResult::Token(t)) => return Ok(t),
+            Ok(PollResult::Expired) => return Err(LoginError::Expired),
+            Ok(PollResult::Denied) => return Err(LoginError::Denied),
+            Ok(PollResult::Failed(m)) => return Err(LoginError::Failed(m)),
+            Ok(PollResult::Pending) => net_errors = 0,
+            Ok(PollResult::SlowDown(new)) => {
+                net_errors = 0;
                 interval = match new {
                     Some(n) if n > interval => n,
                     _ => interval + 5,
                 };
             }
+            // Tolerate a few consecutive transient network errors.
+            Err(ApiError::Network(_)) if net_errors < 3 => net_errors += 1,
+            Err(e) => return Err(e.into()),
         }
         sleep(Duration::from_secs(interval));
         elapsed += interval;
         if cancel.load(Ordering::SeqCst) {
             return Err(LoginError::Cancelled);
         }
-        if elapsed >= code.expires_in {
+        // Summed sleeps (deterministic in tests) or real time, whichever is larger.
+        if elapsed.max(started.elapsed().as_secs()) >= code.expires_in {
             return Err(LoginError::Expired);
         }
     }
@@ -475,6 +569,38 @@ fn is_marker(bytes: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+const PUT_ATTEMPTS: u32 = 3;
+const CREATED_DESCRIPTION: &str = "MemDock memory sync";
+
+fn put_marker(
+    api: &dyn GitHubApi,
+    token: &str,
+    owner: &str,
+    name: &str,
+    sleep: &dyn Fn(Duration),
+) -> Result<(), ApiError> {
+    let mut last = None;
+    for attempt in 0..PUT_ATTEMPTS {
+        if attempt > 0 {
+            // Right after auto_init the contents API can briefly 404.
+            sleep(Duration::from_secs(u64::from(attempt)));
+        }
+        match api.put_file(
+            token,
+            owner,
+            name,
+            MARKER_PATH,
+            MARKER_BODY.as_bytes(),
+            "Initialize MemDock sync repository",
+        ) {
+            Ok(()) => return Ok(()),
+            Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.expect("at least one attempt"))
+}
+
 pub fn ensure_repo(
     api: &dyn GitHubApi,
     token: &str,
@@ -482,16 +608,33 @@ pub fn ensure_repo(
     name: &str,
     public_ack: bool,
 ) -> Result<RepoOutcome, ApiError> {
+    ensure_repo_with(api, token, owner, name, public_ack, &std::thread::sleep)
+}
+
+pub fn ensure_repo_with(
+    api: &dyn GitHubApi,
+    token: &str,
+    owner: &str,
+    name: &str,
+    public_ack: bool,
+    sleep: &dyn Fn(Duration),
+) -> Result<RepoOutcome, ApiError> {
     let Some(repo) = api.get_repo(token, owner, name)? else {
         let repo = api.create_repo(token, name)?;
-        api.put_file(
-            token,
-            owner,
-            name,
-            MARKER_PATH,
-            MARKER_BODY.as_bytes(),
-            "Initialize MemDock sync repository",
-        )?;
+        // Use the owner GitHub reports for the new repository.
+        let real_owner = repo
+            .full_name
+            .split_once('/')
+            .map(|(o, _)| o.to_string())
+            .filter(|o| !o.is_empty())
+            .unwrap_or_else(|| owner.to_string());
+        let real_name = repo
+            .full_name
+            .split_once('/')
+            .map(|(_, n)| n.to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| name.to_string());
+        put_marker(api, token, &real_owner, &real_name, sleep)?;
         return Ok(RepoOutcome::Created(repo));
     };
     match api.get_file(token, owner, name, MARKER_PATH)? {
@@ -502,7 +645,22 @@ pub fn ensure_repo(
                 Ok(RepoOutcome::Ready(repo))
             }
         }
-        _ => Ok(RepoOutcome::NotOurs),
+        _ => {
+            // A repo we created whose marker write failed: private, our
+            // description and nothing but the auto_init README.
+            let unfinished = repo.private
+                && repo.description.as_deref() == Some(CREATED_DESCRIPTION)
+                && api
+                    .list_root(token, owner, name)?
+                    .iter()
+                    .all(|n| n == "README.md");
+            if unfinished {
+                put_marker(api, token, owner, name, sleep)?;
+                Ok(RepoOutcome::Ready(repo))
+            } else {
+                Ok(RepoOutcome::NotOurs)
+            }
+        }
     }
 }
 
@@ -520,6 +678,8 @@ mod tests {
         marker: Mutex<Option<Vec<u8>>>,
         calls: Mutex<Vec<String>>,
         puts: Mutex<Vec<(String, Vec<u8>)>>,
+        put_failures: Mutex<u32>,
+        put_owners: Mutex<Vec<String>>,
     }
 
     fn repo(private: bool) -> GhRepo {
@@ -527,6 +687,8 @@ mod tests {
             private,
             default_branch: "main".into(),
             clone_url: "https://github.com/o/MemDockHub.git".into(),
+            description: Some("MemDock memory sync".into()),
+            full_name: "real/MemDockHub".into(),
         }
     }
 
@@ -575,15 +737,35 @@ mod tests {
         fn put_file(
             &self,
             _: &str,
-            _: &str,
+            o: &str,
             _: &str,
             p: &str,
             b: &[u8],
             _: &str,
         ) -> Result<(), ApiError> {
             self.log(&format!("put_file {p}"));
+            self.put_owners.lock().unwrap().push(o.to_string());
+            {
+                let mut f = self.put_failures.lock().unwrap();
+                if *f > 0 {
+                    *f -= 1;
+                    return Err(ApiError::Http {
+                        status: 404,
+                        message: "Not Found".into(),
+                    });
+                }
+            }
             self.puts.lock().unwrap().push((p.to_string(), b.to_vec()));
+            *self.marker.lock().unwrap() = Some(b.to_vec());
             Ok(())
+        }
+        fn list_root(&self, _: &str, _: &str, _: &str) -> Result<Vec<String>, ApiError> {
+            self.log("list_root");
+            Ok(if self.marker.lock().unwrap().is_some() {
+                vec!["README.md".into(), "memdock.json".into()]
+            } else {
+                vec!["README.md".into()]
+            })
         }
     }
 
@@ -612,6 +794,50 @@ mod tests {
         let t = device_login(&api, "cid", &code(5, 900), &cancel, &sleep).unwrap();
         assert_eq!(t, "tok");
         assert_eq!(*slept.borrow(), vec![5, 10]);
+    }
+
+    #[test]
+    fn device_login_fails_immediately_on_other_oauth_errors() {
+        let api = FakeGitHub::with_polls(vec![
+            PollResult::Failed("Device Flow must be explicitly enabled".into()),
+            PollResult::Token("never".into()),
+        ]);
+        let cancel = AtomicBool::new(false);
+        let slept = RefCell::new(0u32);
+        let sleep = |_: Duration| *slept.borrow_mut() += 1;
+        let r = device_login(&api, "c", &code(5, 900), &cancel, &sleep);
+        assert!(matches!(r, Err(LoginError::Failed(ref m)) if m.contains("Device Flow")));
+        assert_eq!(api.calls.lock().unwrap().len(), 1);
+        assert_eq!(*slept.borrow(), 0);
+    }
+
+    #[test]
+    fn device_login_tolerates_three_network_errors() {
+        let net = || Err(ApiError::Network("down".into()));
+        let mk = |n: usize| {
+            let f = FakeGitHub::default();
+            let mut q: VecDeque<Result<PollResult, ApiError>> = (0..n).map(|_| net()).collect();
+            q.push_back(Ok(PollResult::Token("t".into())));
+            *f.polls.lock().unwrap() = q;
+            f
+        };
+        let cancel = AtomicBool::new(false);
+        let noop = |_: Duration| {};
+        assert_eq!(
+            device_login(&mk(3), "c", &code(5, 900), &cancel, &noop),
+            Ok("t".to_string())
+        );
+        assert!(matches!(
+            device_login(&mk(4), "c", &code(5, 900), &cancel, &noop),
+            Err(LoginError::Api(ApiError::Network(_)))
+        ));
+    }
+
+    #[test]
+    fn debug_hides_token_and_urls_are_encoded() {
+        assert_eq!(format!("{:?}", PollResult::Token("gho_x".into())), "Token(***)");
+        assert_eq!(enc("a b/c"), "a%20b%2Fc");
+        assert_eq!(enc_path("dir/a b.json"), "dir/a%20b.json");
     }
 
     #[test]
@@ -686,6 +912,47 @@ mod tests {
     }
 
     #[test]
+    fn ensure_repo_retries_marker_write_and_uses_returned_owner() {
+        let api = FakeGitHub::with_repo(None, None);
+        *api.put_failures.lock().unwrap() = 1;
+        let slept = RefCell::new(0u32);
+        let sleep = |_: Duration| *slept.borrow_mut() += 1;
+        let out = ensure_repo_with(&api, "t", "o", "MemDockHub", false, &sleep).unwrap();
+        assert!(matches!(out, RepoOutcome::Created(_)));
+        assert_eq!(*slept.borrow(), 1);
+        assert_eq!(api.puts.lock().unwrap().len(), 1);
+        assert!(api.put_owners.lock().unwrap().iter().all(|o| o == "real"));
+    }
+
+    #[test]
+    fn ensure_repo_recovers_unfinished_repo_after_failed_marker() {
+        let api = FakeGitHub::with_repo(None, None);
+        *api.put_failures.lock().unwrap() = 3;
+        let sleep = |_: Duration| {};
+        let err = ensure_repo_with(&api, "t", "o", "MemDockHub", false, &sleep);
+        assert!(matches!(err, Err(ApiError::Http { status: 404, .. })));
+        assert_eq!(api.put_owners.lock().unwrap().len(), 3);
+        // Second run: repo exists, no marker, ours-unfinished -> marker written.
+        let out = ensure_repo_with(&api, "t", "o", "MemDockHub", false, &sleep).unwrap();
+        assert!(matches!(out, RepoOutcome::Ready(_)));
+        assert_eq!(api.puts.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ensure_repo_unfinished_rule_is_strict() {
+        let sleep = |_: Duration| {};
+        // Public, other description, or extra files: NotOurs and no writes.
+        let mut other = repo(true);
+        other.description = Some("something".into());
+        for r in [repo(false), other] {
+            let api = FakeGitHub::with_repo(Some(r), None);
+            let out = ensure_repo_with(&api, "t", "o", "MemDockHub", true, &sleep).unwrap();
+            assert_eq!(out, RepoOutcome::NotOurs);
+            assert!(api.puts.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn ensure_repo_attaches_existing() {
         let api = FakeGitHub::with_repo(Some(repo(true)), Some(MARKER));
         let out = ensure_repo(&api, "t", "o", "MemDockHub", false).unwrap();
@@ -727,6 +994,15 @@ mod tests {
             PollResult::SlowDown(Some(15))
         );
         assert_eq!(map_poll(&json!({"error":"expired_token"})), PollResult::Expired);
+        assert_eq!(
+            map_poll(&json!({"error":"device_flow_disabled","error_description":"off"})),
+            PollResult::Failed("off".into())
+        );
+        assert_eq!(
+            map_poll(&json!({"error":"incorrect_client_credentials"})),
+            PollResult::Failed("incorrect_client_credentials".into())
+        );
+        assert!(matches!(map_poll(&json!({})), PollResult::Failed(_)));
         assert_eq!(map_poll(&json!({"error":"access_denied"})), PollResult::Denied);
     }
 

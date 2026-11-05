@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod commands_skills;
+pub mod extract;
 pub mod memory;
 pub mod model;
 pub mod paths;

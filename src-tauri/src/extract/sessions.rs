@@ -142,9 +142,10 @@ fn mtime_ms(path: &Path) -> Option<i64> {
     i64::try_from(d.as_millis()).ok()
 }
 
-fn is_noise(text: &str) -> bool {
+fn is_noise(text: &str, role: Role) -> bool {
     let t = text.trim_start();
-    t.starts_with("<command-")
+    (role == Role::User && t.starts_with("[Request interrupted by user"))
+        || t.starts_with("<command-")
         || t.starts_with("<local-command-")
         || t.starts_with("<system-reminder>")
 }
@@ -163,15 +164,15 @@ fn claude_files(paths: &AgentPaths) -> Vec<PathBuf> {
     files
 }
 
-fn claude_text(content: &Value) -> Option<String> {
+fn claude_text(content: &Value, role: Role) -> Option<String> {
     let text = match content {
-        Value::String(s) if is_noise(s) => String::new(),
+        Value::String(s) if is_noise(s, role) => String::new(),
         Value::String(s) => s.clone(),
         Value::Array(items) => items
             .iter()
             .filter(|i| i.get("type").and_then(Value::as_str) == Some("text"))
             .filter_map(|i| i.get("text").and_then(Value::as_str))
-            .filter(|t| !is_noise(t))
+            .filter(|t| !is_noise(t, role))
             .collect::<Vec<_>>()
             .join("\n"),
         _ => return None,
@@ -199,13 +200,13 @@ fn read_claude_file(path: &Path, since_ms: i64, out: &mut Vec<Turn>) {
         {
             return;
         }
-        let Some(text) = v.get("message").and_then(|m| m.get("content")).and_then(claude_text)
+        let Some(text) = v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| claude_text(c, role))
         else {
             return;
         };
-        if role == Role::User && text.trim_start().starts_with("[Request interrupted by user") {
-            return;
-        }
         let Some(ts) = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts) else {
             return;
         };
@@ -306,7 +307,7 @@ fn codex_id_from_path(path: &Path) -> String {
     if stem.len() >= 36 && stem.is_char_boundary(stem.len() - 36) && is_uuid(&stem[stem.len() - 36..]) {
         return stem[stem.len() - 36..].to_string();
     }
-    stem.rsplit('-').next().unwrap_or("").to_string()
+    stem.strip_prefix("rollout-").unwrap_or(&stem).to_string()
 }
 
 fn read_codex_file(path: &Path, since_ms: i64, out: &mut Vec<Turn>) {
@@ -675,11 +676,23 @@ mod tests {
                 ),
                 cl("user", r#""summary of the past""#, "2026-11-05T10:00:01.000Z", r#","isCompactSummary":true"#),
                 cl("user", r#""[Request interrupted by user for tool use]""#, "2026-11-05T10:00:02.000Z", ""),
+                cl(
+                    "user",
+                    r#"[{"type":"text","text":"[Request interrupted by user]"},{"type":"text","text":"after interrupt"}]"#,
+                    "2026-11-05T10:00:03.000Z",
+                    "",
+                ),
             ],
         );
         let t = read_claude_turns(&paths, 0);
-        assert_eq!(t.len(), 1);
+        assert_eq!(t.len(), 2);
         assert_eq!(t[0].text, "real text");
+        assert_eq!(t[1].text, "after interrupt");
+    }
+
+    #[test]
+    fn codex_fallback_session_id_is_full_stem() {
+        assert_eq!(codex_id_from_path(Path::new("rollout-2026-11-05T10-00-00-abc.jsonl.zst")), "2026-11-05T10-00-00-abc");
     }
 
     #[test]

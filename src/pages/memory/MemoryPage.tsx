@@ -105,6 +105,7 @@ export function MemoryPage() {
     select(file);
     setReveal({ key: fileKey(file), line, nonce: ++revealNonce.current });
   };
+  const clearReveal = React.useCallback(() => setReveal(null), []);
   const openSearch = React.useCallback((initial: string) => setSearch((prev) => prev ?? { initial }), []);
 
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -191,6 +192,7 @@ export function MemoryPage() {
             onOpenImport={select}
             onDirtyChange={setDirty}
             reveal={reveal && reveal.key === fileKey(selected) ? reveal : undefined}
+            onRevealed={clearReveal}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">

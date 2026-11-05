@@ -62,9 +62,41 @@ function wordSegs(oldLine: string, newLine: string): { left: Seg[]; right: Seg[]
   return { left, right };
 }
 
+/** Bounds that keep huge or unrelated inputs cheap (DiffView is reused for arbitrary text). */
+const MAX_EDIT_LENGTH = 3000;
+const DIFF_TIMEOUT_MS = 250;
+const MAX_WORD_PAIR_CHARS = 2000;
+const MAX_WORD_PAIRS = 200;
+const MIN_SIMILARITY = 0.3;
+
+/** Common prefix + suffix share, or shared whitespace-separated words, relative to the longer line. */
+function similarity(a: string, b: string): number {
+  const max = Math.max(a.length, b.length);
+  if (max === 0) return 1;
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+  const affix = (pre + suf) / max;
+  const wa = a.split(/\s+/).filter(Boolean);
+  const wb = new Set(b.split(/\s+/).filter(Boolean));
+  const common = wa.filter((w) => wb.has(w)).length;
+  const words = common / Math.max(wa.length, wb.size, 1);
+  return Math.max(affix, words);
+}
+
 /** Aligned rows (context, replaced/added/removed lines) before folding. */
 function buildRows(oldText: string, newText: string): Row[] {
-  const parts = diffLines(oldText, newText, { ignoreNewlineAtEof: true });
+  // With maxEditLength jsdiff returns undefined when the texts differ too much: show one replaced block.
+  const parts: { value: string; added?: boolean; removed?: boolean }[] = diffLines(oldText, newText, {
+    ignoreNewlineAtEof: true,
+    maxEditLength: MAX_EDIT_LENGTH,
+    timeout: DIFF_TIMEOUT_MS,
+  }) ?? [
+    { value: oldText, removed: true },
+    { value: newText, added: true },
+  ];
+  let wordPairs = 0;
   const rows: Row[] = [];
   let oldNo = 1;
   let newNo = 1;
@@ -87,8 +119,19 @@ function buildRows(oldText: string, newText: string): Row[] {
       const l = removed[k];
       const r = added[k];
       if (l !== undefined && r !== undefined) {
-        const w = wordSegs(l, r);
-        rows.push({ kind: "chg", left: { no: oldNo++, segs: w.left }, right: { no: newNo++, segs: w.right } });
+        const worthIt =
+          wordPairs < MAX_WORD_PAIRS && l.length + r.length <= MAX_WORD_PAIR_CHARS && similarity(l, r) >= MIN_SIMILARITY;
+        if (worthIt) {
+          wordPairs++;
+          const w = wordSegs(l, r);
+          rows.push({ kind: "chg", left: { no: oldNo++, segs: w.left }, right: { no: newNo++, segs: w.right } });
+        } else {
+          rows.push({
+            kind: "chg",
+            left: { no: oldNo++, segs: [{ text: l, changed: false }] },
+            right: { no: newNo++, segs: [{ text: r, changed: false }] },
+          });
+        }
       } else if (l !== undefined) {
         rows.push({ kind: "chg", left: { no: oldNo++, segs: [{ text: l, changed: false }] } });
       } else {

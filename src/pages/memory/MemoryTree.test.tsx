@@ -126,4 +126,20 @@ describe("MemoryTree", () => {
     await waitFor(() => expect(removeManualProject).toHaveBeenCalledWith("/work/gone"));
     await waitFor(() => expect(onIndexChange).toHaveBeenCalled());
   });
+
+  it("search box opens full-text search on typing, click or Ctrl+K but not on focus", async () => {
+    const onSearchOpen = vi.fn();
+    setup({ onSearchOpen });
+    const box = screen.getByRole("textbox", { name: "搜索全部记忆" });
+    box.focus();
+    expect(onSearchOpen).not.toHaveBeenCalled();
+    await userEvent.click(box);
+    expect(onSearchOpen).toHaveBeenCalledWith("");
+    onSearchOpen.mockClear();
+    await userEvent.type(box, "a");
+    expect(onSearchOpen).toHaveBeenCalledWith("a");
+    onSearchOpen.mockClear();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(onSearchOpen).toHaveBeenCalledWith("");
+  });
 });

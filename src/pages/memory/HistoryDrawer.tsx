@@ -47,6 +47,7 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
   const [listError, setListError] = React.useState<string | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [texts, setTexts] = React.useState<Record<string, string>>({});
+  const [textErrors, setTextErrors] = React.useState<Record<string, string>>({});
   const [restoring, setRestoring] = React.useState(false);
   const [restoreError, setRestoreError] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState(false);
@@ -59,6 +60,7 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
     setListError(null);
     setSelectedId(null);
     setTexts({});
+    setTextErrors({});
     setRestoreError(null);
     listSnapshots(path).then(
       (list) => {
@@ -77,16 +79,16 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
 
   // Fetch the text of the selected snapshot once.
   React.useEffect(() => {
-    if (!open || !selectedId || texts[selectedId] !== undefined) return;
+    if (!open || !selectedId || texts[selectedId] !== undefined || textErrors[selectedId] !== undefined) return;
     let alive = true;
     readSnapshot(path, selectedId).then(
       (text) => alive && setTexts((prev) => ({ ...prev, [selectedId]: text })),
-      (e) => alive && setListError(messageOf(e)),
+      (e) => alive && setTextErrors((prev) => ({ ...prev, [selectedId]: messageOf(e) })),
     );
     return () => {
       alive = false;
     };
-  }, [open, path, selectedId, texts]);
+  }, [open, path, selectedId, texts, textErrors]);
 
   const selected = snaps?.find((s) => s.id === selectedId);
   const selectedText = selectedId ? texts[selectedId] : undefined;
@@ -186,7 +188,11 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                {selectedText === undefined ? (
+                {selectedId && textErrors[selectedId] !== undefined ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {fmt(m.historyFailed, { message: textErrors[selectedId] })}
+                  </p>
+                ) : selectedText === undefined ? (
                   <p className="text-sm text-muted-foreground" aria-busy="true">
                     {m.loading}
                   </p>

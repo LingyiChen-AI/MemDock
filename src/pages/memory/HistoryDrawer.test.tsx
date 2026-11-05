@@ -93,4 +93,18 @@ describe("HistoryDrawer", () => {
     setup();
     expect(await screen.findByText("还没有历史版本")).toBeInTheDocument();
   });
+
+  it("a snapshot read failure only affects the diff area", async () => {
+    (readSnapshot as Mock).mockImplementation(async (_p: string, id: string) => {
+      if (id === "s2") throw { code: "io", message: "boom" };
+      return "other\ncommon";
+    });
+    setup();
+    const items = await screen.findAllByRole("option");
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    await userEvent.click(items[1]);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(document.querySelector("[data-diff-layout]")).not.toBeNull();
+  });
 });

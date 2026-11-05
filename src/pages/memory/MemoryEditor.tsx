@@ -57,6 +57,8 @@ export interface MemoryEditorProps {
   onDirtyChange?: (dirty: boolean) => void;
   /** Scrolls to a 1-based line and puts the cursor there; a new `nonce` repeats the jump. */
   reveal?: { line: number; nonce: number };
+  /** Called once a reveal has been applied, so the page can drop it. */
+  onRevealed?: () => void;
 }
 
 export function MemoryEditor(props: MemoryEditorProps) {
@@ -64,7 +66,7 @@ export function MemoryEditor(props: MemoryEditorProps) {
   return <TextEditor {...props} />;
 }
 
-function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal }: MemoryEditorProps) {
+function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal, onRevealed }: MemoryEditorProps) {
   const { t } = useI18n();
   const m = t.memory;
 
@@ -203,7 +205,8 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal 
       effects: EditorView.scrollIntoView(line.from, { y: "center" }),
     });
     view.focus();
-  }, [reveal, base, view, mode]);
+    onRevealed?.();
+  }, [reveal, base, view, mode, onRevealed]);
 
   const reload = () => {
     setConflict(false);

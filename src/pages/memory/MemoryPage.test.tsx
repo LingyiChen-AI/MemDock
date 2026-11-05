@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
@@ -15,10 +16,18 @@ vi.mock("@/api/memory", () => ({
   searchMemories: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+const fakeView = vi.hoisted(() => ({
+  dom: { isConnected: true },
+  state: { doc: { lines: 10, line: (n: number) => ({ from: n * 100 }) } },
+  dispatch: vi.fn(),
+  focus: vi.fn(),
+}));
 vi.mock("@uiw/react-codemirror", () => ({
-  default: ({ value, onChange }: { value: string; onChange?: (v: string) => void }) => (
-    <textarea aria-label="editor" value={value} onChange={(e) => onChange?.(e.target.value)} />
-  ),
+  default: ({ value, onChange, onCreateEditor }: { value: string; onChange?: (v: string) => void; onCreateEditor?: (v: unknown) => void }) => {
+    useEffect(() => onCreateEditor?.(fakeView), [onCreateEditor]);
+    return <textarea aria-label="editor" value={value} onChange={(e) => onChange?.(e.target.value)} />;
+  },
+  EditorView: { theme: () => [], lineWrapping: [] },
 }));
 
 import { listMemories, onMemoryChanged, readCodexDb, readMemoryFile, removeManualProject, searchMemories } from "@/api/memory";
@@ -128,5 +137,25 @@ describe("MemoryPage", () => {
     expect(await screen.findByDisplayValue("text of /work/jev-rpa/CLAUDE.md")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
     expect(screen.getByRole("tree")).toBeInTheDocument();
+  });
+
+  it("a search jump is consumed: A -> B -> A does not scroll again", async () => {
+    fakeView.dispatch.mockClear();
+    (searchMemories as Mock).mockResolvedValue([{ file_id: projClaude.id, line: 7, preview: "hit in project" }]);
+    renderApp(<MemoryPage />);
+    await screen.findByDisplayValue("text of /home/u/.claude/CLAUDE.md");
+    await userEvent.keyboard("{Control>}k{/Control}");
+    await userEvent.type(await screen.findByRole("searchbox"), "hit");
+    await userEvent.click(await screen.findByRole("button", { name: /hit in project/ }));
+    await screen.findByDisplayValue("text of /work/jev-rpa/CLAUDE.md");
+    await waitFor(() => expect(fakeView.dispatch).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
+    await userEvent.click(screen.getAllByRole("treeitem", { name: /CLAUDE/ })[0]);
+    await screen.findByDisplayValue("text of /home/u/.claude/CLAUDE.md");
+    const back = await screen.findAllByRole("treeitem", { name: /CLAUDE/ });
+    await userEvent.click(back[back.length - 1]);
+    await screen.findByDisplayValue("text of /work/jev-rpa/CLAUDE.md");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fakeView.dispatch).toHaveBeenCalledTimes(1);
   });
 });

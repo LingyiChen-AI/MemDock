@@ -242,7 +242,7 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
           <input
             ref={searchRef}
             value={onSearchOpen ? "" : query}
-            onFocus={() => onSearchOpen?.("")}
+            onClick={() => onSearchOpen?.("")}
             onChange={(e) => (onSearchOpen ? onSearchOpen(e.target.value) : setQuery(e.target.value))}
             placeholder={m.search}
             aria-label={m.search}

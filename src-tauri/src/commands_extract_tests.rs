@@ -5,7 +5,7 @@ use crate::extract::job::TurnSource;
 use crate::extract::prompt::{Evidence, Suggestion, SuggestionKind, SuggestionStatus};
 use crate::extract::runner::RunError;
 use crate::extract::sessions::{Role, Turn};
-use crate::extract::store::{ProjectFilter, RunStatus, Schedule};
+use crate::extract::store::{ProjectFilter, RunStatus, RunTrigger, Schedule};
 use crate::model::Tool;
 use crate::paths::AgentPaths;
 use serde_json::Value;
@@ -14,7 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Blocks until the cancel flag is set; never touches a real CLI.
-struct BlockingRunner;
+#[derive(Default)]
+struct BlockingRunner {
+    saw_cancel: Arc<AtomicBool>,
+}
 
 impl CliRunner for BlockingRunner {
     fn tool(&self) -> Tool {
@@ -37,6 +40,7 @@ impl CliRunner for BlockingRunner {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        self.saw_cancel.store(true, Ordering::SeqCst);
         Err(RunError::Cancelled)
     }
 }
@@ -113,7 +117,7 @@ fn add(es: &ExtractState, s: Suggestion) {
 #[test]
 fn start_twice_returns_already_running() {
     let tmp = tempfile::tempdir().unwrap();
-    let (es, events) = extract_state(app(tmp.path()), vec![Arc::new(BlockingRunner)]);
+    let (es, events) = extract_state(app(tmp.path()), vec![Arc::new(BlockingRunner::default())]);
     let rec = start_extraction_impl(&es).unwrap();
     assert_eq!(rec.status, RunStatus::Running);
     let err = start_extraction_impl(&es).unwrap_err();
@@ -145,7 +149,7 @@ fn start_without_cli_is_not_installed() {
 #[test]
 fn runners_lists_both_tools() {
     let tmp = tempfile::tempdir().unwrap();
-    let (es, _) = extract_state(app(tmp.path()), vec![Arc::new(BlockingRunner)]);
+    let (es, _) = extract_state(app(tmp.path()), vec![Arc::new(BlockingRunner::default())]);
     let r = extract_runners_impl(&es);
     assert_eq!(r.len(), 2);
     assert!(r.iter().any(|x| x.tool == Tool::Claude && x.available));
@@ -297,4 +301,120 @@ fn unavailable_store_reports_io() {
     fs::write(tmp.path().join("data").join("suggestions.json"), "{ not json").unwrap();
     let es = ExtractState::build(a, vec![], |_| {});
     assert_eq!(get_extract_config_impl(&es).unwrap_err().code, "io");
+}
+
+#[test]
+fn shutdown_cancels_manual_run_within_bound() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runner = Arc::new(BlockingRunner::default());
+    let saw = runner.saw_cancel.clone();
+    let (es, _) = extract_state(app(tmp.path()), vec![runner]);
+    start_extraction_impl(&es).unwrap();
+    // Wait until the runner is actually executing.
+    std::thread::sleep(Duration::from_millis(200));
+    let t0 = Instant::now();
+    es.shutdown();
+    assert!(t0.elapsed() < Duration::from_secs(5), "shutdown bounded");
+    assert!(!es.inner().unwrap().ctx.is_running());
+    assert!(saw.load(Ordering::SeqCst), "runner observed cancel");
+}
+
+#[test]
+fn tampered_suggestion_path_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = app(tmp.path());
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let target = outside.join("x.md");
+    let db = a.paths.codex_home.join("memories_1.sqlite");
+    fs::write(&db, b"x").unwrap();
+    a.rescan();
+    let (es, _) = extract_state(a, vec![]);
+    add(&es, sug("t", target.to_str().unwrap(), "", "- evil"));
+    add(&es, sug("d", db.to_str().unwrap(), "", "- evil"));
+    // CLAUDE.md in a directory that is not a project root / claude home.
+    let sneaky = outside.join("CLAUDE.md");
+    add(&es, sug("s", sneaky.to_str().unwrap(), "", "- evil"));
+    for id in ["t", "d", "s"] {
+        assert_eq!(apply_suggestion_impl(&es, id, None, false).unwrap_err().code, "invalid", "{id}");
+    }
+    let res = accept_suggestions_impl(&es, &["t".into()]).unwrap();
+    assert_eq!(res[0].error.as_ref().unwrap().code, "invalid");
+    assert!(!target.exists() && !sneaky.exists());
+    assert_eq!(fs::read(&db).unwrap(), b"x");
+}
+
+#[test]
+fn placeholder_claude_md_in_claude_home_is_allowed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = app(tmp.path());
+    let file = a.paths.claude_home.join("CLAUDE.md");
+    assert!(!file.exists());
+    let (es, _) = extract_state(a, vec![]);
+    add(&es, sug("n", file.to_str().unwrap(), "", "- fresh"));
+    let out = apply_suggestion_impl(&es, "n", None, false).unwrap();
+    assert!(matches!(out, ApplyOutcome::Applied { .. }), "{out:?}");
+    assert!(fs::read_to_string(&file).unwrap().contains("- fresh"));
+}
+
+#[test]
+fn accept_many_emits_one_merged_memory_changed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = app(tmp.path());
+    let file = a.paths.claude_home.join("CLAUDE.md");
+    fs::write(&file, "# rules
+").unwrap();
+    a.rescan();
+    let hash = crate::memory::io::read_memory(&file).unwrap().hash;
+    let (es, events) = extract_state(a, vec![]);
+    add(&es, sug("a", file.to_str().unwrap(), &hash, "- one"));
+    add(&es, sug("b", file.to_str().unwrap(), &hash, "- two"));
+    accept_suggestions_impl(&es, &["a".into(), "b".into()]).unwrap();
+    let ev = events.lock().unwrap().clone();
+    let changed: Vec<_> = ev.iter().filter(|(n, _)| n == "memory-changed").collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].1["paths"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn runners_reported_even_when_store_is_broken() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = app(tmp.path());
+    fs::write(tmp.path().join("data").join("suggestions.json"), "{ not json").unwrap();
+    let es = ExtractState::build(a, vec![Arc::new(BlockingRunner::default())], |_| {});
+    let r = extract_runners_impl(&es);
+    assert!(r.iter().any(|x| x.tool == Tool::Claude && x.available));
+}
+
+struct EmptyRunner;
+
+impl CliRunner for EmptyRunner {
+    fn tool(&self) -> Tool {
+        Tool::Claude
+    }
+    fn available(&self) -> bool {
+        true
+    }
+    fn run(&self, _p: &str, _s: &Value, _t: Duration, _c: &AtomicBool) -> Result<String, RunError> {
+        Ok(r#"{"suggestions":[]}"#.into())
+    }
+}
+
+#[test]
+fn scheduled_run_emits_events_through_hooks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (es, events) = extract_state(app(tmp.path()), vec![Arc::new(EmptyRunner)]);
+    set_extract_config_impl(
+        &es,
+        ExtractConfig { schedule: Schedule::Daily { hh: 0, mm: 0 }, ..get_extract_config_impl(&es).unwrap() },
+    )
+    .unwrap();
+    let ctx = es.inner().unwrap().ctx.clone();
+    let sched = crate::extract::job::Scheduler::with_offset(ctx, Arc::new(|_| 0));
+    let rec = sched.tick(0).expect("slot is due, run happens");
+    assert_eq!(rec.trigger, RunTrigger::Scheduled);
+    let n = names(&events);
+    for want in ["extract-progress", "extract-finished", "suggestions-changed"] {
+        assert!(n.contains(&want.to_string()), "{want} in {n:?}");
+    }
 }

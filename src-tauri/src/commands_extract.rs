@@ -27,13 +27,15 @@ use crate::extract::prompt::{redact, Evidence, Suggestion, SuggestionStatus};
 use crate::extract::runner::{CliRunner, RunError};
 use crate::extract::sessions::{context_around, Turn};
 use crate::extract::store::{ExtractConfig, ProjectFilter, RunRecord, RunTrigger, Schedule, Store};
-use crate::model::{MemoryIndex, Tool};
+use crate::model::{MemoryIndex, MemoryKind, Tool};
 use crate::projects::normalize_path;
 
 /// Key used in `PendingSummary::by_project` for files outside any project.
 pub const GLOBAL_PROJECT: &str = "__global__";
 /// Turns shown before / after each evidence turn.
 const CONTEXT_TURNS: usize = 4;
+/// Upper bound for waiting on a running extraction at exit.
+const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Event sink: `(event name, JSON payload)`.
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -51,6 +53,8 @@ struct Inner {
 pub struct ExtractState {
     app: Arc<AppState>,
     inner: Result<Inner, String>,
+    /// Kept outside `inner` so availability is reported even when the store is unusable.
+    runners: Vec<Arc<dyn CliRunner>>,
     emitter: Mutex<Option<Emit>>,
 }
 
@@ -173,7 +177,7 @@ impl ExtractState {
         let inner = Store::load(&app.data_dir).map(|store| {
             let store = Arc::new(Mutex::new(store));
             let mut ctx =
-                ExtractCtx::new(app.paths.clone(), app.home.clone(), store.clone(), runners);
+                ExtractCtx::new(app.paths.clone(), app.home.clone(), store.clone(), runners.clone());
             let a = app.clone();
             ctx.index = Arc::new(move || a.snapshot_index());
             customize(&mut ctx);
@@ -182,7 +186,7 @@ impl ExtractState {
             let scheduler = Scheduler::new(ctx.clone());
             Inner { store, ctx, apply, scheduler }
         });
-        ExtractState { app, inner, emitter: Mutex::new(None) }
+        ExtractState { app, inner, runners, emitter: Mutex::new(None) }
     }
 
     /// Production state: CLI runners found on PATH.
@@ -243,10 +247,16 @@ impl ExtractState {
         }
     }
 
-    /// Stops the scheduler and cancels a running extraction (app exit).
+    /// Cancels any running extraction (manual or scheduled) and stops the
+    /// scheduler, waiting at most `SHUTDOWN_WAIT` in total so the runner can
+    /// kill the CLI process tree before the process exits.
     pub fn shutdown(&self) {
-        if let Ok(inner) = self.inner() {
-            inner.scheduler.stop();
+        let Ok(inner) = self.inner() else { return };
+        let t0 = std::time::Instant::now();
+        inner.ctx.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        inner.scheduler.stop_within(SHUTDOWN_WAIT);
+        while inner.ctx.is_running() && t0.elapsed() < SHUTDOWN_WAIT {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 }
@@ -293,15 +303,9 @@ pub fn set_extract_config_impl(
 }
 
 pub fn extract_runners_impl(es: &ExtractState) -> Vec<RunnerInfo> {
-    let Ok(inner) = es.inner() else {
-        return [Tool::Claude, Tool::Codex]
-            .into_iter()
-            .map(|tool| RunnerInfo { tool, available: false, program: None })
-            .collect();
-    };
     [Tool::Claude, Tool::Codex]
         .into_iter()
-        .map(|tool| match inner.ctx.runners.iter().find(|r| r.tool() == tool) {
+        .map(|tool| match es.runners.iter().find(|r| r.tool() == tool) {
             Some(r) => RunnerInfo { tool, available: r.available(), program: r.program() },
             None => RunnerInfo { tool, available: false, program: None },
         })
@@ -393,6 +397,35 @@ fn announce_write(es: &ExtractState, path: &str) {
     es.emit("memory-changed", &MemoryChanged { paths: vec![normalize_path(path)] });
 }
 
+/// A suggestion may only write to an indexed, non-Codex-DB memory file, or to a
+/// not-yet-existing `CLAUDE.md` directly inside an indexed project root or the
+/// Claude home. Guards against a tampered `suggestions.json`.
+fn authorize_target(es: &ExtractState, id: &str) -> Result<(), CommandError> {
+    let Some(path) = suggestion_path(es, id) else { return Ok(()) }; // apply reports not_found
+    let idx = es.app.snapshot_index();
+    let nid = normalize_path(&path);
+    let files = idx.global.iter().chain(idx.projects.iter().flat_map(|p| p.files.iter()));
+    if let Some(f) = files.into_iter().find(|f| f.id == nid) {
+        return if f.kind == MemoryKind::CodexDb {
+            Err(CommandError::new("invalid", "target is not writable"))
+        } else {
+            Ok(())
+        };
+    }
+    let p = std::path::Path::new(&path);
+    let is_claude_md = p.file_name().is_some_and(|n| n == "CLAUDE.md");
+    let parent = p.parent().map(|d| normalize_path(&d.to_string_lossy()));
+    let roots = idx
+        .projects
+        .iter()
+        .map(|pm| normalize_path(&pm.project.path))
+        .chain(std::iter::once(normalize_path(&es.app.paths.claude_home.to_string_lossy())));
+    if is_claude_md && parent.is_some_and(|d| roots.into_iter().any(|r| r == d)) {
+        return Ok(());
+    }
+    Err(CommandError::new("invalid", "target is not a known memory file"))
+}
+
 pub fn apply_suggestion_impl(
     es: &ExtractState,
     id: &str,
@@ -400,6 +433,7 @@ pub fn apply_suggestion_impl(
     confirm_changed: bool,
 ) -> Result<ApplyOutcome, CommandError> {
     let inner = es.inner()?;
+    authorize_target(es, id)?;
     let path = suggestion_path(es, id);
     let out = apply::apply(&inner.apply, id, edited_new_text, confirm_changed)?;
     match &out {
@@ -426,23 +460,29 @@ pub fn accept_suggestions_impl(
     ids: &[String],
 ) -> Result<Vec<AcceptResult>, CommandError> {
     let inner = es.inner()?;
-    let paths: Vec<Option<String>> = ids.iter().map(|i| suggestion_path(es, i)).collect();
-    let results = apply::accept_many(&inner.apply, ids);
-    let mut out = Vec::with_capacity(results.len());
+    let mut out = Vec::with_capacity(ids.len());
     let mut changed = false;
-    for ((id, res), path) in results.into_iter().zip(paths) {
+    let mut written: Vec<String> = Vec::new();
+    for id in ids {
+        let path = suggestion_path(es, id);
+        let res = authorize_target(es, id)
+            .and_then(|_| apply::apply(&inner.apply, id, None, false).map_err(CommandError::from));
         match res {
             Ok(o) => {
                 if matches!(o, ApplyOutcome::Applied { .. }) {
-                    if let Some(p) = &path {
-                        announce_write(es, p);
-                    }
+                    written.extend(path.map(|p| normalize_path(&p)));
                 }
                 changed |= !matches!(o, ApplyOutcome::NeedsConfirm { .. });
-                out.push(AcceptResult { id, outcome: Some(o), error: None });
+                out.push(AcceptResult { id: id.clone(), outcome: Some(o), error: None });
             }
-            Err(e) => out.push(AcceptResult { id, outcome: None, error: Some(e.into()) }),
+            Err(e) => out.push(AcceptResult { id: id.clone(), outcome: None, error: Some(e) }),
         }
+    }
+    if !written.is_empty() {
+        written.sort();
+        written.dedup();
+        es.app.rescan();
+        es.emit("memory-changed", &MemoryChanged { paths: written });
     }
     if changed {
         es.emit_summary();

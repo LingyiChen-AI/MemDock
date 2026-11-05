@@ -699,14 +699,16 @@ impl Scheduler {
         if self.stop.load(Ordering::SeqCst) || !self.due(now_ms) || self.ctx.is_running() {
             return None;
         }
-        // Shared flag: cancel_extraction / stop() can interrupt scheduled runs.
-        self.ctx.cancel.store(false, Ordering::SeqCst);
-        // stop() may have raced in between: do not let the reset undo it.
-        if self.stop.load(Ordering::SeqCst) {
-            self.ctx.cancel.store(true, Ordering::SeqCst);
-            return None;
-        }
-        start_run(&self.ctx, RunTrigger::Scheduled, &self.ctx.cancel, &|_| {}).ok()
+        // The shared cancel flag is reset only once the run lock is held (like the
+        // manual path), so a cancel aimed at a just-started manual run survives.
+        // A racing stop() must not be undone by the reset.
+        let reset = |_: &RunRecord| {
+            self.ctx.cancel.store(false, Ordering::SeqCst);
+            if self.stop.load(Ordering::SeqCst) {
+                self.ctx.cancel.store(true, Ordering::SeqCst);
+            }
+        };
+        start_run_with(&self.ctx, RunTrigger::Scheduled, &self.ctx.cancel, &|_| {}, &reset).ok()
     }
 
     /// Starts the background thread (every `TICK_INTERVAL`, real clock from ctx).
@@ -734,6 +736,22 @@ impl Scheduler {
         if let Some(h) = lock(&self.handle).take() {
             let _ = h.join();
         }
+    }
+
+    /// Like `stop`, but waits at most `limit` for the thread; returns whether it ended.
+    pub fn stop_within(&self, limit: Duration) -> bool {
+        self.stop.store(true, Ordering::SeqCst);
+        self.ctx.cancel.store(true, Ordering::SeqCst);
+        let Some(h) = lock(&self.handle).take() else { return true };
+        let t0 = std::time::Instant::now();
+        while !h.is_finished() {
+            if t0.elapsed() >= limit {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let _ = h.join();
+        true
     }
 }
 

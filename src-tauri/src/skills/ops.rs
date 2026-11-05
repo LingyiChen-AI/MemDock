@@ -14,14 +14,15 @@ use crate::paths::AgentPaths;
 use crate::projects::normalize_path;
 use crate::skills::frontmatter::parse_frontmatter;
 use crate::skills::fsops::{
-    MAX_ZIP_BYTES, atomic_replace_dir, backup_dir, cleanup_leftovers, copy_dir, copy_dir_confined,
-    extract_zip, now_millis, prune_backups, remove_any,
+    BackupInfo, MAX_ZIP_BYTES, atomic_replace_dir, backup_dir, cleanup_leftovers, copy_dir,
+    copy_dir_confined, extract_zip, now_millis, prune_backups, remove_any,
 };
 use crate::skills::git::{GitError, GitRunner};
 use crate::skills::git_cache::{CACHE_MAX_AGE, cache_dir_for, cleanup_cache, is_complete_cache};
 use crate::skills::model::{SkillEntry, SkillScope, SkillSource, SourceOrigin};
 use crate::skills::registry::{
-    InstallRecord, Registry, RegistryEntry, dir_content_hash, load_registry, save_registry,
+    InstallRecord, Registry, RegistryEntry, dir_content_hash, load_registry, register_manual,
+    save_registry,
 };
 use crate::skills::scan::scan_skills;
 use crate::skills::source::{infer_source, read_skill_lock};
@@ -962,6 +963,107 @@ pub fn rollback(ctx: &OpsCtx, skill_id: &str, backup_id: &str) -> Result<SkillEn
             .unwrap_or_else(|| src.url.clone());
         record_state(ctx, &entry, src, &url, None, false)?;
     }
+    rescan_entry(ctx, &entry.id)
+}
+
+// ---------------------------------------------------------------------------
+// Delete / cross-tool sync / manual source registration
+// ---------------------------------------------------------------------------
+
+/// Deletes a skill after backing it up. A symlinked skill loses only the link;
+/// the link target (and its files) stay. The registry forgets the install.
+pub fn delete(ctx: &OpsCtx, skill_id: &str) -> Result<BackupInfo, OpsError> {
+    let (entry, _) = lookup(ctx, skill_id)?;
+    if entry.readonly {
+        return Err(OpsError::ReadOnly);
+    }
+    let key = skill_key(&entry)?;
+    // Fail early on an unreadable registry, before touching any file.
+    load_registry(&ctx.registry_path).map_err(io_msg)?;
+    let dir = PathBuf::from(&entry.dir);
+    // Back up the real contents (the link target for symlinked skills).
+    let info = backup_dir(&real_dir(&entry), &ctx.backups_root(), &key)?;
+    // remove_any never follows a link: remove_file / remove_dir for links,
+    // remove_dir_all only for real directories.
+    remove_any(&dir)?;
+    forget_install(ctx, &entry.id).map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))?;
+    Ok(info)
+}
+
+fn forget_install(ctx: &OpsCtx, id: &str) -> Result<(), OpsError> {
+    let mut reg = load_registry(&ctx.registry_path).map_err(io_msg)?;
+    let before = reg.clone();
+    for e in reg.skills.iter_mut() {
+        e.installs.retain(|i| normalize_path(&i.dir) != id);
+    }
+    reg.skills.retain(|e| !e.installs.is_empty());
+    if reg != before {
+        save_registry(&ctx.registry_path, &reg)?;
+    }
+    Ok(())
+}
+
+/// Copies a skill (read-only ones included) to `target`; the copy is a user
+/// skill. The original source, when known, is recorded for the copy.
+pub fn sync_to(
+    ctx: &OpsCtx,
+    skill_id: &str,
+    target: InstallTarget,
+    overwrite: bool,
+) -> Result<SkillEntry, OpsError> {
+    let (entry, reg) = lookup(ctx, skill_id)?;
+    let key = skill_key(&entry)?;
+    if is_readonly_location(&target, &key) {
+        return Err(OpsError::ReadOnly);
+    }
+    let dir = target_dir(&target, &ctx.paths, &ctx.home, &ctx.projects, &key).map_err(invalid)?;
+    let same = |a: &Path, b: &Path| {
+        normalize_path(&a.to_string_lossy()) == normalize_path(&b.to_string_lossy())
+    };
+    if same(&dir, Path::new(&entry.dir)) || same(&dir, &real_dir(&entry)) {
+        return Err(invalid("source and target are the same directory"));
+    }
+    if !overwrite && fs::symlink_metadata(&dir).is_ok() {
+        return Err(OpsError::Exists {
+            dir: dir.to_string_lossy().into_owned(),
+        });
+    }
+    let source = entry.source.clone().map(|mut s| {
+        if s.origin != SourceOrigin::Manual {
+            s.origin = SourceOrigin::Registry;
+        }
+        let clone_url = find_reg(&reg, &entry.id)
+            .and_then(|r| r.clone_url.clone())
+            .unwrap_or_else(|| s.url.clone());
+        (s, clone_url)
+    });
+    let staging = TempDir::new(&ctx.staging_root())?;
+    let content = staging.0.join("content");
+    copy_dir(&real_dir(&entry), &content)?;
+    if !content.join("SKILL.md").is_file() {
+        return Err(invalid("SKILL.md not found in the skill"));
+    }
+    place(ctx, &content, &dir, &key, overwrite)?;
+    let installed = [(target, dir.clone())];
+    update_registry(ctx, &installed, &key, source.as_ref())
+        .map_err(|e| io_msg(format!("{REGISTRY_NOT_SAVED}: {e:?}")))?;
+    rescan_entry(ctx, &normalize_path(&dir.to_string_lossy()))
+}
+
+/// Records a user-supplied source for a skill whose origin is unknown.
+pub fn register_source(
+    ctx: &OpsCtx,
+    skill_id: &str,
+    url: &str,
+    skill_path: &str,
+) -> Result<SkillEntry, OpsError> {
+    let (entry, _) = lookup(ctx, skill_id)?;
+    if entry.readonly {
+        return Err(OpsError::ReadOnly);
+    }
+    let mut reg = load_registry(&ctx.registry_path).map_err(io_msg)?;
+    register_manual(&mut reg, &entry, url, skill_path).map_err(invalid)?;
+    save_registry(&ctx.registry_path, &reg)?;
     rescan_entry(ctx, &entry.id)
 }
 
@@ -2041,5 +2143,329 @@ v2
             other => panic!("{other:?}"),
         }
         assert!(dir.join("more.md").is_file());
+    }
+
+    // ---------- Task 6: delete / sync / register ----------
+
+    fn install_demo(e: &Env, tgt: InstallTarget) -> (PathBuf, String) {
+        let src = folder_skill(e, "demo", "demo", "v1");
+        let out = install(&e.ctx, InstallFrom::Folder { path: src }, &[tgt], false).unwrap();
+        (PathBuf::from(&out[0].dir), out[0].id.clone())
+    }
+
+    /// Directory symlink, falling back to a junction on Windows.
+    fn make_link(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+                || std::process::Command::new("cmd")
+                    .arg("/C")
+                    .arg("mklink")
+                    .arg("/J")
+                    .arg(link.to_string_lossy().replace('/', "\\"))
+                    .arg(target.to_string_lossy().replace('/', "\\"))
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+        }
+    }
+
+    #[test]
+    fn delete_backs_up_and_removes() {
+        let e = env();
+        let (dir, id) = install_demo(&e, claude());
+        write(&dir.join("mine.txt"), "mine");
+        let info = delete(&e.ctx, &id).unwrap();
+        assert!(!dir.exists());
+        let b = e.ctx.backups_root().join("demo").join(&info.id);
+        assert_eq!(fs::read_to_string(b.join("mine.txt")).unwrap(), "mine");
+        assert!(b.join("SKILL.md").is_file() && b.join("ref/a.md").is_file());
+        let names: Vec<_> = fs::read_dir(dir.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .collect();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn delete_symlink_keeps_target() {
+        let e = env();
+        let target = e.root.join("real-skill");
+        write(
+            &target.join("SKILL.md"),
+            "---\nname: linked\ndescription: l\n---\nbody\n",
+        );
+        write(&target.join("sub/f.txt"), "f");
+        let link = e.ctx.paths.claude_home.join("skills").join("linked");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if !make_link(&target, &link) {
+            eprintln!("skipped: cannot create symlinks or junctions");
+            return;
+        }
+        let id = normalize_path(&link.to_string_lossy());
+        let entry = all_entries(&e).into_iter().find(|s| s.id == id).unwrap();
+        assert!(entry.is_symlink, "scan should see the link");
+        let info = delete(&e.ctx, &id).unwrap();
+        assert!(fs::symlink_metadata(&link).is_err(), "link removed");
+        assert!(target.join("SKILL.md").is_file());
+        assert_eq!(fs::read_to_string(target.join("sub/f.txt")).unwrap(), "f");
+        // The backup is a real copy of the contents.
+        let b = e.ctx.backups_root().join("linked").join(&info.id);
+        assert!(b.join("SKILL.md").is_file() && b.join("sub/f.txt").is_file());
+        assert!(!fs::symlink_metadata(&b).unwrap().file_type().is_symlink());
+    }
+
+    #[test]
+    fn delete_readonly_rejected() {
+        let e = env();
+        let d = e.ctx.paths.codex_home.join("skills/.system/sys");
+        write(&d.join("SKILL.md"), "---\nname: sys\ndescription: s\n---\n");
+        let id = normalize_path(&d.to_string_lossy());
+        assert_eq!(delete(&e.ctx, &id).unwrap_err(), OpsError::ReadOnly);
+        assert!(d.join("SKILL.md").is_file());
+        assert!(!e.ctx.backups_root().join("sys").exists());
+    }
+
+    #[test]
+    fn delete_updates_registry() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(
+            &e.ctx,
+            tracked(&url, "skills/x"),
+            &[claude(), codex()],
+            false,
+        )
+        .unwrap();
+        let id = normalize_path(&installed_x(&e).to_string_lossy());
+        delete(&e.ctx, &id).unwrap();
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        assert_eq!(reg.skills.len(), 1);
+        assert_eq!(reg.skills[0].installs.len(), 1);
+        assert_eq!(reg.skills[0].installs[0].tool, Tool::Codex);
+        let id2 = normalize_path(&e.ctx.paths.codex_home.join("skills/x").to_string_lossy());
+        delete(&e.ctx, &id2).unwrap();
+        assert!(
+            load_registry(&e.ctx.registry_path)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        assert!(delete(&e.ctx, &id2).is_err());
+    }
+
+    #[test]
+    fn sync_claude_to_codex_global() {
+        let e = env();
+        let (_dir, id) = install_demo(&e, claude());
+        let out = sync_to(&e.ctx, &id, codex(), false).unwrap();
+        assert_eq!(out.tool, Tool::Codex);
+        assert_eq!(out.kind, crate::skills::model::SkillKind::User);
+        assert!(!out.readonly);
+        let d = e.ctx.paths.codex_home.join("skills/demo");
+        assert!(d.join("SKILL.md").is_file() && d.join("ref/a.md").is_file());
+        assert!(!d.join(".git").exists());
+        // Source untouched; no registry entry without a source.
+        assert!(
+            e.ctx
+                .paths
+                .claude_home
+                .join("skills/demo/SKILL.md")
+                .is_file()
+        );
+        assert!(
+            load_registry(&e.ctx.registry_path)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        assert_eq!(fs::read_dir(e.ctx.staging_root()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn sync_keeps_source_in_registry() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let id = normalize_path(&installed_x(&e).to_string_lossy());
+        sync_to(&e.ctx, &id, codex(), false).unwrap();
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        assert_eq!(reg.skills.len(), 1);
+        assert_eq!(reg.skills[0].installs.len(), 2);
+        assert_eq!(reg.skills[0].source.url, url);
+        let cdir = e.ctx.paths.codex_home.join("skills/x");
+        assert_eq!(reg.skills[0].content_hash, dir_content_hash(&cdir).unwrap());
+        // The copy now reports a source and tracks updates.
+        let cid = normalize_path(&cdir.to_string_lossy());
+        let es = all_entries(&e);
+        let c = es.iter().find(|s| s.id == cid).unwrap();
+        assert_eq!(c.source.as_ref().unwrap().url, url);
+    }
+
+    #[test]
+    fn sync_existing_without_overwrite_errors() {
+        let e = env();
+        let (_dir, id) = install_demo(&e, claude());
+        sync_to(&e.ctx, &id, codex(), false).unwrap();
+        let d = e.ctx.paths.codex_home.join("skills").join("demo");
+        write(&d.join("mine.txt"), "mine");
+        let r = sync_to(&e.ctx, &id, codex(), false);
+        assert_eq!(
+            r.unwrap_err(),
+            OpsError::Exists {
+                dir: d.to_string_lossy().into_owned()
+            }
+        );
+        assert!(d.join("mine.txt").exists());
+        sync_to(&e.ctx, &id, codex(), true).unwrap();
+        assert!(!d.join("mine.txt").exists());
+        let b = crate::skills::fsops::list_backups(&e.ctx.backups_root(), "demo");
+        assert_eq!(b.len(), 1);
+        assert!(
+            e.ctx
+                .backups_root()
+                .join("demo")
+                .join(&b[0].id)
+                .join("mine.txt")
+                .is_file()
+        );
+        // Syncing onto itself is rejected.
+        assert!(matches!(
+            sync_to(&e.ctx, &id, claude(), true),
+            Err(OpsError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn sync_readonly_plugin_skill_creates_user_copy() {
+        let e = env();
+        let install_path = e.root.join("cache/superpowers/7.0.0");
+        write(
+            &install_path.join("skills/brainstorming/SKILL.md"),
+            "---\nname: brainstorming\ndescription: Plan first\n---\nbody\n",
+        );
+        write(&install_path.join("skills/brainstorming/ref.md"), "r");
+        let json = serde_json::json!({
+            "version": 2,
+            "plugins": { "superpowers@claude-plugins-official": [
+                { "scope": "user", "installPath": install_path.to_string_lossy(), "version": "7.0.0" }
+            ] }
+        });
+        write(
+            &e.ctx
+                .paths
+                .claude_home
+                .join("plugins/installed_plugins.json"),
+            &json.to_string(),
+        );
+        let entry = all_entries(&e)
+            .into_iter()
+            .find(|s| s.name == "brainstorming")
+            .unwrap();
+        assert!(entry.readonly);
+        let out = sync_to(&e.ctx, &entry.id, codex(), false).unwrap();
+        assert_eq!(out.kind, crate::skills::model::SkillKind::User);
+        assert!(!out.readonly);
+        assert!(
+            e.ctx
+                .paths
+                .codex_home
+                .join("skills/brainstorming/ref.md")
+                .is_file()
+        );
+        // The plugin copy is untouched.
+        assert!(install_path.join("skills/brainstorming/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn register_source_then_check_updates_works() {
+        /// Maps a public-looking url onto the local bare repository.
+        struct RewriteGit(SystemGit, String);
+        impl GitRunner for RewriteGit {
+            fn available(&self) -> bool {
+                self.0.available()
+            }
+            fn ls_remote_head(&self, url: &str, r: Option<&str>) -> Result<String, GitError> {
+                let u = if url == FAKE_URL {
+                    self.1.as_str()
+                } else {
+                    url
+                };
+                self.0.ls_remote_head(u, r)
+            }
+            fn shallow_clone(
+                &self,
+                u: &str,
+                r: Option<&str>,
+                d: &Path,
+            ) -> Result<String, GitError> {
+                self.0.shallow_clone(u, r, d)
+            }
+            fn remote_url(&self, d: &Path) -> Option<String> {
+                self.0.remote_url(d)
+            }
+            fn head_commit(&self, d: &Path) -> Option<String> {
+                self.0.head_commit(d)
+            }
+            fn repo_root(&self, d: &Path) -> Option<PathBuf> {
+                self.0.repo_root(d)
+            }
+            fn pull_ff_only(&self, d: &Path) -> Result<String, GitError> {
+                self.0.pull_ff_only(d)
+            }
+        }
+        const FAKE_URL: &str = "https://example.com/o/r";
+        let mut e = env();
+        let (real_url, work) = repo_with_skill(&e);
+        e.ctx.git = Arc::new(RewriteGit(SystemGit::new(), real_url));
+        let url = FAKE_URL.to_string();
+        let (dir, id) = install_demo(&e, claude());
+        let head = git(&work, &["rev-parse", "HEAD"]);
+        let out = register_source(&e.ctx, &id, &url, "skills/x").unwrap();
+        let s = out.source.expect("source after register");
+        assert_eq!(s.url, url);
+        assert_eq!(s.skill_path, "skills/x");
+        let reg = load_registry(&e.ctx.registry_path).unwrap();
+        assert_eq!(reg.skills[0].source.origin, SourceOrigin::Manual);
+        assert_eq!(reg.skills.len(), 1);
+        assert_eq!(reg.skills[0].content_hash, dir_content_hash(&dir).unwrap());
+        // Remote has a commit, none recorded locally -> update available.
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        assert_eq!(st.len(), 1);
+        assert_eq!(st[0].error, None);
+        assert_eq!(st[0].latest.as_deref(), Some(head.as_str()));
+        assert!(st[0].has_update);
+        // Bad urls and read-only skills are rejected.
+        assert!(matches!(
+            register_source(&e.ctx, &id, "ftp://nope", ""),
+            Err(OpsError::Invalid { .. })
+        ));
+        let d = e.ctx.paths.codex_home.join("skills/.system/sys");
+        write(&d.join("SKILL.md"), "---\nname: sys\ndescription: s\n---\n");
+        let sid = normalize_path(&d.to_string_lossy());
+        assert_eq!(
+            register_source(&e.ctx, &sid, &url, "").unwrap_err(),
+            OpsError::ReadOnly
+        );
+    }
+
+    #[test]
+    fn delete_registry_save_failure_reports_files_updated() {
+        let e = env();
+        let (url, _w) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let dir = installed_x(&e);
+        let id = normalize_path(&dir.to_string_lossy());
+        // Make the registry path unwritable by replacing it with a directory.
+        fs::remove_file(&e.ctx.registry_path).unwrap();
+        fs::create_dir_all(&e.ctx.registry_path).unwrap();
+        // An unreadable registry makes delete refuse before touching files.
+        let r = delete(&e.ctx, &id);
+        assert!(matches!(r, Err(OpsError::Io { .. })), "{r:?}");
+        assert!(dir.join("SKILL.md").is_file());
     }
 }

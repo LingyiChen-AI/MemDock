@@ -3,12 +3,15 @@
 //! writes memory files from suggestions.
 //!
 //! Safety rules: the store lock is held only for short reads/writes, never
-//! across file IO; writes go through `write_memory` (hash check + snapshot +
+//! across file IO; the whole apply runs under `apply_lock` (injected, shared
+//! with the memory editor's write lock) so writes to the same file are
+//! serialized; writes go through `write_memory` (hash check + snapshot +
 //! BOM/CRLF preservation); a missing target file is only created when its
-//! parent directory already exists.
+//! parent directory already exists; applying is idempotent (a block that is
+//! already present is never added twice).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 
@@ -20,14 +23,28 @@ use crate::memory::snapshot::SnapshotStore;
 pub struct ApplyCtx {
     pub store: Arc<Mutex<Store>>,
     pub snapshots: SnapshotStore,
+    /// Held for the whole apply / reject. Wire the same lock the memory
+    /// editor's saves use.
+    pub apply_lock: Arc<Mutex<()>>,
+}
+
+impl ApplyCtx {
+    pub fn new(store: Arc<Mutex<Store>>, snapshots: SnapshotStore, apply_lock: Arc<Mutex<()>>) -> Self {
+        ApplyCtx { store, snapshots, apply_lock }
+    }
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ApplyOutcome {
-    Applied { hash: String },
+    /// File written. `saved == false`: the status could not be persisted
+    /// ("written, but status save failed").
+    Applied { hash: String, saved: bool },
     NeedsConfirm { reason: String },
     Stale,
+    /// The change is already present in the target; nothing written and the
+    /// suggestion is marked Stale.
+    AlreadyApplied,
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
@@ -47,14 +64,41 @@ fn lf(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
-fn lock(ctx: &ApplyCtx) -> std::sync::MutexGuard<'_, Store> {
+fn lock_store(ctx: &ApplyCtx) -> MutexGuard<'_, Store> {
     ctx.store.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn persist(store: &Store) {
-    // The file write already succeeded; a failed bookkeeping save must not
-    // turn into an error that invites a second apply.
-    let _ = store.save();
+fn norm_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Moves a still-Pending suggestion to `status` and saves. `Ok(false)` when it
+/// was no longer Pending; `Err` when the save failed (status stays set in
+/// memory; callers decide whether to revert).
+fn transition(ctx: &ApplyCtx, id: &str, status: SuggestionStatus) -> Result<bool, String> {
+    let mut st = lock_store(ctx);
+    let pending = st
+        .suggestions()
+        .iter()
+        .find(|s| s.id == id)
+        .is_some_and(|s| s.status == SuggestionStatus::Pending);
+    if !pending {
+        return Ok(false);
+    }
+    st.set_status(id, status);
+    st.save().map(|_| true).map_err(|e| e.to_string())
+}
+
+/// Like `transition` but a failed save is reverted and reported as an error.
+fn transition_strict(ctx: &ApplyCtx, id: &str, status: SuggestionStatus) -> Result<(), ApplyError> {
+    match transition(ctx, id, status) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ApplyError::NotPending),
+        Err(message) => {
+            lock_store(ctx).set_status(id, SuggestionStatus::Pending);
+            Err(ApplyError::Io { message })
+        }
+    }
 }
 
 /// Appends `block` after `text`: exactly one blank line in between, and the
@@ -95,14 +139,46 @@ fn remove_block(text: &str, pos: usize, old: &str) -> String {
     out
 }
 
+/// Position of `old` when it occurs exactly once (overlapping matches count).
+fn unique_pos(text: &str, old: &str) -> Option<usize> {
+    let first = text.find(old)?;
+    let step = text[first..].chars().next().map_or(1, char::len_utf8);
+    if text[first + step..].contains(old) {
+        None
+    } else {
+        Some(first)
+    }
+}
+
+/// Makes the replacement's trailing newline match `old`'s.
+fn align_newline(old: &str, r: &str) -> String {
+    if old.ends_with('\n') {
+        if r.ends_with('\n') { r.to_string() } else { format!("{r}\n") }
+    } else {
+        r.trim_end_matches('\n').to_string()
+    }
+}
+
 pub fn apply(
     ctx: &ApplyCtx,
     id: &str,
     edited_new_text: Option<String>,
     confirm_changed: bool,
 ) -> Result<ApplyOutcome, ApplyError> {
+    apply_inner(ctx, id, edited_new_text, confirm_changed, &|| {})
+}
+
+/// `before_write` runs right before the write (test hook).
+fn apply_inner(
+    ctx: &ApplyCtx,
+    id: &str,
+    edited_new_text: Option<String>,
+    confirm_changed: bool,
+    before_write: &dyn Fn(),
+) -> Result<ApplyOutcome, ApplyError> {
+    let _guard = ctx.apply_lock.lock().unwrap_or_else(|e| e.into_inner());
     let s: Suggestion = {
-        let st = lock(ctx);
+        let st = lock_store(ctx);
         st.suggestions().iter().find(|s| s.id == id).cloned().ok_or(ApplyError::NotFound)?
     };
     if s.status != SuggestionStatus::Pending {
@@ -113,6 +189,11 @@ pub fn apply(
     let exists = !cur.hash.is_empty();
     let changed = cur.hash != s.base_hash;
     let new_text = edited_new_text.or_else(|| s.new_text.clone()).map(|t| lf(&t));
+    let target_changed = || Ok(ApplyOutcome::NeedsConfirm { reason: "target_changed".into() });
+    let already = |ctx: &ApplyCtx| -> Result<ApplyOutcome, ApplyError> {
+        transition_strict(ctx, id, SuggestionStatus::Stale)?;
+        Ok(ApplyOutcome::AlreadyApplied)
+    };
 
     let result_text = match s.kind {
         SuggestionKind::Add => {
@@ -120,8 +201,11 @@ pub fn apply(
             if !exists && !path.parent().is_some_and(Path::is_dir) {
                 return Err(invalid("parent directory not found"));
             }
+            if exists && norm_ws(&cur.text).contains(&norm_ws(&block)) {
+                return already(ctx);
+            }
             if changed && !confirm_changed {
-                return Ok(ApplyOutcome::NeedsConfirm { reason: "target_changed".into() });
+                return target_changed();
             }
             append_block(&cur.text, &block)
         }
@@ -129,36 +213,51 @@ pub fn apply(
             let old = s.old_text.as_deref().map(lf).filter(|t| !t.is_empty());
             let old = old.ok_or_else(|| invalid("old_text required"))?;
             let replacement = match (s.kind, new_text) {
-                (SuggestionKind::Modify, Some(t)) => Some(t),
-                (SuggestionKind::Modify, None) => return Err(invalid("new_text required")),
-                (_, Some(t)) if !t.is_empty() => Some(t),
+                (SuggestionKind::Modify, Some(t)) if !t.trim().is_empty() => Some(t),
+                (SuggestionKind::Modify, _) => return Err(invalid("new_text required")),
+                (_, Some(t)) if !t.trim().is_empty() => Some(t),
                 _ => None,
             };
-            let mut hits = cur.text.match_indices(&old).map(|(i, _)| i);
-            let pos = match (hits.next(), hits.next()) {
-                (Some(p), None) => p,
-                _ => {
-                    lock(ctx).set_status(id, SuggestionStatus::Stale);
-                    persist(&lock(ctx));
-                    return Ok(ApplyOutcome::Stale);
+            let pos = unique_pos(&cur.text, &old);
+            if changed {
+                if let Some(r) = &replacement {
+                    let (nr, no) = (norm_ws(r), norm_ws(&old));
+                    if norm_ws(&cur.text).contains(&nr) && (!cur.text.contains(&old) || nr.contains(&no)) {
+                        return already(ctx);
+                    }
                 }
+            }
+            let Some(pos) = pos else {
+                transition_strict(ctx, id, SuggestionStatus::Stale)?;
+                return Ok(ApplyOutcome::Stale);
             };
             if changed && !confirm_changed {
-                return Ok(ApplyOutcome::NeedsConfirm { reason: "target_changed".into() });
+                return target_changed();
             }
             match replacement {
-                Some(r) => format!("{}{}{}", &cur.text[..pos], r, &cur.text[pos + old.len()..]),
+                Some(r) => {
+                    let r = align_newline(&old, &r);
+                    format!("{}{}{}", &cur.text[..pos], r, &cur.text[pos + old.len()..])
+                }
                 None => remove_block(&cur.text, pos, &old),
             }
         }
     };
 
+    // Still Pending right before writing (a reject may have raced in).
+    let still_pending = lock_store(ctx)
+        .suggestions()
+        .iter()
+        .find(|x| x.id == id)
+        .is_some_and(|x| x.status == SuggestionStatus::Pending);
+    if !still_pending {
+        return Err(ApplyError::NotPending);
+    }
+    before_write();
     match write_memory(&path, &result_text, &cur.hash, &ctx.snapshots) {
         Ok(fc) => {
-            let mut st = lock(ctx);
-            st.set_status(id, SuggestionStatus::Accepted);
-            persist(&st);
-            Ok(ApplyOutcome::Applied { hash: fc.hash })
+            let saved = matches!(transition(ctx, id, SuggestionStatus::Accepted), Ok(true));
+            Ok(ApplyOutcome::Applied { hash: fc.hash, saved })
         }
         Err(WriteError::DiskChanged { .. }) => Ok(ApplyOutcome::NeedsConfirm { reason: "disk_changed".into() }),
         Err(WriteError::Io(e)) => Err(ApplyError::Io { message: e.to_string() }),
@@ -166,15 +265,11 @@ pub fn apply(
 }
 
 pub fn reject(ctx: &ApplyCtx, id: &str) -> Result<(), ApplyError> {
-    let mut st = lock(ctx);
-    match st.suggestions().iter().find(|s| s.id == id) {
-        None => return Err(ApplyError::NotFound),
-        Some(s) if s.status != SuggestionStatus::Pending => return Err(ApplyError::NotPending),
-        Some(_) => {}
+    let _guard = ctx.apply_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if !lock_store(ctx).suggestions().iter().any(|s| s.id == id) {
+        return Err(ApplyError::NotFound);
     }
-    st.set_status(id, SuggestionStatus::Rejected);
-    persist(&st);
-    Ok(())
+    transition_strict(ctx, id, SuggestionStatus::Rejected)
 }
 
 /// Applies in order; continues after failures; `NeedsConfirm` items are not
@@ -201,10 +296,11 @@ mod tests {
         fs::create_dir_all(root.join("data")).unwrap();
         fs::create_dir_all(root.join("proj")).unwrap();
         let store = Store::load(&root.join("data")).unwrap();
-        let ctx = ApplyCtx {
-            store: Arc::new(Mutex::new(store)),
-            snapshots: SnapshotStore::new(root.join("snaps")),
-        };
+        let ctx = ApplyCtx::new(
+            Arc::new(Mutex::new(store)),
+            SnapshotStore::new(root.join("snaps")),
+            Arc::new(Mutex::new(())),
+        );
         Env { _dir: dir, root, ctx }
     }
 
@@ -394,5 +490,176 @@ mod tests {
         assert_eq!(fs::read(&p).unwrap(), b"\xEF\xBB\xBFone\r\n\r\n2\r\nmore\r\n");
         apply(&e.ctx, "b", None, true).unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"\xEF\xBB\xBFone\r\n\r\n2\r\nmore\r\n\r\ntail\r\n");
+    }
+
+    fn disk(p: &Path) -> String {
+        fs::read_to_string(p).unwrap()
+    }
+
+    #[test]
+    fn status_save_failure_is_reported() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "one\n\ntwo\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
+        put(&e, "r", SuggestionKind::Add, &p, None, Some("zzz"));
+        put(&e, "s", SuggestionKind::Modify, &p, Some("missing"), Some("m"));
+        // Break the store directory so every save fails.
+        fs::remove_dir_all(e.root.join("data")).unwrap();
+        fs::write(e.root.join("data"), "not a dir").unwrap();
+        // file written, status not persisted -> saved:false
+        let r = apply(&e.ctx, "a", None, false).unwrap();
+        assert!(matches!(r, ApplyOutcome::Applied { saved: false, .. }));
+        assert_eq!(disk(&p), "1\n\ntwo\n");
+        // reject / stale marking surface the error and revert to Pending
+        assert!(matches!(reject(&e.ctx, "r"), Err(ApplyError::Io { .. })));
+        assert_eq!(status(&e, "r"), SuggestionStatus::Pending);
+        assert!(matches!(apply(&e.ctx, "s", None, true), Err(ApplyError::Io { .. })));
+        assert_eq!(status(&e, "s"), SuggestionStatus::Pending);
+    }
+
+    #[test]
+    fn add_is_idempotent() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "A\n\nnew   line\n").unwrap();
+        put(&e, "a", SuggestionKind::Add, &p, None, Some("new line"));
+        assert_eq!(apply(&e.ctx, "a", None, true).unwrap(), ApplyOutcome::AlreadyApplied);
+        assert_eq!(disk(&p), "A\n\nnew   line\n");
+        assert_eq!(status(&e, "a"), SuggestionStatus::Stale);
+    }
+
+    #[test]
+    fn modify_already_applied_is_detected() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "use npm\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("use npm"), Some("use pnpm"));
+        put(&e, "b", SuggestionKind::Modify, &p, Some("use npm"), Some("use npm always"));
+        fs::write(&p, "use pnpm\n\nextra\n").unwrap();
+        assert_eq!(apply(&e.ctx, "a", None, true).unwrap(), ApplyOutcome::AlreadyApplied);
+        // new_text contains old_text and is already there: must not double up
+        fs::write(&p, "use npm always\n\nextra\n").unwrap();
+        assert_eq!(apply(&e.ctx, "b", None, true).unwrap(), ApplyOutcome::AlreadyApplied);
+        assert_eq!(disk(&p), "use npm always\n\nextra\n");
+    }
+
+    #[test]
+    fn modify_with_blank_new_text_is_invalid() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "use npm\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("use npm"), Some("x"));
+        for t in ["", "  \n"] {
+            let r = apply(&e.ctx, "a", Some(t.into()), false);
+            assert!(matches!(r, Err(ApplyError::Invalid { ref message }) if message == "new_text required"));
+        }
+        assert_eq!(disk(&p), "use npm\n");
+    }
+
+    #[test]
+    fn replacement_trailing_newline_follows_old_text() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "foo\nz\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("foo\n"), Some("bar"));
+        apply(&e.ctx, "a", None, false).unwrap();
+        assert_eq!(disk(&p), "bar\nz\n");
+        fs::write(&p, "foo\nz\n").unwrap();
+        put(&e, "b", SuggestionKind::Modify, &p, Some("foo"), Some("bar\n"));
+        apply(&e.ctx, "b", None, false).unwrap();
+        assert_eq!(disk(&p), "bar\nz\n");
+    }
+
+    #[test]
+    fn overlapping_matches_are_not_unique() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "aaa\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("aa"), Some("b"));
+        assert_eq!(apply(&e.ctx, "a", None, false).unwrap(), ApplyOutcome::Stale);
+        assert_eq!(disk(&p), "aaa\n");
+    }
+
+    #[test]
+    fn disk_change_between_read_and_write_needs_confirm() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "use npm\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("use npm"), Some("use pnpm"));
+        let r = apply_inner(&e.ctx, "a", None, false, &|| fs::write(&p, "edited elsewhere\n").unwrap()).unwrap();
+        assert_eq!(r, ApplyOutcome::NeedsConfirm { reason: "disk_changed".into() });
+        assert_eq!(disk(&p), "edited elsewhere\n");
+        assert_eq!(status(&e, "a"), SuggestionStatus::Pending);
+    }
+
+    #[test]
+    fn statuses_persist_across_store_load() {
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "one\n").unwrap();
+        put(&e, "ok", SuggestionKind::Modify, &p, Some("one"), Some("1"));
+        put(&e, "st", SuggestionKind::Modify, &p, Some("nope"), Some("2"));
+        put(&e, "rj", SuggestionKind::Add, &p, None, Some("x"));
+        apply(&e.ctx, "ok", None, false).unwrap();
+        apply(&e.ctx, "st", None, true).unwrap();
+        reject(&e.ctx, "rj").unwrap();
+        let reloaded = Store::load(&e.root.join("data")).unwrap();
+        let get = |id: &str| reloaded.suggestions().iter().find(|s| s.id == id).unwrap().status;
+        assert_eq!(get("ok"), SuggestionStatus::Accepted);
+        assert_eq!(get("st"), SuggestionStatus::Stale);
+        assert_eq!(get("rj"), SuggestionStatus::Rejected);
+    }
+
+    #[test]
+    fn concurrent_applies_on_same_file_are_serialized() {
+        for _ in 0..10 {
+            let e = env();
+            let p = e.root.join("proj/CLAUDE.md");
+            fs::write(&p, "one\n\ntwo\n").unwrap();
+            put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
+            put(&e, "b", SuggestionKind::Modify, &p, Some("two"), Some("2"));
+            std::thread::scope(|sc| {
+                let ha = sc.spawn(|| apply(&e.ctx, "a", None, true));
+                let hb = sc.spawn(|| apply(&e.ctx, "b", None, true));
+                assert!(matches!(ha.join().unwrap().unwrap(), ApplyOutcome::Applied { .. }));
+                assert!(matches!(hb.join().unwrap().unwrap(), ApplyOutcome::Applied { .. }));
+            });
+            assert_eq!(disk(&p), "1\n\n2\n");
+        }
+        // without confirmation exactly one wins, the other asks
+        let e = env();
+        let p = e.root.join("proj/CLAUDE.md");
+        fs::write(&p, "one\n\ntwo\n").unwrap();
+        put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
+        put(&e, "b", SuggestionKind::Modify, &p, Some("two"), Some("2"));
+        let (ra, rb) = std::thread::scope(|sc| {
+            let ha = sc.spawn(|| apply(&e.ctx, "a", None, false).unwrap());
+            let hb = sc.spawn(|| apply(&e.ctx, "b", None, false).unwrap());
+            (ha.join().unwrap(), hb.join().unwrap())
+        });
+        let applied = [&ra, &rb].iter().filter(|r| matches!(r, ApplyOutcome::Applied { .. })).count();
+        let asked = [&ra, &rb].iter().filter(|r| matches!(r, ApplyOutcome::NeedsConfirm { .. })).count();
+        assert_eq!((applied, asked), (1, 1));
+    }
+
+    #[test]
+    fn reject_racing_apply_never_leaves_inconsistent_state() {
+        for _ in 0..20 {
+            let e = env();
+            let p = e.root.join("proj/CLAUDE.md");
+            fs::write(&p, "one\n").unwrap();
+            put(&e, "a", SuggestionKind::Modify, &p, Some("one"), Some("1"));
+            std::thread::scope(|sc| {
+                let ha = sc.spawn(|| apply(&e.ctx, "a", None, false));
+                let hr = sc.spawn(|| reject(&e.ctx, "a"));
+                let _ = (ha.join().unwrap(), hr.join().unwrap());
+            });
+            match status(&e, "a") {
+                SuggestionStatus::Accepted => assert_eq!(disk(&p), "1\n"),
+                SuggestionStatus::Rejected => assert_eq!(disk(&p), "one\n"),
+                other => panic!("unexpected status {other:?}"),
+            }
+        }
     }
 }

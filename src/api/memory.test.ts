@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(..
 import {
   writeMemoryFile,
   listMemories,
+  refreshMemories,
   updateUiPrefs,
   onMemoryChanged,
 } from "./memory";
@@ -38,6 +39,8 @@ describe("memory api", () => {
     invoke.mockResolvedValue({});
     await listMemories();
     expect(invoke).toHaveBeenCalledWith("list_memories");
+    await refreshMemories();
+    expect(invoke).toHaveBeenLastCalledWith("refresh_memories");
     await updateUiPrefs("en", undefined);
     expect(invoke).toHaveBeenLastCalledWith("update_ui_prefs", { language: "en", theme: null });
   });

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -16,6 +16,8 @@ use crate::paths::AgentPaths;
 use crate::projects::normalize_path;
 
 const DEBOUNCE: Duration = Duration::from_millis(300);
+/// Upper bound on how long a continuous stream of events can postpone a flush.
+const MAX_WAIT: Duration = Duration::from_secs(1);
 
 #[derive(Serialize, Clone, Debug)]
 struct ChangedPayload {
@@ -105,47 +107,104 @@ fn build_watcher(tx: &Sender<Msg>, state: &AppState) -> Option<RecommendedWatche
     Some(w)
 }
 
+/// Pure debounce state: only relevant events count; the flush is due 300ms
+/// after the last relevant event, but never later than `max_wait` after the first.
+#[derive(Debug, Clone)]
+pub struct Debouncer {
+    debounce: Duration,
+    max_wait: Duration,
+    first: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Debouncer {
+    pub fn new(debounce: Duration, max_wait: Duration) -> Self {
+        Self {
+            debounce,
+            max_wait,
+            first: None,
+            last: None,
+        }
+    }
+
+    /// Records an event. Irrelevant events are ignored and never move the deadline.
+    pub fn offer(&mut self, relevant: bool, now: Instant) {
+        if !relevant {
+            return;
+        }
+        self.first.get_or_insert(now);
+        self.last = Some(now);
+    }
+
+    /// When the pending batch must be flushed; `None` if nothing is pending.
+    pub fn deadline(&self) -> Option<Instant> {
+        let (first, last) = (self.first?, self.last?);
+        Some((last + self.debounce).min(first + self.max_wait))
+    }
+
+    pub fn reset(&mut self) {
+        self.first = None;
+        self.last = None;
+    }
+}
+
 /// Starts the watcher thread and returns the handle to manage in Tauri state.
 pub fn start(app: AppHandle, state: Arc<AppState>) -> WatcherHandle {
     let (tx, rx) = mpsc::channel::<Msg>();
     let thread_tx = tx.clone();
     std::thread::spawn(move || {
         let mut _watcher = build_watcher(&thread_tx, &state);
+        let mut roots = project_roots(&state);
         let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut deb = Debouncer::new(DEBOUNCE, MAX_WAIT);
         loop {
-            match rx.recv() {
-                Err(_) => return,
-                Ok(Msg::Reload) => _watcher = build_watcher(&thread_tx, &state),
-                Ok(Msg::Fs(p)) => pending.extend(p),
-            }
-            // Debounce: keep collecting until 300ms pass without events.
-            loop {
-                match rx.recv_timeout(DEBOUNCE) {
-                    Ok(Msg::Fs(p)) => pending.extend(p),
-                    Ok(Msg::Reload) => _watcher = build_watcher(&thread_tx, &state),
-                    Err(RecvTimeoutError::Timeout) => break,
+            let msg = match deb.deadline() {
+                Some(dl) => match rx.recv_timeout(dl.saturating_duration_since(Instant::now())) {
+                    Ok(m) => Some(m),
+                    Err(RecvTimeoutError::Timeout) => None,
                     Err(RecvTimeoutError::Disconnected) => return,
+                },
+                None => match rx.recv() {
+                    Ok(m) => Some(m),
+                    Err(_) => return,
+                },
+            };
+            match msg {
+                Some(Msg::Fs(paths)) => {
+                    let now = Instant::now();
+                    for p in paths {
+                        let relevant = is_relevant(&p, &state.paths, &roots);
+                        deb.offer(relevant, now);
+                        if relevant {
+                            pending.insert(p);
+                        }
+                    }
+                }
+                Some(Msg::Reload) => {
+                    _watcher = build_watcher(&thread_tx, &state);
+                    roots = project_roots(&state);
+                }
+                None => {
+                    deb.reset();
+                    let changed: BTreeSet<String> = std::mem::take(&mut pending)
+                        .iter()
+                        .map(|p| normalize_path(&p.to_string_lossy()))
+                        .collect();
+                    if changed.is_empty() {
+                        continue;
+                    }
+                    state.rescan();
+                    roots = project_roots(&state);
+                    let _ = app.emit(
+                        "memory-changed",
+                        ChangedPayload {
+                            paths: changed.into_iter().collect(),
+                        },
+                    );
                 }
             }
-            let roots = project_roots(&state);
-            let changed: BTreeSet<String> = std::mem::take(&mut pending)
-                .iter()
-                .filter(|p| is_relevant(p, &state.paths, &roots))
-                .map(|p| normalize_path(&p.to_string_lossy()))
-                .collect();
-            if changed.is_empty() {
-                continue;
-            }
-            state.rescan();
-            let _ = app.emit(
-                "memory-changed",
-                ChangedPayload {
-                    paths: changed.into_iter().collect(),
-                },
-            );
         }
     });
-    
     WatcherHandle { tx }
 }
 
@@ -168,5 +227,33 @@ mod tests {
         assert!(!yes("/h/.claude/settings.json"));
         assert!(!yes("/work/app/src/main.rs"));
         assert!(!yes("/other/CLAUDE.md"));
+    }
+
+    #[test]
+    fn irrelevant_events_do_not_reset_timer() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let mut d = Debouncer::new(ms(300), ms(1000));
+        assert_eq!(d.deadline(), None);
+        d.offer(false, t0);
+        assert_eq!(d.deadline(), None);
+        d.offer(true, t0 + ms(100));
+        assert_eq!(d.deadline(), Some(t0 + ms(400)));
+        d.offer(false, t0 + ms(350));
+        assert_eq!(d.deadline(), Some(t0 + ms(400)));
+        d.reset();
+        assert_eq!(d.deadline(), None);
+    }
+
+    #[test]
+    fn max_wait_cap_fires() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let mut d = Debouncer::new(ms(300), ms(1000));
+        for i in 0..20 {
+            d.offer(true, t0 + ms(i * 200));
+        }
+        // Events keep coming every 200ms, yet the deadline is capped at first + 1s.
+        assert_eq!(d.deadline(), Some(t0 + ms(1000)));
     }
 }

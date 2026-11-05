@@ -10,7 +10,7 @@ use tauri::State;
 
 use crate::memory::analyze::{estimate_tokens, find_imports, ImportRef};
 use crate::memory::codex_db::{read_codex_memories, CodexDbResult};
-use crate::memory::io::{read_memory, write_memory, FileContent, WriteError};
+use crate::memory::io::{decode, read_memory, write_memory, FileContent, WriteError};
 use crate::memory::scan::scan_all;
 use crate::memory::search::{search, SearchHit};
 use crate::memory::snapshot::{SnapshotInfo, SnapshotStore};
@@ -30,6 +30,8 @@ pub struct AppState {
     pub index: Mutex<MemoryIndex>,
     /// Serializes load-modify-save cycles on settings.json.
     settings_lock: Mutex<()>,
+    /// Serializes writes so two concurrent writes cannot both pass the hash check.
+    write_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
                 projects: vec![],
             }),
             settings_lock: Mutex::new(()),
+            write_lock: Mutex::new(()),
         };
         state.rescan();
         state
@@ -72,30 +75,35 @@ impl AppState {
     }
 
     /// Path of the indexed, non-Codex-DB memory file matching `path`, if any.
-    fn find_allowed(&self, path: &str) -> Option<PathBuf> {
+    /// Returns the path and whether its project exists (always true for global files).
+    fn find_allowed(&self, path: &str) -> Option<(PathBuf, bool)> {
         let id = normalize_path(path);
         let idx = lock(&self.index);
-        let all = idx
-            .global
+        if let Some(p) = find_in(idx.global.iter(), &id) {
+            return Some((p, true));
+        }
+        idx.projects
             .iter()
-            .chain(idx.projects.iter().flat_map(|p| p.files.iter()));
-        find_in(all, &id)
+            .find_map(|pm| find_in(pm.files.iter(), &id).map(|p| (p, pm.project.exists)))
     }
 
-    fn authorize(&self, path: &str, rescan_if_missing: bool) -> Result<PathBuf, CommandError> {
-        if let Some(p) = self.find_allowed(path) {
-            return Ok(p);
-        }
-        if rescan_if_missing {
+    fn authorize(&self, path: &str, for_write: bool) -> Result<PathBuf, CommandError> {
+        let mut found = self.find_allowed(path);
+        if found.is_none() && for_write {
             self.rescan();
-            if let Some(p) = self.find_allowed(path) {
-                return Ok(p);
-            }
+            found = self.find_allowed(path);
         }
-        Err(CommandError::new(
-            "forbidden",
-            "path is not a known memory file",
-        ))
+        match found {
+            None => Err(CommandError::new(
+                "forbidden",
+                "path is not a known memory file",
+            )),
+            Some((_, false)) if for_write => Err(CommandError::new(
+                "invalid",
+                "project directory does not exist",
+            )),
+            Some((p, _)) => Ok(p),
+        }
     }
 }
 
@@ -172,7 +180,14 @@ fn to_dto(state: &AppState, path: &Path, c: FileContent) -> FileContentDto {
     }
 }
 
+/// Returns the cached index (rescans happen at startup, on watcher events and
+/// on manual-project changes).
 pub fn list_memories_impl(state: &AppState) -> MemoryIndex {
+    state.snapshot_index()
+}
+
+/// Forces a rescan, then returns the fresh index.
+pub fn refresh_memories_impl(state: &AppState) -> MemoryIndex {
     state.rescan();
     state.snapshot_index()
 }
@@ -189,6 +204,7 @@ pub fn write_memory_file_impl(
     text: &str,
     expected_hash: &str,
 ) -> Result<FileContentDto, CommandError> {
+    let _w = lock(&state.write_lock);
     let p = state.authorize(path, true)?;
     let c = write_memory(&p, text, expected_hash, &state.snapshots)?;
     Ok(to_dto(state, &p, c))
@@ -209,7 +225,7 @@ pub fn list_snapshots_impl(
 pub fn read_snapshot_impl(state: &AppState, path: &str, id: &str) -> Result<String, CommandError> {
     let p = state.authorize(path, false)?;
     let bytes = state.snapshots.read(&p, id)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(decode(&bytes)?.text)
 }
 
 pub fn read_codex_db_impl(state: &AppState) -> CodexDbResult {
@@ -265,8 +281,11 @@ pub fn update_ui_prefs_impl(
         }
     }
     modify_settings(state, |s| {
-        if language.is_some() {
-            s.language = language;
+        match language.as_deref() {
+            None => {}
+            // "system" clears the stored language so the UI follows the system again.
+            Some("system") => s.language = None,
+            Some(_) => s.language = language,
         }
         if theme.is_some() {
             s.theme = theme;
@@ -276,17 +295,22 @@ pub fn update_ui_prefs_impl(
 
 type St<'a> = State<'a, Arc<AppState>>;
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_memories(state: St) -> MemoryIndex {
     list_memories_impl(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
+pub fn refresh_memories(state: St) -> MemoryIndex {
+    refresh_memories_impl(&state)
+}
+
+#[tauri::command(async)]
 pub fn read_memory_file(state: St, path: String) -> Result<FileContentDto, CommandError> {
     read_memory_file_impl(&state, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn write_memory_file(
     state: St,
     path: String,
@@ -296,27 +320,27 @@ pub fn write_memory_file(
     write_memory_file_impl(&state, &path, &text, &expected_hash)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn search_memories(state: St, query: String) -> Vec<SearchHit> {
     search_memories_impl(&state, &query)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_snapshots(state: St, path: String) -> Result<Vec<SnapshotInfo>, CommandError> {
     list_snapshots_impl(&state, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_snapshot(state: St, path: String, id: String) -> Result<String, CommandError> {
     read_snapshot_impl(&state, &path, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_codex_db(state: St) -> CodexDbResult {
     read_codex_db_impl(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_manual_project(
     state: St,
     watcher: State<WatcherHandle>,
@@ -327,7 +351,7 @@ pub fn add_manual_project(
     Ok(idx)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_manual_project(
     state: St,
     watcher: State<WatcherHandle>,
@@ -338,12 +362,12 @@ pub fn remove_manual_project(
     Ok(idx)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_settings(state: St) -> Settings {
     get_settings_impl(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_ui_prefs(
     state: St,
     language: Option<String>,
@@ -425,6 +449,69 @@ mod tests {
         let idx = remove_manual_project_impl(&st, proj.to_str().unwrap()).unwrap();
         assert!(!idx.projects.iter().any(|p| p.project.id == pid));
         assert!(crate::settings::load_settings(&st.settings_path).manual_projects.is_empty());
+    }
+
+    #[test]
+    fn list_is_cached_and_refresh_rescans() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let md = st.paths.claude_home.join("CLAUDE.md");
+        fs::write(&md, "hi").unwrap();
+        let cached = list_memories_impl(&st);
+        assert!(cached.global.iter().any(|f| f.path.ends_with("CLAUDE.md") && !f.exists));
+        let fresh = refresh_memories_impl(&st);
+        assert!(fresh.global.iter().any(|f| f.path.ends_with("CLAUDE.md") && f.exists));
+    }
+
+    #[test]
+    fn read_snapshot_strips_bom_and_crlf() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let md = st.paths.claude_home.join("CLAUDE.md");
+        fs::write(&md, b"\xEF\xBB\xBFa\r\nb\r\n").unwrap();
+        st.rescan();
+        let c = read_memory_file_impl(&st, md.to_str().unwrap()).unwrap();
+        write_memory_file_impl(&st, md.to_str().unwrap(), "c\n", &c.hash).unwrap();
+        let snaps = list_snapshots_impl(&st, md.to_str().unwrap()).unwrap();
+        let text = read_snapshot_impl(&st, md.to_str().unwrap(), &snaps[0].id).unwrap();
+        assert_eq!(text, c.text);
+        assert_eq!(text, "a\nb\n");
+    }
+
+    #[test]
+    fn write_to_missing_project_is_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        let proj = tmp.path().join("gone");
+        let enc = st.paths.claude_home.join("projects").join("enc");
+        fs::create_dir_all(enc.join("memory")).unwrap();
+        let cwd = proj.to_string_lossy().replace('\\', "/");
+        fs::write(
+            enc.join("s.jsonl"),
+            format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}
+"),
+        )
+        .unwrap();
+        let target = enc.join("memory").join("MEMORY.md");
+        fs::write(&target, "m").unwrap();
+        let idx = refresh_memories_impl(&st);
+        assert!(idx.projects.iter().any(|p| !p.project.exists && !p.files.is_empty()));
+        let err = write_memory_file_impl(&st, target.to_str().unwrap(), "x", "").unwrap_err();
+        assert_eq!(err.code, "invalid");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "m");
+        // Global files are unaffected.
+        let g = st.paths.claude_home.join("CLAUDE.md");
+        assert!(write_memory_file_impl(&st, g.to_str().unwrap(), "x", "").is_ok());
+    }
+
+    #[test]
+    fn language_system_clears_but_theme_system_is_stored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = state(tmp.path());
+        update_ui_prefs_impl(&st, Some("en".into()), Some("system".into())).unwrap();
+        let s = update_ui_prefs_impl(&st, Some("system".into()), None).unwrap();
+        assert_eq!(s.language, None);
+        assert_eq!(s.theme.as_deref(), Some("system"));
     }
 
     #[test]

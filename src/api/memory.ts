@@ -14,6 +14,11 @@ export function listMemories(): Promise<MemoryIndex> {
   return invoke<MemoryIndex>("list_memories");
 }
 
+/** Forces a rescan on the backend (listMemories returns the cached index). */
+export function refreshMemories(): Promise<MemoryIndex> {
+  return invoke<MemoryIndex>("refresh_memories");
+}
+
 export function readMemoryFile(path: string): Promise<FileContentDto> {
   return invoke<FileContentDto>("read_memory_file", { path });
 }

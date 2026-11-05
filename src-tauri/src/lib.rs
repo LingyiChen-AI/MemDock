@@ -27,6 +27,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_memories,
+            commands::refresh_memories,
             commands::read_memory_file,
             commands::write_memory_file,
             commands::search_memories,

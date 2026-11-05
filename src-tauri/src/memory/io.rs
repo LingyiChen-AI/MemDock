@@ -54,7 +54,7 @@ fn read_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-fn decode(bytes: &[u8]) -> io::Result<FileContent> {
+pub fn decode(bytes: &[u8]) -> io::Result<FileContent> {
     let has_bom = bytes.starts_with(BOM);
     let body = if has_bom { &bytes[BOM.len()..] } else { bytes };
     let raw = std::str::from_utf8(body).map_err(|_| {

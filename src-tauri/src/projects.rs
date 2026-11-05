@@ -127,11 +127,16 @@ fn codex_cwds(paths: &AgentPaths) -> Vec<String> {
 }
 
 fn project_name(path: &str) -> String {
-    path.trim_end_matches(['/', '\\'])
+    let name = path
+        .trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .next()
-        .unwrap_or("")
-        .to_string()
+        .unwrap_or("");
+    if name.is_empty() {
+        path.to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 /// Discovers projects from Claude/Codex session logs plus manual entries,

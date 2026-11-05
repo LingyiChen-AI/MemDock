@@ -6,6 +6,8 @@ import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { MemoryPage } from "@/pages/memory/MemoryPage";
 import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
+import { ReviewPage } from "@/pages/review/ReviewPage";
+import { usePendingSummary } from "@/pages/review/usePendingSummary";
 
 function Shell() {
   const { t } = useI18n();
@@ -13,6 +15,7 @@ function Shell() {
   // The open page reports unsaved edits; leaving it (pages unmount on navigation) asks first.
   const [dirty, setDirty] = useState(false);
   const [pendingNav, setPendingNav] = useState<NavKey | null>(null);
+  const pending = usePendingSummary();
   const onDirty = useCallback((d: boolean) => setDirty(d), []);
 
   const navigate = (key: NavKey) => {
@@ -26,9 +29,14 @@ function Shell() {
       <AppShell
         current={current}
         onNavigate={navigate}
-        pages={{ extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />, skills: <SkillsPage onDirtyChange={onDirty} /> }}
+        badges={{ review: pending?.total }}
+        pages={{
+          review: <ReviewPage onNavigate={navigate} />,
+          extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
+          skills: <SkillsPage onDirtyChange={onDirty} />,
+        }}
       >
-        <MemoryPage onDirtyChange={onDirty} />
+        <MemoryPage onDirtyChange={onDirty} pendingByProject={pending?.by_project} />
       </AppShell>
       <ConfirmDialog
         open={pendingNav !== null}

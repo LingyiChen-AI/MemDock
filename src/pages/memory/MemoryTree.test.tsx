@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 
@@ -141,5 +141,20 @@ describe("MemoryTree", () => {
     onSearchOpen.mockClear();
     await userEvent.keyboard("{Control>}k{/Control}");
     expect(onSearchOpen).toHaveBeenCalledWith("");
+  });
+  it("memory tree shows pending dot", () => {
+    setup({ pendingByProject: { "/work/jev-rpa": 3, __global__: 1, "/work/other": 5 } });
+    const project = screen.getByRole("treeitem", { name: /jev-rpa/ });
+    const dot = within(project).getByRole("img", { name: "3 条待审核" });
+    expect(dot).toHaveAttribute("title", "3 条待审核");
+    expect(dot.className).toContain("bg-warning");
+    // the global group heading carries its own dot
+    expect(screen.getByRole("img", { name: "1 条待审核" })).toBeInTheDocument();
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+  });
+
+  it("no dot without pending suggestions", () => {
+    setup({ pendingByProject: { "/work/jev-rpa": 0 } });
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });

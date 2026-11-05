@@ -289,6 +289,62 @@ let extractConfig: Record<string, unknown> = {
   lang: null,
 };
 
+// Review page fixtures (`?review=empty` starts without suggestions).
+const evidenceOf = (quote: string, ts: number) => ({ tool: "claude", session_id: "9f3c2a1e-77b4-4d0e-a1c5-3b8e6d2f4a10", ts, quote });
+let pendingList: Record<string, unknown>[] =
+  params.get("review") === "empty"
+    ? []
+    : [
+        {
+          id: "sg1", fingerprint: "f1", kind: "modify", file_id: "c:/work/jev-rpa/claude.md", path: "C:\\work\\jev-rpa\\CLAUDE.md", tool_of_file: "claude",
+          old_text: "本地 MySQL 也是一主一从（3306 主库写、3307 从库只读），\n从库已设 SOURCE_DELAY=2，实测写后约 4 秒可见\n本地开发与自测必须在「写主读从」配置下跑通。",
+          new_text: "本地 MySQL 也是一主一从（3306 主库写、3307 从库只读），\n从库已设 SOURCE_DELAY=1，实测写后约 3 秒可见\n本地开发与自测必须在「写主读从」配置下跑通。",
+          reason: "用户把从库延迟从 2 秒调到 1 秒，记忆里的数字需要同步。",
+          evidence: [evidenceOf("把从库延迟调小到 1 秒，缩短测试耗时", NOW - 6 * 3600_000)], source_tool: "claude", created_at: NOW - 2 * 3600_000, base_hash: "h1", status: "pending",
+        },
+        {
+          id: "sg2", fingerprint: "f2", kind: "add", file_id: "c:/users/admin/.claude/claude.md", path: "C:\\Users\\Admin\\.claude\\CLAUDE.md", tool_of_file: "claude",
+          old_text: null, new_text: "## 15. ego-browser 只在用户明确要求时才调用\n\n用户没有点名要用 ego-browser，就不调用它。",
+          reason: "用户纠正过一次：没有明确要求不要自行调用。",
+          evidence: [evidenceOf("你为啥老是自己去调研 ego-browser？必须有明确要求的时候才调", NOW - 30 * 3600_000), evidenceOf("记忆力加强一下", NOW - 30 * 3600_000)], source_tool: "claude", created_at: NOW - 3 * 3600_000, base_hash: "h2", status: "pending",
+        },
+        {
+          id: "sg3", fingerprint: "f3", kind: "obsolete", file_id: "c:/work/jev-rpa/agents.md", path: "C:\\work\\jev-rpa\\AGENTS.md", tool_of_file: "codex",
+          old_text: "部署前先在测试环境手动跑一遍 Run MySQL migrations", new_text: null,
+          reason: "迁移已改为流水线自动执行，这条手动步骤不再适用。",
+          evidence: [{ tool: "codex", session_id: "c0de-5e55-1011", ts: NOW - 50 * 3600_000, quote: "迁移现在由流水线自动跑，不用手动了" }], source_tool: "codex", created_at: NOW - 5 * 3600_000, base_hash: "h3", status: "pending",
+        },
+        {
+          id: "sg-stale", fingerprint: "f4", kind: "modify", file_id: "c:/work/jev-rpa/claude.md", path: "C:\\work\\jev-rpa\\CLAUDE.md", tool_of_file: "claude",
+          old_text: "Redis 端口 6379", new_text: "Redis 端口 6380",
+          reason: "用户提到 Redis 换了端口。",
+          evidence: [evidenceOf("Redis 现在是 6380", NOW - 20 * 3600_000)], source_tool: "claude", created_at: NOW - 8 * 3600_000, base_hash: "h4", status: "pending",
+        },
+      ];
+const projectIdOfPending = (s: Record<string, unknown>) => (String(s.file_id).startsWith("c:/work/jev-rpa") ? jev.id : "__global__");
+const pendingSummaryNow = () => {
+  const by: Record<string, number> = {};
+  for (const x of pendingList) by[projectIdOfPending(x)] = (by[projectIdOfPending(x)] ?? 0) + 1;
+  return { total: pendingList.length, by_project: by };
+};
+const dropPending = (id: string) => {
+  pendingList = pendingList.filter((x) => x.id !== id);
+  void emit("suggestions-changed", pendingSummaryNow());
+};
+const contextFor = (id: string) => {
+  const sg = pendingList.find((x) => x.id === id);
+  const evs = ((sg?.evidence as { tool: string; session_id: string; ts: number; quote: string }[]) ?? []).slice(0, 1);
+  return evs.map((evd) => ({
+    evidence: evd,
+    turns: [
+      { tool: evd.tool, session_id: evd.session_id, project_id: null, ts: evd.ts - 240_000, role: "user", text: "先看下现在的测试环境配置" },
+      { tool: evd.tool, session_id: evd.session_id, project_id: null, ts: evd.ts - 180_000, role: "assistant", text: "当前是从库延迟 2 秒，每次写后要等约 4 秒才能读到。" },
+      { tool: evd.tool, session_id: evd.session_id, project_id: null, ts: evd.ts - 60_000, role: "user", text: `太慢了，${evd.quote}` },
+      { tool: evd.tool, session_id: evd.session_id, project_id: null, ts: evd.ts, role: "assistant", text: "已经改好，从库延迟现在是 1 秒。" },
+    ],
+  }));
+};
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -372,6 +428,25 @@ mockIPC(
         return extractRuns[0];
       case "cancel_extraction":
         return null;
+      case "list_suggestions":
+        return pendingList;
+      case "pending_summary":
+        return pendingSummaryNow();
+      case "apply_suggestion":
+        if (a.id === "sg-stale") return { kind: "stale" };
+        dropPending(String(a.id));
+        return { kind: "applied", hash: "hx", saved: true };
+      case "reject_suggestion":
+        dropPending(String(a.id));
+        return null;
+      case "accept_suggestions":
+        return (a.ids as string[]).map((id) => {
+          if (id === "sg-stale") return { id, outcome: { kind: "stale" } };
+          dropPending(id);
+          return { id, outcome: { kind: "applied", hash: "hx", saved: true } };
+        });
+      case "suggestion_context":
+        return contextFor(String(a.id));
       case "plugin:dialog|open":
         return null;
       default:
@@ -533,5 +608,23 @@ if (params.get("dirty")) {
       box.click();
       setTimeout(() => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "立即运行")?.click(), 300);
     } else if (++tries > 100) clearInterval(timer);
+  }, 100);
+}
+
+// `?review=edit|evidence|stale` drives the review page for screenshots (headless cannot click).
+const reviewState = params.get("review");
+if (reviewState === "edit" || reviewState === "evidence" || reviewState === "stale") {
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (tries > 150) clearInterval(timer);
+    const cards = Array.from(document.querySelectorAll<HTMLElement>("article"));
+    if (cards.length === 0) return;
+    clearInterval(timer);
+    const btn = (card: HTMLElement | undefined, label: string) =>
+      Array.from(card?.querySelectorAll("button") ?? []).find((b) => b.textContent?.trim() === label);
+    if (reviewState === "edit") btn(cards[0], "编辑后通过")?.click();
+    if (reviewState === "evidence") btn(cards[0], "查看原对话")?.click();
+    if (reviewState === "stale") btn(cards[cards.length - 1], "通过")?.click();
   }, 100);
 }

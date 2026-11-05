@@ -17,6 +17,7 @@ use crate::memory::snapshot::{SnapshotInfo, SnapshotStore};
 use crate::model::{MemoryFile, MemoryIndex, MemoryKind};
 use crate::paths::AgentPaths;
 use crate::projects::{discover_projects, normalize_path};
+use crate::skills::git::{GitRunner, SystemGit};
 use crate::settings::{load_settings, save_settings, Settings};
 use crate::watcher::WatcherHandle;
 
@@ -35,6 +36,14 @@ pub struct AppState {
     settings_lock: Mutex<()>,
     /// Serializes writes so two concurrent writes cannot both pass the hash check.
     write_lock: Mutex<()>,
+    /// App data directory (skill backups, git cache, registry live below it).
+    pub data_dir: PathBuf,
+    /// Git access for skill install / update; tests may replace it.
+    pub git: Arc<dyn GitRunner>,
+    /// Serializes every mutating skill operation.
+    pub skills_lock: Mutex<()>,
+    /// Serializes git-cache check / clone / cleanup (shared with the ops layer).
+    pub cache_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -50,6 +59,10 @@ impl AppState {
             paths,
             home,
             settings_path: data_dir.join("settings.json"),
+            data_dir: data_dir.clone(),
+            git: Arc::new(SystemGit::new()),
+            skills_lock: Mutex::new(()),
+            cache_lock: Arc::new(Mutex::new(())),
             snapshots: SnapshotStore::new(data_dir.join("snapshots")),
             index: Mutex::new(MemoryIndex {
                 global: vec![],
@@ -70,7 +83,7 @@ impl AppState {
         *lock(&self.index) = fresh;
     }
 
-    fn snapshot_index(&self) -> MemoryIndex {
+    pub(crate) fn snapshot_index(&self) -> MemoryIndex {
         lock(&self.index).clone()
     }
 
@@ -117,11 +130,11 @@ fn find_in<'a>(mut files: impl Iterator<Item = &'a MemoryFile>, id: &str) -> Opt
         .map(|f| PathBuf::from(&f.path))
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Error returned to the frontend as `{ code, message, current_hash? }`.
+/// Error returned to the frontend as `{ code, message, current_hash?, dir? }`.
 #[derive(Serialize, Debug, Clone)]
 pub struct CommandError {
     /// "disk_changed" | "io" | "forbidden" | "invalid"
@@ -130,14 +143,26 @@ pub struct CommandError {
     /// Present for `disk_changed`: the hash currently on disk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_hash: Option<String>,
+    /// Present for skill `exists` errors: the directory that is in the way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    /// Present for skill `exists` errors: every directory that is in the way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirs: Option<Vec<String>>,
+    /// Present for skill `local_changes`: no baseline exists, local edits cannot be ruled out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unknown: Option<bool>,
 }
 
 impl CommandError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             message: message.into(),
             current_hash: None,
+            dir: None,
+            dirs: None,
+            unknown: None,
         }
     }
 }
@@ -155,6 +180,9 @@ impl From<WriteError> for CommandError {
                 code: "disk_changed".into(),
                 message: "file changed on disk".into(),
                 current_hash: Some(current_hash),
+                dir: None,
+                dirs: None,
+                unknown: None,
             },
             WriteError::Io(e) => e.into(),
         }

@@ -28,13 +28,17 @@ function loadWidth(): number {
   return DEFAULT_W;
 }
 
-export function MemoryPage() {
+export function MemoryPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void } = {}) {
   const { t } = useI18n();
   const m = t.memory;
   const [index, setIndex] = React.useState<MemoryIndex | null>(null);
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
   const [dirty, setDirty] = React.useState(false);
   const [pending, setPending] = React.useState<MemoryFile | null>(null);
+  React.useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  React.useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const [search, setSearch] = React.useState<{ initial: string } | null>(null);
   const [reveal, setReveal] = React.useState<{ key: string; line: number; nonce: number } | null>(null);
   const revealNonce = React.useRef(0);

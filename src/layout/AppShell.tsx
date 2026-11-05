@@ -50,8 +50,10 @@ export interface AppShellProps {
   badges?: Partial<Record<NavKey, number>>;
   /** Footer status area above the collapse toggle (plan 4 puts "pending sync" here). */
   status?: React.ReactNode;
-  /** Content of the `memory` page; every other page renders the placeholder for now. */
+  /** Content of the `memory` page. */
   children?: React.ReactNode;
+  /** Content of the other pages that already exist; the rest render the placeholder. */
+  pages?: Partial<Record<NavKey, React.ReactNode>>;
 }
 
 function CollapseToggle() {
@@ -101,7 +103,7 @@ function AppearanceButton() {
   );
 }
 
-export function AppShell({ current, onNavigate, badges, status, children }: AppShellProps) {
+export function AppShell({ current, onNavigate, badges, status, children, pages }: AppShellProps) {
   const { t } = useI18n();
   const page = NAV.find((n) => n.key === current)!;
 
@@ -157,7 +159,7 @@ export function AppShell({ current, onNavigate, badges, status, children }: AppS
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className="min-w-0 overflow-auto">
-        {current === "memory" ? children : <Placeholder icon={page.icon} />}
+        {current === "memory" ? children : (pages?.[current] ?? <Placeholder icon={page.icon} />)}
       </SidebarInset>
     </SidebarProvider>
   );

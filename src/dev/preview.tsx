@@ -12,7 +12,8 @@ import "@fontsource-variable/jetbrains-mono";
 import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "../styles/globals.css";
 import App from "../App";
-import type { MemoryFile, MemoryIndex, Project } from "../api/types";
+import type { MemoryFile, MemoryIndex, Project, SkillEntry, UpdateStatus } from "../api/types";
+import { mkSkill } from "../pages/skills/testUtils";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") ?? "dark";
@@ -148,6 +149,125 @@ const searchHits = [
   { file_id: "c:/work/jev-rpa/agents.md", line: 3, preview: "Run MySQL migrations before deploy" },
 ];
 
+
+// Skill fixtures for the Skill 管理 page.
+const skillsList: SkillEntry[] = [
+  mkSkill({
+    name: "fireworks-tech-graph",
+    description: "Create precise SVG technical diagrams, export PNG or offline HTML, and animate supported semantic SVGs to GIF.",
+    source: { url: "https://github.com/yizhiyanhua-ai/fireworks-tech-graph", git_ref: null, commit: "a1b2c3d4e5f6", skill_path: "", origin: "registry" },
+    file_count: 14,
+    size_bytes: 182_000,
+  }),
+  mkSkill({
+    name: "fireworks-tech-graph",
+    id: "c:/users/admin/.codex/skills/fireworks-tech-graph",
+    tool: "codex",
+    dir: "C:\\Users\\Admin\\.codex\\skills\\fireworks-tech-graph",
+    description: "Create precise SVG technical diagrams, export PNG or offline HTML, and animate supported semantic SVGs to GIF.",
+    is_symlink: true,
+    symlink_target: "C:\\Users\\Admin\\.claude\\skills\\fireworks-tech-graph",
+    source: { url: "https://github.com/yizhiyanhua-ai/fireworks-tech-graph", git_ref: null, commit: "a1b2c3d4e5f6", skill_path: "", origin: "registry" },
+  }),
+  mkSkill({ name: "freecall-tester", description: "Use when 需要根据 PRD 产出标准测试用例或冒烟测试用例、用 ego-browser 跑 AI 自动化测试和 UI 走查", file_count: 9 }),
+  mkSkill({
+    name: "bug-bot",
+    description: "管理飞书群里的「查 bug 机器人」：给机器人加项目、加生产库、给新群配机器人、重启 bridge",
+    scope: { type: "project", project_id: jev.id },
+    source: { url: "https://git.example.com/team/bug-bot", git_ref: "main", commit: "9f8e7d6c5b4a", skill_path: "skills/bug-bot", origin: "manual" },
+  }),
+  mkSkill({ name: "sql-window", tool: "codex", description: "Use when 用户希望在 Codex 里通过飞书「研发SQL执行群」查询生产数据库", file_count: 4 }),
+  mkSkill({ name: "legacy-notes", description: "没有来源记录的本地 skill，用来演示补登来源", file_count: 2, size_bytes: 900 }),
+  mkSkill({
+    name: "superpowers:brainstorming",
+    id: "c:/users/admin/.claude/plugins/superpowers/skills/brainstorming",
+    dir: "C:\\Users\\Admin\\.claude\\plugins\\superpowers\\skills\\brainstorming",
+    kind: "plugin",
+    plugin: "superpowers",
+    readonly: true,
+    description: "You MUST use this before any creative work - creating features, building components, adding functionality.",
+  }),
+  mkSkill({
+    name: "imagegen",
+    id: "c:/users/admin/.codex/skills/.system/imagegen",
+    dir: "C:\\Users\\Admin\\.codex\\skills\\.system\\imagegen",
+    tool: "codex",
+    kind: "codex_system",
+    readonly: true,
+    description: "Generate and edit images with the built-in image tool.",
+  }),
+];
+const skillUpdates: UpdateStatus[] = [
+  { skill_id: skillsList[0].id, current: "a1b2c3d4e5f6", latest: "0f1e2d3c4b5a", has_update: true, local_modified: true, local_state_unknown: false, not_updatable_subdir: false, repo_root: null, error: null },
+  { skill_id: skillsList[3].id, current: "9f8e7d6c5b4a", latest: "9f8e7d6c5b4a", has_update: false, local_modified: false, local_state_unknown: true, not_updatable_subdir: false, repo_root: null, error: null },
+];
+const skillFileList = {
+  files: [
+    { rel_path: "SKILL.md", size_bytes: 5200 },
+    { rel_path: "scripts/fireworks.py", size_bytes: 20400 },
+    { rel_path: "scripts/render.py", size_bytes: 3100 },
+    { rel_path: "references/styles.md", size_bytes: 8800 },
+    { rel_path: "assets/logo.png", size_bytes: 48000 },
+  ],
+  truncated: false,
+};
+const skillDoc = `---
+name: fireworks-tech-graph
+description: Create precise SVG technical diagrams, export PNG or offline HTML.
+---
+
+# Fireworks Tech Graph
+
+Use this skill for architecture, UML, agent, cloud or workflow diagrams.
+
+## Workflow
+
+1. Write the JSON spec
+2. Run \`fireworks.py validate\`
+3. Render and check the result
+`;
+
+const inspectResult = {
+  url: "https://github.com/anthropics/skills",
+  clone_url: "https://github.com/anthropics/skills.git",
+  git_ref: null,
+  commit: "c9d8e7f6a5b4",
+  preselected: null,
+  skills: [
+    { skill_path: "skills/pdf", name: "pdf", description: "Use this skill whenever the user wants to do anything with PDF files: read, merge, split, fill forms." },
+    { skill_path: "skills/xlsx", name: "xlsx", description: "Create, read, edit spreadsheets (.xlsx, .csv) with formulas and formatting." },
+    { skill_path: "skills/skill-creator", name: "skill-creator", description: "Create new skills, modify and improve existing skills, and measure skill performance." },
+    { skill_path: "document-skills/docx", name: "docx", description: "" },
+  ],
+};
+const skillBackups = [
+  { id: "1730800000000", created_at: NOW - 2 * 3600_000, size_bytes: 182_000 },
+  { id: "1730700000000", created_at: NOW - 30 * 3600_000, size_bytes: 176_400 },
+  { id: "1730100000000", created_at: NOW - 8 * 24 * 3600_000, size_bytes: 91_300 },
+];
+
+const deletedSkills = [
+  {
+    bucket: "pdf-notes-1a2b3c4d",
+    name: "pdf-notes",
+    tool: "claude",
+    scope: { type: "global" },
+    dir: "C:\\Users\\Admin\\.claude\\skills\\pdf-notes",
+    backups: [
+      { id: "1730800000000", created_at: NOW - 3 * 3600_000, size_bytes: 24_500 },
+      { id: "1730200000000", created_at: NOW - 7 * 24 * 3600_000, size_bytes: 21_900 },
+    ],
+  },
+  {
+    bucket: "deploy-helper-9e8d7c6b",
+    name: "Deploy Helper",
+    tool: "codex",
+    scope: { type: "project", project_id: jev.id },
+    dir: "C:\\work\\jev\\.agents\\skills\\Deploy Helper",
+    backups: [{ id: "1730600000000", created_at: NOW - 36 * 3600_000, size_bytes: 8_800 }],
+  },
+];
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -175,6 +295,49 @@ mockIPC(
       case "update_ui_prefs":
         if (a.accent) previewAccent = String(a.accent);
         return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
+      case "list_skills":
+        return skillsList;
+      case "git_available":
+        return true;
+      case "check_skill_updates":
+        return skillUpdates;
+      case "list_skill_files":
+        return skillFileList;
+      case "read_skill_file":
+        if (String(a.relPath).endsWith(".png")) return { text: "", hash: "p", has_bom: false, crlf: false, tokens: 0, imports: [], binary: true, too_large: false };
+        return { text: String(a.relPath) === "SKILL.md" ? skillDoc : "print('hello')", hash: "sk1", has_bom: false, crlf: false, tokens: 120, imports: [], binary: false, too_large: false };
+      case "register_skill_source":
+        return skillsList[2];
+      case "inspect_git_source":
+        return new Promise((resolve) => setTimeout(() => resolve(inspectResult), 150));
+      case "install_skill":
+        if (!a.overwrite)
+          return Promise.reject({
+            code: "exists",
+            message: "already exists",
+            dir: "C:\\Users\\Admin\\.claude\\skills\\demo",
+            dirs: ["C:\\Users\\Admin\\.claude\\skills\\demo", "C:\\Users\\Admin\\.codex\\skills\\demo"],
+          });
+        return [];
+      case "read_skill_backup_file":
+        return { text: skillDoc.replace("Use this skill for", "Use this for").replace("3. Render and check the result", "3. Render"), hash: "bk", has_bom: false, crlf: false, tokens: 100, imports: [], binary: false, too_large: false };
+      case "update_skill":
+        if (!a.acceptLocalChanges) return Promise.reject({ code: "local_changes", message: "local changes" });
+        return { ...skillsList[0], source: { ...skillsList[0].source, commit: "0f1e2d3c4b5a" } };
+      case "delete_skill":
+        return { id: "1730800000000", created_at: Date.now(), size_bytes: 182_000 };
+      case "sync_skill":
+        return skillsList[0];
+      case "list_skill_backups":
+        return skillBackups;
+      case "list_deleted_skill_backups":
+        return params.get("deleted") === "0" ? [] : deletedSkills;
+      case "reveal_backup_folder":
+        return `C:\\Users\\Admin\\AppData\\Roaming\\MemDock\\skill-backups\\${String(a.bucket)}`;
+      case "restore_deleted_skill":
+        return "C:\\Users\\Admin\\.claude\\skills\\pdf-notes";
+      case "rollback_skill":
+        return skillsList[0];
       case "plugin:dialog|open":
         return null;
       default:
@@ -217,4 +380,96 @@ if (params.get("open") === "appearance") {
       btn.click();
     }
   }, 100);
+}
+
+// `?skilltab=files` switches the opened skill to its file editor; `?select=<name>` opens a skill row;
+// `?check=1` runs the update check.
+const selectName = params.get("select");
+if (selectName || params.get("skilltab") === "files" || params.get("check")) {
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (tries > 100) clearInterval(timer);
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
+    if (rows.length === 0) return;
+    clearInterval(timer);
+    if (params.get("check")) Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.startsWith("检查更新"))?.click();
+    if (selectName) rows.find((r) => r.textContent?.includes(selectName))?.click();
+    if (params.get("skilltab") === "files") {
+      setTimeout(() => document.querySelector<HTMLElement>('[role="radio"]:not([aria-checked="true"])')?.click(), 300);
+    }
+  }, 100);
+}
+
+// `?flow=add-gh|add-gh-pick|add-template|update|sync|delete|backups` drives the skill flows for screenshots.
+const flow = params.get("flow");
+if (flow) {
+  const wait = <T,>(find: () => T | null | undefined | false, then: (v: T) => void) => {
+    let tries = 0;
+    const timer = setInterval(() => {
+      const v = find();
+      if (v) {
+        clearInterval(timer);
+        then(v);
+      } else if (++tries > 100) clearInterval(timer);
+    }, 100);
+  };
+  const btn = (text: string) => () => Array.from(document.querySelectorAll<HTMLElement>("button")).find((b) => b.textContent?.trim() === text);
+  const setValue = (el: HTMLInputElement, value: string) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  wait(() => document.querySelector('[role="option"]'), () => {
+    if (flow === "add-exists") {
+      wait(btn("添加 skill"), (b) => {
+        b.click();
+        wait(() => Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]')).find((t) => t.textContent === "空白模板"), (t) => {
+          t.click();
+          setTimeout(() => {
+            const n = document.getElementById("add-tpl-name") as HTMLInputElement | null;
+            if (n) setValue(n, "demo");
+            const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+            boxes.find((x) => x.parentElement?.textContent === "Codex")?.click();
+            setTimeout(() => btn("安装")()?.click(), 200);
+          }, 150);
+        });
+      });
+      return;
+    }
+    if (flow.startsWith("add")) {
+      wait(btn("添加 skill"), (b) => {
+        b.click();
+        if (flow === "add-template") {
+          wait(() => Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]')).find((t) => t.textContent === "空白模板"), (t) => {
+            t.click();
+            setTimeout(() => {
+              const n = document.getElementById("add-tpl-name") as HTMLInputElement | null;
+              if (n) setValue(n, "My Skill");
+            }, 150);
+          });
+          return;
+        }
+        wait(() => document.getElementById("add-git-input") as HTMLInputElement | null, (input) => {
+          setValue(input, "anthropics/skills");
+          setTimeout(() => btn("解析")()?.click(), 100);
+          if (flow === "add-gh-pick") {
+            wait(() => document.querySelector<HTMLInputElement>('ul input[type="checkbox"]'), () => {
+              const boxes = Array.from(document.querySelectorAll<HTMLInputElement>('ul input[type="checkbox"]'));
+              boxes[0].click();
+              boxes[2].click();
+            });
+          }
+        });
+      });
+      return;
+    }
+    if (flow === "delete") {
+      const row = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((r) => r.textContent?.includes("fireworks-tech-graph") && r.textContent.includes("Codex"));
+      row?.click();
+    }
+    if (flow === "update") wait(btn("更新"), (b) => b.click());
+    if (flow === "sync") wait(btn("同步到…"), (b) => b.click());
+    if (flow === "delete") setTimeout(() => btn("删除")()?.click(), 400);
+    if (flow === "backups") wait(() => document.querySelector<HTMLElement>('button[aria-label="备份与回滚"]'), (b) => b.click());
+  });
 }

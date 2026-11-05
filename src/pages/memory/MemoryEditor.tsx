@@ -424,7 +424,11 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
           </div>
         ) : null}
         {base && mode !== "edit" ? (
-          <div ref={previewRef} className="min-h-0 min-w-0 flex-1 basis-0 overflow-auto px-6 py-5">
+          <div
+            ref={previewRef}
+            data-testid="preview-pane"
+            className="min-h-0 min-w-0 flex-1 basis-0 overflow-x-hidden overflow-y-auto px-6 py-5"
+          >
             <Preview text={text} />
           </div>
         ) : null}
@@ -491,7 +495,8 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
 
 export function Preview({ text }: { text: string }) {
   return (
-    <div className="max-w-[72ch] font-content text-[14px] leading-[25px]">
+    // The pane never scrolls sideways: long tokens wrap anywhere, `pre` and tables scroll inside themselves.
+    <div className="max-w-[72ch] min-w-0 font-content text-[14px] leading-[25px] wrap-anywhere">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSourceLine]}
@@ -521,24 +526,24 @@ export function Preview({ text }: { text: string }) {
           // Zero network egress: never load images (remote, relative or data:);
           // show a muted placeholder instead.
           img: ({ alt, src }) => (
-            <span className="inline-flex items-center gap-1 align-middle text-[12px] text-muted-foreground">
+            <span className="inline-flex max-w-full items-center gap-1 align-middle text-[12px] text-muted-foreground">
               <ImageOff size={14} aria-hidden />
               {alt || (typeof src === "string" ? src : "")}
             </span>
           ),
           pre: (p) => (
             <pre
-              className="my-3 overflow-x-auto rounded-lg bg-muted p-3 font-mono text-[12.5px] leading-5 [&_code]:bg-transparent [&_code]:p-0"
+              className="my-3 max-w-full overflow-x-auto rounded-lg bg-muted p-3 font-mono text-[12.5px] leading-5 wrap-normal [&_code]:bg-transparent [&_code]:p-0 [&_code]:break-normal"
               {...strip(p)}
             />
           ),
           code: ({ className, children }) => (
-            <code className={cn("rounded-sm bg-muted px-[5px] py-px font-mono text-[12.5px]", className)}>
+            <code className={cn("rounded-sm bg-muted px-[5px] py-px font-mono text-[12.5px] break-all", className)}>
               {children}
             </code>
           ),
           table: (p) => (
-            <div className="my-3 overflow-x-auto">
+            <div data-testid="preview-table-scroll" className="my-3 max-w-full overflow-x-auto">
               <table className="border-collapse text-sm" {...strip(p)} />
             </div>
           ),

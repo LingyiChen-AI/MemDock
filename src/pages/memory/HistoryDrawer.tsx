@@ -187,7 +187,7 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
                 })}
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-4">
                 {selectedId && textErrors[selectedId] !== undefined ? (
                   <p role="alert" className="text-sm text-destructive">
                     {fmt(m.historyFailed, { message: textErrors[selectedId] })}

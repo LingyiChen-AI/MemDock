@@ -105,6 +105,16 @@ const TEXT = `# 全局规则（铁律）
 |---|---|
 | MySQL | 3306 |
 | Redis | 6379 |
+
+截图路径 \`C:/Users/Admin/AppData/Local/Temp/claude/e290bfd9097cfe51/scratchpad/shots/gutter-fixed.png\`，参考 https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/linear-app/DESIGN.md
+
+\`\`\`bash
+msedge --headless=new --force-device-scale-factor=2 --window-size=1600,1000 --screenshot=out.png file:///C:/devtools/diagrams/architecture.svg
+\`\`\`
+
+| 服务 | 更换前镜像版本 | 更换后镜像版本 |
+|---|---|---|
+| freeclaw-admin | registry.cn-hangzhou.aliyuncs.com/freecall/freeclaw-admin:v1.2.3-20261105 | registry.cn-hangzhou.aliyuncs.com/freecall/freeclaw-admin:v1.2.4-20261106 |
 `;
 
 const content = (text: string, hash: string) => ({

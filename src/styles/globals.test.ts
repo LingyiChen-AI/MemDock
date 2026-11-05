@@ -88,3 +88,31 @@ describe("accent swatches and raw hex guard", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("scrollbars", () => {
+  const block = (sel: string) => {
+    const i = css.indexOf(sel + " {");
+    if (i < 0) throw new Error("rule not found: " + sel);
+    return css.slice(i, css.indexOf("}", i));
+  };
+
+  it("are thin, rounded and themed with semantic variables only", () => {
+    expect(block("::-webkit-scrollbar")).toMatch(/width:\s*8px/);
+    expect(block("::-webkit-scrollbar")).toMatch(/height:\s*8px/);
+    const thumb = block("::-webkit-scrollbar-thumb");
+    expect(thumb).toMatch(/color-mix\(in srgb, var\(--muted-foreground\) 35%, transparent\)/);
+    expect(thumb).toMatch(/background-clip:\s*padding-box/);
+    expect(thumb).toMatch(/border-radius/);
+    expect(block("::-webkit-scrollbar-thumb:hover")).toMatch(/var\(--muted-foreground\) 55%/);
+    expect(block("::-webkit-scrollbar-button")).toMatch(/display:\s*none/);
+    for (const sel of ["::-webkit-scrollbar", "::-webkit-scrollbar-thumb", "::-webkit-scrollbar-thumb:hover"])
+      expect(block(sel)).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+  });
+
+  it("only uses scrollbar-width/color where ::-webkit-scrollbar is unsupported", () => {
+    // In Chromium (WebView2) these standard properties would disable the ::-webkit-scrollbar styling.
+    const idx = css.indexOf("scrollbar-width: thin");
+    expect(idx).toBeGreaterThan(-1);
+    expect(css.lastIndexOf("@supports not selector(::-webkit-scrollbar)", idx)).toBeGreaterThan(-1);
+  });
+});

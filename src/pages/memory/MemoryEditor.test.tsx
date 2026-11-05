@@ -224,4 +224,29 @@ describe("Preview", () => {
     expect(screen.getByText("logo")).toBeInTheDocument();
     expect(screen.getByText("http://a.b/c.gif")).toBeInTheDocument();
   });
+
+  it("keeps wide content self-contained so the pane never scrolls sideways", () => {
+    const { container } = render(
+      <Preview text={"`C:/a/very/long/path/without/spaces.md`\n\n```\nlong code\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"} />,
+    );
+    const root = container.firstElementChild!;
+    expect(root).toHaveClass("wrap-anywhere", "min-w-0");
+    const table = container.querySelector("table")!;
+    const wrap = table.parentElement!;
+    expect(wrap).toHaveAttribute("data-testid", "preview-table-scroll");
+    expect(wrap).toHaveClass("overflow-x-auto", "max-w-full");
+    expect(container.querySelector("pre")).toHaveClass("overflow-x-auto");
+    expect(container.querySelector("p > code")).toHaveClass("break-all");
+  });
+});
+
+describe("preview pane", () => {
+  it("clips horizontal overflow and only scrolls vertically", async () => {
+    (readMemoryFile as Mock).mockResolvedValue(dto());
+    setup();
+    await screen.findByDisplayValue("hello");
+    const pane = screen.getByTestId("preview-pane");
+    expect(pane).toHaveClass("overflow-x-hidden", "overflow-y-auto");
+    expect(pane).not.toHaveClass("overflow-auto");
+  });
 });

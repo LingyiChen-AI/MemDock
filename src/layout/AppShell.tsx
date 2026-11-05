@@ -7,6 +7,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  RefreshCw,
   Settings,
   Sparkles,
   type LucideIcon,
@@ -32,13 +33,14 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { Placeholder } from "@/pages/Placeholder";
 import logoUrl from "@/assets/memdock-logo.svg";
 
-export type NavKey = "memory" | "review" | "extract" | "skills" | "usage" | "settings";
+export type NavKey = "memory" | "review" | "extract" | "skills" | "sync" | "usage" | "settings";
 
 const NAV: { key: NavKey; icon: LucideIcon }[] = [
   { key: "memory", icon: BookOpen },
   { key: "review", icon: ListChecks },
   { key: "extract", icon: Sparkles },
   { key: "skills", icon: Package },
+  { key: "sync", icon: RefreshCw },
   { key: "usage", icon: BarChart3 },
   { key: "settings", icon: Settings },
 ];

@@ -8,6 +8,10 @@ import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
+import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
+import { AccountSlot } from "@/components/account/AccountSlot";
+import { LoginDialog } from "@/components/account/LoginDialog";
+import { useSyncStatus } from "@/components/account/useSyncStatus";
 
 function Shell() {
   const { t } = useI18n();
@@ -17,6 +21,9 @@ function Shell() {
   const [pendingNav, setPendingNav] = useState<NavKey | null>(null);
   const pending = usePendingSummary();
   const onDirty = useCallback((d: boolean) => setDirty(d), []);
+  const [syncStatus, setSyncStatus] = useSyncStatus();
+  const [loginOpen, setLoginOpen] = useState(false);
+  const toasts = useToasts();
 
   const navigate = (key: NavKey) => {
     if (key === current) return;
@@ -30,6 +37,7 @@ function Shell() {
         current={current}
         onNavigate={navigate}
         badges={{ review: pending?.total }}
+        status={<AccountSlot status={syncStatus} onLogin={() => setLoginOpen(true)} onOpenSync={() => navigate("sync")} />}
         pages={{
           review: <ReviewPage onNavigate={navigate} />,
           extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
@@ -54,6 +62,8 @@ function Shell() {
         }}
         onCancel={() => setPendingNav(null)}
       />
+      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} status={syncStatus} onStatus={setSyncStatus} notify={toasts.push} />
+      <ToastRegion toasts={toasts.toasts} onDismiss={toasts.dismiss} />
     </>
   );
 }

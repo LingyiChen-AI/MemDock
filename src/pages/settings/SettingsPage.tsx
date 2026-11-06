@@ -22,6 +22,7 @@ import { getSettings } from "@/api/memory";
 import { setClaudeQuotaEnabled, setCodexQuotaEnabled } from "@/api/usage";
 import type { EnvReport, EnvToolStatus } from "@/api/types";
 import { AppearanceControls } from "@/components/appearance/AppearanceControls";
+import { NewChatDirSettings } from "./NewChatDirSection";
 import { Button } from "@/components/ui/button";
 import type { NavKey } from "@/layout/AppShell";
 import { Switch } from "@/components/ui/switch";
@@ -305,6 +306,10 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
 
         <Section icon={Palette} title={s.appearance.title}>
           <AppearanceControls />
+        </Section>
+
+        <Section icon={FolderOpen} title={s.newChatDir.title} desc={s.newChatDir.desc}>
+          <NewChatDirSettings />
         </Section>
 
         <Section icon={Gauge} title={s.quota.title} desc={t.usage.quota.explain}>

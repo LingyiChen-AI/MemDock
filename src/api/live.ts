@@ -205,3 +205,8 @@ export const STORED_IMAGE_PREFIX = "memdock-image:";
 export function storedImagePath(src: string): string | null {
   return src.startsWith(STORED_IMAGE_PREFIX) ? src.slice(STORED_IMAGE_PREFIX.length) : null;
 }
+
+/** `~/memdock`, created when missing: a home for chats that don't belong to a project. */
+export function memdockWorkspaceDir(): Promise<string> {
+  return invoke<string>("memdock_workspace_dir");
+}

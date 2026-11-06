@@ -77,6 +77,7 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(), openPath: vi.fn().mockResolvedValue(undefined) }));
 
+import { homeDir } from "@tauri-apps/api/path";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { liveList, liveStart, liveStop, nativeOwner } from "@/api/live";
 import { ptyOpen } from "@/api/pty";
@@ -207,6 +208,7 @@ describe("worktree helpers", () => {
 
 describe("/worktree in the composer", () => {
   it("is offered for a draft in a git repo and toggles the violet status item", async () => {
+    (homeDir as unknown as { mockResolvedValueOnce: (v: string) => void }).mockResolvedValueOnce("/work/demo"); // no conversation open: new chats start in the home folder
     renderApp(<SessionsPage />);
     await screen.findByRole("region", { name: "demo" });
     await userEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "新对话" }));
@@ -223,6 +225,7 @@ describe("/worktree in the composer", () => {
   });
 
   it("is hidden outside git repos and for started conversations", async () => {
+    (homeDir as unknown as { mockResolvedValueOnce: (v: string) => void }).mockResolvedValueOnce("/work/plain"); // no conversation open: new chats start in the home folder
     saveChatPrefs({ ...DEFAULT_PREFS, cwd: "/work/plain" });
     renderApp(<SessionsPage />);
     await screen.findByRole("region", { name: "demo" });

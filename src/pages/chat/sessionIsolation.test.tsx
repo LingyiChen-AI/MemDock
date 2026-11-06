@@ -79,6 +79,7 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
+import { homeDir } from "@tauri-apps/api/path";
 import { liveList, liveStart, liveStop, nativeOwner } from "@/api/live";
 import { ptyClose, ptyOpen } from "@/api/pty";
 import { listSessions, sessionPreview } from "@/api/sessions";
@@ -161,6 +162,7 @@ beforeEach(() => {
 
 describe("draft terminals", () => {
   it("each draft gets its own terminal; a touched one stays listed and re-attaches", async () => {
+    (homeDir as unknown as { mockResolvedValueOnce: (v: string) => void }).mockResolvedValueOnce("/work/demo"); // no conversation open: new chats start in the home folder
     (ptyOpen as Mock).mockResolvedValueOnce({ pty_id: "P1", command: "claude (A)" }).mockResolvedValueOnce({ pty_id: "P2", command: "claude (B)" });
     renderApp(<SessionsPage />);
     await screen.findByRole("region", { name: "demo" });

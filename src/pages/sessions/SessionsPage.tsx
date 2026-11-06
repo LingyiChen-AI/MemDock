@@ -47,6 +47,7 @@ import { agentSettings, isActive, loadChatPrefs, parseExtraArgs, rememberLast } 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
 import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
+import { resolveNewChatDir } from "@/pages/chat/newChatDir";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { Pencil } from "lucide-react";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
@@ -1315,11 +1316,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     setPageError(null);
   };
   /** Opens a new, not yet started chat in the right pane. */
-  const openDraft = (cwd?: string, worktree = false) => {
+  const openDraft = async (cwd?: string, worktree = false) => {
     const p = loadChatPrefs();
+    // Folder: the given one (project "＋"), else per the "new chat folder" setting.
+    const dir = cwd ?? (await resolveNewChatDir(selected?.cwd ?? selectedLive?.cwd ?? null, p.cwd));
     const key = newDraftKey();
     if (worktree) patchConvUi(key, { worktree: true });
-    setDraft({ key, agent: p.agent, cwd: cwd ?? p.cwd });
+    setDraft({ key, agent: p.agent, cwd: dir });
     setSelectedKey(key);
     resetPane();
   };

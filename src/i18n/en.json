@@ -992,6 +992,18 @@
     }
   },
   "settings": {
+    "newChatDir": {
+      "title": "Folder for new chats",
+      "desc": "Where “New chat” in the sidebar / header (Ctrl+N) starts. The project “＋ New chat” always uses that project; before the first message you can still change it with /cwd.",
+      "follow": "Follow the open conversation",
+      "followHint": "The project of the conversation that is open; the home folder when none is",
+      "memdock": "memdock folder in your home",
+      "memdockHint": "{path} (created when missing), for chats that don't belong to a project",
+      "fixed": "A fixed folder",
+      "fixedNone": "No folder chosen yet",
+      "choose": "Choose folder",
+      "change": "Change"
+    },
     "title": "Settings",
     "env": {
       "title": "Environment",

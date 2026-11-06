@@ -81,6 +81,7 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
+import { homeDir } from "@tauri-apps/api/path";
 import { liveList, liveStart, liveStop } from "@/api/live";
 import { ptyClose, ptyOpen, ptyWrite, saveTempImage } from "@/api/pty";
 import { listSessions, sessionPreview } from "@/api/sessions";
@@ -273,7 +274,8 @@ describe("new chats and terminals", () => {
     (liveStart as Mock).mockReset();
   });
 
-  it("新对话 opens a draft with the last agent and folder; the first send starts it with effort and args", async () => {
+  it("新对话 opens a draft with the last agent in the home folder; the first send starts it with effort and args", async () => {
+    (homeDir as unknown as { mockResolvedValueOnce: (v: string) => void }).mockResolvedValueOnce("/work/demo"); // no conversation open: new chats start in the home folder
     saveChatPrefs({ ...DEFAULT_PREFS, agent: "codex", cwd: "/work/demo", effort: { claude: "", codex: "high" }, args: { claude: "", codex: "a=1 b=2" } });
     (liveStart as Mock).mockResolvedValue({ ...liveInfo("starting"), live_id: "L9", agent: "codex", native_id: null });
     renderApp(<SessionsPage />);

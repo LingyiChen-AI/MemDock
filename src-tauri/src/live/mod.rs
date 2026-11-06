@@ -916,3 +916,11 @@ pub async fn live_commands(
 pub fn save_temp_image(data_uri: String) -> Result<String, String> {
     codex::save_image(&data_uri)
 }
+
+/// `~/memdock` (created when missing): the folder for chats that don't belong to a project.
+#[tauri::command]
+pub fn memdock_workspace_dir() -> Result<String, String> {
+    let dir = dirs::home_dir().ok_or("找不到用户主目录")?.join("memdock");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建 {}：{e}", dir.display()))?;
+    Ok(dir.to_string_lossy().into_owned())
+}

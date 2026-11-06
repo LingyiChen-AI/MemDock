@@ -230,6 +230,7 @@ pub fn run() {
             live::live_attach,
             live::native_owner,
             live::live_models,
+            live::memdock_workspace_dir,
             live::live_commands,
             live::save_temp_image,
             live::read_image_data_uri,

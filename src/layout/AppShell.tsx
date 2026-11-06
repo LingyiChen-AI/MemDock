@@ -123,7 +123,7 @@ function NewChatButton({ onClick }: { onClick: () => void }) {
           type="button"
           tooltip={`${label} (${shortcut})`}
           onClick={onClick}
-          className="h-8 cursor-pointer gap-2.5 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/10 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
+          className="h-8 cursor-pointer gap-2.5 px-2.5 font-medium text-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none [&>svg:first-child]:text-primary group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:[&>svg:first-child]:text-primary-foreground group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
         >
           <SquarePen aria-hidden="true" />
           <span>{label}</span>

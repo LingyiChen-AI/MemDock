@@ -178,7 +178,7 @@
     "pickOne": "Select a skill on the left to see its details",
     "update": "Update",
     "editFiles": "Edit files",
-    "syncTo": "Sync to…",
+    "syncTo": "Sync to another tool",
     "delete": "Delete",
     "backups": "Backups and rollback",
     "copyToWritable": "Copy to a writable location",

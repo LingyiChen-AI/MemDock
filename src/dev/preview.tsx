@@ -826,7 +826,7 @@ if (flow) {
       row?.click();
     }
     if (flow === "update") wait(btn("更新"), (b) => b.click());
-    if (flow === "sync") wait(btn("同步到…"), (b) => b.click());
+    if (flow === "sync") wait(btn("同步到其他工具"), (b) => b.click());
     if (flow === "delete") setTimeout(() => btn("删除")()?.click(), 400);
     if (flow === "backups") wait(() => document.querySelector<HTMLElement>('button[aria-label="备份与回滚"]'), (b) => b.click());
   });

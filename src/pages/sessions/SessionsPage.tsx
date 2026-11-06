@@ -491,7 +491,7 @@ function ChatPane({
         {fmt(s.previewFailed, { error })}
       </p>
     ) : !before ? (
-      <ChatSkeleton label={s.previewLoading} />
+      live ? null : <ChatSkeleton label={s.previewLoading} />
     ) : before.timeline.length === 0 ? null : (
       <Timeline bare preview={before} tool={session.tool} />
     )
@@ -925,7 +925,7 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
           ) : null}
           {target ? (
             <ChatPane
-              key={selected ? sessionKey(selected) : selectedKey}
+              key={selectedLive ? LIVE_PREFIX + selectedLive.live_id : selected ? sessionKey(selected) : selectedKey}
               target={target}
               preview={selected ? preview : null}
               error={selected ? previewError : null}

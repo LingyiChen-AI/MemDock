@@ -226,7 +226,7 @@ export function AppShell({ current, onNavigate, badges, status, children, pages 
           </div>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset className="min-w-0 overflow-auto">
+      <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         {current === "memory" ? children : (pages?.[current] ?? <Placeholder icon={page.icon} />)}
       </SidebarInset>
     </SidebarProvider>

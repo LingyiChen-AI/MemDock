@@ -2,6 +2,7 @@
 
 pub mod layout;
 pub mod manifest;
+pub mod readme;
 pub mod repo;
 pub mod state;
 pub mod token;

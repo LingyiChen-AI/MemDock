@@ -40,6 +40,7 @@ pub const SYNC_AUTHOR: (&str, &str) = ("MemDock", "memdock@users.noreply.github.
 
 const GLOBAL_PATHS: [&str; 2] = ["global/claude/CLAUDE.md", "global/codex/AGENTS.md"];
 const SKILLS_JSON: &str = "skills.json";
+const README_MD: &str = "README.md";
 
 /// Everything one sync run needs.
 /// How a sync treats files that look like they hold secrets.
@@ -862,7 +863,23 @@ fn run(
         unsynced_paths: plan.unsynced_after.clone(),
         held_projects: held_projects.clone(),
     };
-    if pushed == 0 && !manifest_changed {
+    // Uploads also keep the repository README current (unless the user wrote their own).
+    let mut readme_changed = false;
+    if plan.manifest_json.is_some() {
+        let body = super::readme::hub_readme();
+        let current = plan.remote_tree.get(README_MD).map(|e| e.sha.clone());
+        if Some(blob_id(body.as_bytes())) != current {
+            let existing = match (&plan.remote_commit, &current) {
+                (Some(head), Some(_)) => ctx.git.read_at(ctx.repo_dir, head, README_MD).ok().flatten(),
+                _ => None,
+            };
+            if current.is_none() || super::readme::replaceable(existing.as_deref()) {
+                tree.insert(README_MD.to_string(), TreeBlob::Data(body.into_bytes()));
+                readme_changed = true;
+            }
+        }
+    }
+    if pushed == 0 && !manifest_changed && !readme_changed {
         return Ok(summary(plan.remote_commit.clone(), false, 0));
     }
 

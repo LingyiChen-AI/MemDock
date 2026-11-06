@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, ChevronDown, ChevronRight, Globe, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Globe, Plus, Search } from "lucide-react";
 import { ContextMenu } from "radix-ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { addManualProject, removeManualProject } from "@/api/memory";
@@ -66,6 +66,26 @@ function isManualOnly(entry: ProjectMemories): boolean {
 }
 
 const EMPTY_KEY = "memdock.showEmptyProjects";
+/** Project ids hidden from the memory tree. View-only: extraction and sync still include them. */
+const HIDDEN_KEY = "memdock.hiddenProjects";
+const SHOW_HIDDEN_KEY = "memdock.showHiddenProjects";
+
+function loadHidden(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function loadShowHidden(): boolean {
+  try {
+    return localStorage.getItem(SHOW_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function loadShowEmpty(): boolean {
   try {
@@ -80,6 +100,29 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
   const m = t.memory;
   const [query, setQuery] = React.useState("");
   const [showEmpty, setShowEmpty] = React.useState(loadShowEmpty);
+  const [hidden, setHidden] = React.useState<Set<string>>(loadHidden);
+  const [showHidden, setShowHidden] = React.useState(loadShowHidden);
+  const toggleHidden = (id: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem(HIDDEN_KEY, JSON.stringify([...next]));
+      } catch {
+        // storage unavailable: the choice lasts until restart
+      }
+      return next;
+    });
+  const toggleShowHidden = () => {
+    const next = !showHidden;
+    setShowHidden(next);
+    try {
+      localStorage.setItem(SHOW_HIDDEN_KEY, next ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  };
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const [focusKey, setFocusKey] = React.useState<string | undefined>(selectedKey);
   const treeRef = React.useRef<HTMLDivElement>(null);
@@ -125,7 +168,7 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
       for (const file of globals) out.push({ kind: "file", key: fileKey(file), file, depth: 0 });
     }
 
-    const visible = index.projects.filter((p) => showEmpty || p.files.length > 0);
+    const visible = index.projects.filter((p) => (showEmpty || p.files.length > 0) && (showHidden || !hidden.has(p.project.id)));
     const projects = visible.filter((p) => !q || p.project.name.toLowerCase().includes(q) || p.files.some(matches));
     if (projects.length || !q) {
       out.push({ kind: "heading", key: "h:projects", label: fmt(m.projects, { n: visible.length }) });
@@ -151,9 +194,10 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
       }
     }
     return out;
-  }, [index, q, expanded, showEmpty, m]);
+  }, [index, q, expanded, showEmpty, showHidden, hidden, m]);
 
   const emptyCount = React.useMemo(() => index.projects.filter((p) => p.files.length === 0).length, [index]);
+  const hiddenCount = React.useMemo(() => index.projects.filter((p) => hidden.has(p.project.id)).length, [index, hidden]);
   const toggleEmpty = () => {
     const next = !showEmpty;
     setShowEmpty(next);
@@ -316,6 +360,8 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
               onActivate={() => activate(item)}
               onFocus={() => setFocusKey(item.key)}
               onRemove={removeProject}
+              hidden={item.kind === "project" && hidden.has(item.entry.project.id)}
+              onToggleHidden={toggleHidden}
               pending={item.kind === "project" ? (pendingByProject?.[item.entry.project.id] ?? 0) : 0}
             />
           );
@@ -340,6 +386,25 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
           {fmt(m.showEmpty, { n: emptyCount })}
         </button>
       ) : null}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={showHidden}
+          onClick={toggleShowHidden}
+          className="flex h-8 shrink-0 cursor-pointer items-center gap-2 border-t border-border px-3 text-xs text-muted-foreground transition-colors duration-150 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
+        >
+          <span
+            className={cn(
+              "grid size-3.5 shrink-0 place-items-center rounded-sm border border-border",
+              showHidden && "border-primary bg-primary text-primary-foreground",
+            )}
+          >
+            {showHidden ? <Check className="size-3" aria-hidden="true" /> : null}
+          </span>
+          {fmt(m.showHidden, { n: hiddenCount })}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -352,8 +417,12 @@ function TreeRow({
   onFocus,
   onRemove,
   pending,
+  hidden = false,
+  onToggleHidden,
 }: {
   pending: number;
+  hidden?: boolean;
+  onToggleHidden?: (projectId: string) => void;
   row: Row;
   selected: boolean;
   tabbable: boolean;
@@ -383,7 +452,7 @@ function TreeRow({
         aria-expanded={row.expanded}
         aria-level={1}
         title={project.path}
-        className={cn(base, "font-medium", !project.exists && "text-muted-foreground")}
+        className={cn(base, "group/row font-medium", (!project.exists || hidden) && "text-muted-foreground")}
       >
         <Chevron className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="min-w-0 truncate">{project.name}</span>
@@ -391,20 +460,42 @@ function TreeRow({
           <span className="ml-auto shrink-0 text-xs font-normal text-muted-foreground">{m.missingDir}</span>
         ) : null}
         <PendingDot n={pending} push={project.exists} />
+        {onToggleHidden ? (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={hidden ? m.unhideProject : m.hideProject}
+            title={hidden ? m.unhideProject : m.hideProject}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleHidden(project.id);
+            }}
+            className={cn(
+              "grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground transition-opacity hover:bg-background hover:text-foreground",
+              hidden ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+            )}
+          >
+            {hidden ? <Eye className="size-3.5" aria-hidden="true" /> : <EyeOff className="size-3.5" aria-hidden="true" />}
+          </button>
+        ) : null}
       </div>
     );
-    if (!isManualOnly(row.entry)) return node;
+    const item = "flex h-7 cursor-pointer items-center rounded-sm px-2 outline-none data-[highlighted]:bg-muted";
     return (
       <ContextMenu.Root>
         <ContextMenu.Trigger asChild>{node}</ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content className="z-50 min-w-36 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md">
-            <ContextMenu.Item
-              onSelect={() => onRemove(project)}
-              className="flex h-7 cursor-pointer items-center rounded-sm px-2 text-destructive outline-none data-[highlighted]:bg-muted"
-            >
-              {m.removeProject}
-            </ContextMenu.Item>
+            {onToggleHidden ? (
+              <ContextMenu.Item onSelect={() => onToggleHidden(project.id)} className={item}>
+                {hidden ? m.unhideProject : m.hideProject}
+              </ContextMenu.Item>
+            ) : null}
+            {isManualOnly(row.entry) ? (
+              <ContextMenu.Item onSelect={() => onRemove(project)} className={cn(item, "text-destructive")}>
+                {m.removeProject}
+              </ContextMenu.Item>
+            ) : null}
           </ContextMenu.Content>
         </ContextMenu.Portal>
       </ContextMenu.Root>

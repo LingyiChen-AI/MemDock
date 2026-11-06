@@ -924,7 +924,6 @@
       "none": "No tool calls"
     },
     "convertTo": "Convert to {tool} session",
-    "noConvertBack": "This session was converted from {tool}. The original is still in {tool}, so there is no need to convert it back.",
     "converting": "Converting…",
     "confirmTitle": "Convert to a {tool} session?",
     "confirmBody": "A new {tool} session file will be written to:\n{dir}\n\nThe original session file is not changed. Thinking is not carried over; shell commands stay tool calls, other tool calls become text summaries and long outputs are truncated.",

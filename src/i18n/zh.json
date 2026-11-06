@@ -924,7 +924,6 @@
       "none": "没有工具调用"
     },
     "convertTo": "转换为 {tool} 会话",
-    "noConvertBack": "这个会话是从 {tool} 转换过来的，原会话还在 {tool} 里，不需要再转回去。",
     "converting": "正在转换…",
     "confirmTitle": "转换为 {tool} 会话？",
     "confirmBody": "将新建一个 {tool} 会话文件，写入：\n{dir}\n\n原会话文件不会被修改。思考过程不会带过去；shell 命令保留为工具调用，其他工具调用转为文字摘要，过长的输出会被截断。",

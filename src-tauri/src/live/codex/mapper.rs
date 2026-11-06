@@ -265,6 +265,11 @@ impl Mapper {
     }
 
     fn turn_request(&mut self, thread_id: &str, text: &str, images: &[String]) -> Value {
+        // `/compact` is a Codex command, not a message: ask the app-server to compact the thread.
+        if images.is_empty() && text.trim() == "/compact" {
+            self.turn_error = None;
+            return self.request(Pending::Turn, "thread/compact/start", json!({"threadId": thread_id}));
+        }
         self.turn_error = None;
         let mut input: Vec<Value> = images.iter().map(|p| json!({"type": "localImage", "path": p})).collect();
         if !text.trim().is_empty() || input.is_empty() {
@@ -576,6 +581,14 @@ impl Mapper {
         let id = s(item, "id").to_string();
         let ty = s(item, "type");
         match ty {
+            // `/compact` runs as a turn with one contextCompaction item.
+            "contextCompaction" => st.events.push(LiveEvent::Notice {
+                id: format!("compact-{id}"),
+                kind: if completed { "compacted" } else { "compacting" }.into(),
+                text: String::new(),
+                before: None,
+                after: None,
+            }),
             "agentMessage" if completed => {
                 st.events.push(LiveEvent::AssistantMessage { id, text: s(item, "text").to_string() })
             }

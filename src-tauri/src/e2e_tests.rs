@@ -1053,3 +1053,64 @@ fn e2e_15_ask_mode_in_repo() {
     log!("reply: {}", text.trim());
     assert_eq!(state_of(&h.mgr, &id), LiveState::Idle);
 }
+
+/// 16: today's Claude issues, replayed on Codex in the test project (ask mode):
+/// turn ends Idle, context by thread id, /compact, interrupt, U+FFFD at the reply start.
+#[test]
+#[ignore]
+fn e2e_16_codex_today() {
+    println!("[S16] Codex: today's issues");
+    let h = harness();
+    let dir = test_dir();
+    let mut o = opts(Agent::Codex, &dir, "[E2E] s16 你好，用一句中文简单打个招呼");
+    o.permission = PermissionMode::Ask;
+    o.effort = Some("low".into());
+    let t0 = Instant::now();
+    let id = h.mgr.start(o).unwrap().live_id;
+    let (text, _, i1) = h.rec.turn(&id, 0).expect("turn 1");
+    let st = wait_state(&h.mgr, &id, LiveState::Idle, Duration::from_secs(5));
+    log!("1 reply in {} ms, state {st:?}: {}", t0.elapsed().as_millis(), text.trim());
+    log!("  starts with U+FFFD: {}", text.trim_start().starts_with('\u{FFFD}'));
+    assert_eq!(st, LiveState::Idle, "stuck after the turn");
+
+    // Context by thread id (a live chat not on the list yet).
+    let native = native_of(&h.rec, &id).expect("thread id");
+    let cache = Mutex::new(HashMap::new());
+    let list = list_sessions_impl(&AgentPaths::detect(), &data_dir(), &cache);
+    let path = list.iter().find(|s| s.tool == Tool::Codex && s.id == native).map(|s| s.path.clone());
+    log!("listed after turn 1: {}", path.is_some());
+    if let Some(p) = &path {
+        let ctx = crate::commands_sessions::session_context_impl(&AgentPaths::detect(), Tool::Codex, p).unwrap();
+        log!("context: {ctx:?}");
+        assert!(ctx.is_some(), "no context for the codex rollout");
+    }
+
+    // /compact typed in the message box.
+    let from = h.rec.count(&id);
+    h.mgr.send(&id, "/compact", &[]).unwrap();
+    let r = h.rec.wait(&id, from, Duration::from_secs(180), |e| matches!(e, LiveEvent::TurnCompleted { .. }));
+    let notices: Vec<String> = h.rec.of(&id)[from..]
+        .iter()
+        .filter_map(|e| match &e.event {
+            LiveEvent::Notice { kind, .. } => Some(kind.clone()),
+            _ => None,
+        })
+        .collect();
+    log!("compact notices: {notices:?}");
+    assert!(notices.iter().any(|k| k == "compacted"), "codex /compact did not compact");
+    let evs: Vec<String> = h.rec.of(&id)[from..].iter().map(|e| short(&e.event)).collect();
+    log!("/compact -> {:?} | events: {:?}", r.is_ok(), evs.iter().map(|s| s.chars().take(120).collect::<String>()).collect::<Vec<_>>());
+    let _ = wait_state(&h.mgr, &id, LiveState::Idle, Duration::from_secs(60));
+
+    // Interrupt a longer reply.
+    let from = h.rec.count(&id);
+    h.mgr.send(&id, "从 1 数到 300，每行一个数字，不要省略", &[]).unwrap();
+    let _ = h.rec.wait(&id, from, Duration::from_secs(60), |e| matches!(e, LiveEvent::AssistantDelta { .. }));
+    let t1 = Instant::now();
+    h.mgr.interrupt(&id).unwrap();
+    let done = h.rec.wait(&id, from, Duration::from_secs(30), |e| matches!(e, LiveEvent::TurnCompleted { .. }));
+    let st = wait_state(&h.mgr, &id, LiveState::Idle, Duration::from_secs(10));
+    log!("interrupt: completed={} in {} ms, state {st:?}", done.is_ok(), t1.elapsed().as_millis());
+    assert_eq!(st, LiveState::Idle, "stuck after interrupt");
+    let _ = i1;
+}

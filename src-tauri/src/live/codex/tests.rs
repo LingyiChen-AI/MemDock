@@ -356,3 +356,20 @@ fn real_codex() {
     assert!(wait(&|e| matches!(e, LiveEvent::Exited { .. }), 15), "no Exited");
     assert!(events.lock().unwrap().iter().all(|e| !matches!(e, LiveEvent::Error { fatal: true, .. })));
 }
+
+
+#[test]
+fn compact_command_uses_thread_compact_and_shows_notices() {
+    let mut m = ready();
+    let w = m.send("/compact", &[]);
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0]["method"], "thread/compact/start");
+    assert_eq!(w[0]["params"]["threadId"], "T1");
+    let a = line(&mut m, json!({"method": "item/started", "params": {"item": {"type": "contextCompaction", "id": "c1"}}}));
+    assert!(matches!(&a.events[..], [LiveEvent::Notice { id, kind, .. }] if id == "compact-c1" && kind == "compacting"));
+    let b = line(&mut m, json!({"method": "item/completed", "params": {"item": {"type": "contextCompaction", "id": "c1"}}}));
+    assert!(matches!(&b.events[..], [LiveEvent::Notice { id, kind, .. }] if id == "compact-c1" && kind == "compacted"));
+    // Ordinary text still starts a turn.
+    let w = m.send("hello /compact", &[]);
+    assert_eq!(w[0]["method"], "turn/start");
+}

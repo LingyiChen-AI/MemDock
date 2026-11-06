@@ -990,6 +990,12 @@
     "expand": "Show all",
     "collapse": "Show less",
     "timeline": {
+      "styleLabel": "Tool call display",
+      "usedTools": "Used {n} tool(s)",
+      "view": "View",
+      "dialogTitle": "Tool calls in this turn ({n})",
+      "dialogDesc": "Inputs and outputs in the order they ran.",
+      "styles": { "chips": "Chips", "summary": "Summary", "trace": "Trace" },
       "filterLabel": "Filter by type",
       "all": "All",
       "chat": "Messages",

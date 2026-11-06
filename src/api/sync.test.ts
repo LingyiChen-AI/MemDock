@@ -89,7 +89,7 @@ describe("sync api", () => {
 
   it("syncStart returns the tagged result", async () => {
     const r = await syncStart();
-    expect(last()).toEqual(["sync_start", undefined]);
+    expect(last()).toEqual(["sync_start", { secrets: "block" }]);
     expect(r.kind).toBe("done");
     if (r.kind === "done") expect(r.skipped[0].reason).toBe("not_utf8_remote");
   });

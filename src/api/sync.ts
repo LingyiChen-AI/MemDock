@@ -54,8 +54,9 @@ export function openVerificationUrl(): Promise<void> {
 }
 
 /** `done` also reports skipped files and skill differences (nothing needed a decision). */
-export function syncStart(): Promise<SyncStartResult> {
-  return invoke<SyncStartResult>("sync_start");
+/** `secrets`: what to do with files that look like they hold secrets (default: stop and report). */
+export function syncStart(secrets: "block" | "allow" | "skip" = "block"): Promise<SyncStartResult> {
+  return invoke<SyncStartResult>("sync_start", { secrets });
 }
 
 /** Resolutions are keyed by `repo_path`. */

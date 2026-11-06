@@ -42,6 +42,15 @@ const GLOBAL_PATHS: [&str; 2] = ["global/claude/CLAUDE.md", "global/codex/AGENTS
 const SKILLS_JSON: &str = "skills.json";
 
 /// Everything one sync run needs.
+/// How a sync treats files that look like they hold secrets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretPolicy {
+    /// The user chose to sync them anyway.
+    pub allow: bool,
+    /// Repo paths left out of this sync (reported as skipped `secret`).
+    pub exclude: BTreeSet<String>,
+}
+
 pub struct SyncCtx<'a> {
     pub git: &'a SyncGit,
     pub repo_dir: &'a Path,
@@ -69,6 +78,8 @@ pub struct SyncCtx<'a> {
     pub local_skills: Option<Vec<ManifestSkill>>,
     pub snapshots: &'a SnapshotStore,
     pub write_lock: &'a Mutex<()>,
+    /// What to do about files that look like they hold secrets.
+    pub secrets: SecretPolicy,
 }
 
 /// Projects of `index` that take part in sync, as `(key, directory)`; same key
@@ -232,7 +243,7 @@ pub struct ConflictFile {
 pub struct SkippedFile {
     pub repo_path: String,
     /// `not_utf8_local` / `not_utf8_remote` / `not_utf8_base` / `case_collision` /
-    /// `duplicate_local` / `not_regular_file`.
+    /// `duplicate_local` / `not_regular_file` / `secret`.
     pub reason: String,
 }
 
@@ -641,7 +652,7 @@ fn run(
             scan_into(SKILLS_JSON, json, &mut hits);
         }
     }
-    if !hits.is_empty() {
+    if !hits.is_empty() && !ctx.secrets.allow {
         return Err(SyncError::Secrets {
             hits,
             base: written,
@@ -743,7 +754,7 @@ fn run(
                 .map_err(SyncError::from)
                 .and_then(|r| build_plan(ctx, r, &base))
                 .map_err(|e| after_writes(e, written.clone()))?;
-            if !again.secret_hits.is_empty() {
+            if !again.secret_hits.is_empty() && !ctx.secrets.allow {
                 return Err(SyncError::Secrets {
                     hits: again.secret_hits,
                     base: written,

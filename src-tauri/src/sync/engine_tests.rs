@@ -182,6 +182,7 @@ impl Pc {
             local_skills: Some(Vec::new()),
             snapshots: &self.snaps,
             write_lock: &self.lock,
+            secrets: Default::default(),
         }
     }
 

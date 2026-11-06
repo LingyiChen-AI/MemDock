@@ -29,5 +29,7 @@ export default defineConfig(() => ({
     setupFiles: ["./src/test/setup.ts"],
     css: false,
     include: ["src/**/*.test.{ts,tsx}"],
+    // Radix/userEvent flows get slow while cargo builds run in parallel.
+    testTimeout: 15000,
   },
 }));

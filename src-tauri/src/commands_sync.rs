@@ -9,7 +9,7 @@
 //! login / repository state (`try_lock` -> `sync_busy`). Order:
 //! `sync.lock -> write_lock -> index` (the engine takes `write_lock` itself).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -18,6 +18,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use crate::sync::engine::SecretPolicy;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
@@ -114,6 +115,8 @@ pub struct SyncRuntime {
     /// Plans waiting for the user's resolutions, by plan id (never sent whole
     /// to the frontend).
     pub plans: Mutex<HashMap<String, SyncPlan>>,
+    /// Secret handling chosen for the sync in progress (reset by every `sync_start`).
+    pub secret_policy: Mutex<SecretPolicy>,
     pub login_cancel: AtomicBool,
     /// A device-flow login thread is running.
     login_active: AtomicBool,
@@ -153,6 +156,7 @@ impl SyncRuntime {
         SyncRuntime {
             lock: Mutex::new(()),
             plans: Mutex::new(HashMap::new()),
+            secret_policy: Mutex::new(SecretPolicy::default()),
             login_cancel: AtomicBool::new(false),
             login_active: AtomicBool::new(false),
             api,
@@ -739,6 +743,7 @@ fn make_ctx<'a>(state: &'a AppState, p: &'a Parts, auth: Auth) -> SyncCtx<'a> {
         local_skills: p.local_skills.clone(),
         snapshots: &state.snapshots,
         write_lock: &state.write_lock,
+        secrets: lock(&state.sync.secret_policy).clone(),
     }
 }
 
@@ -1108,15 +1113,31 @@ pub fn ack_public_repo_impl(state: &AppState) -> Result<SyncStatusDto, CommandEr
 }
 
 pub fn sync_start_impl(state: &AppState) -> Result<SyncStartDto, CommandError> {
+    sync_start_with(state, "block")
+}
+
+/// `secrets`: `block` (stop and report), `allow` (sync them anyway) or
+/// `skip` (leave the files that look like secrets out of this sync).
+pub fn sync_start_with(state: &AppState, secrets: &str) -> Result<SyncStartDto, CommandError> {
     let _g = try_sync_lock(state)?;
+    *lock(&state.sync.secret_policy) = SecretPolicy {
+        allow: secrets == "allow",
+        exclude: BTreeSet::new(),
+    };
     let r = (|| {
         let mut s = load(state)?;
         let token = require_token(state, &s)?;
         ensure_ready(state, &token, &mut s)?;
         state.rescan();
         let p = gather(state, s, true)?;
-        let ctx = make_ctx(state, &p, Some(token));
-        let plan = prepare(&ctx).map_err(sync_err)?;
+        let mut ctx = make_ctx(state, &p, Some(token));
+        let mut plan = prepare(&ctx).map_err(sync_err)?;
+        if !plan.secret_hits.is_empty() && secrets == "skip" {
+            let exclude: BTreeSet<String> = plan.secret_hits.iter().map(|h| h.repo_path.clone()).collect();
+            lock(&state.sync.secret_policy).exclude = exclude.clone();
+            ctx.secrets.exclude = exclude;
+            plan = prepare(&ctx).map_err(sync_err)?;
+        }
         if !plan.secret_hits.is_empty() {
             return Ok(SyncStartDto::Blocked {
                 secret_hits: plan.secret_hits,
@@ -1349,8 +1370,8 @@ pub fn open_verification_url(app: AppHandle) -> Result<(), CommandError> {
 }
 
 #[tauri::command(async)]
-pub fn sync_start(state: St) -> Result<SyncStartDto, CommandError> {
-    sync_start_impl(&state)
+pub fn sync_start(state: St, secrets: Option<String>) -> Result<SyncStartDto, CommandError> {
+    sync_start_with(&state, secrets.as_deref().unwrap_or("block"))
 }
 
 #[tauri::command(async)]

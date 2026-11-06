@@ -445,6 +445,27 @@ fn secrets_block_sync() {
     assert_eq!(e.sync_state().last_sync_commit, None);
 }
 
+#[test]
+fn secrets_can_be_skipped_or_allowed() {
+    let e = env();
+    e.login();
+    write(&e.global(), "key = AKIAIOSFODNN7EXAMPLE
+");
+    match sync_start_with(&e.state, "skip").unwrap() {
+        SyncStartDto::Done { skipped, .. } => {
+            assert!(skipped.iter().any(|s| s.repo_path == GLOBAL && s.reason == "secret"), "{skipped:?}");
+        }
+        other => panic!("expected done, got {other:?}"),
+    }
+    // The skipped file is not on the remote; allowing it pushes it.
+    assert!(!git(&e.bare, &["ls-tree", "-r", "--name-only", "HEAD"]).contains(GLOBAL));
+    match sync_start_with(&e.state, "allow").unwrap() {
+        SyncStartDto::Done { .. } => {}
+        other => panic!("expected done, got {other:?}"),
+    }
+    assert!(git(&e.bare, &["ls-tree", "-r", "--name-only", "HEAD"]).contains(GLOBAL));
+}
+
 fn conflict_setup(e: &Env) -> SyncPlanDto {
     e.login();
     write(&e.global(), "l1\nl2\nl3\nl4\nl5\n");

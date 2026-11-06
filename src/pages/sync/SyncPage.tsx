@@ -13,6 +13,7 @@ import type {
   SyncSummary,
 } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { syncErrorText } from "@/components/account/syncErrors";
 import { cn } from "@/lib/utils";
@@ -105,13 +106,13 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
     return summary;
   };
 
-  const run = async () => {
+  const run = async (secrets: "block" | "allow" | "skip" = "block") => {
     setSyncing(true);
     setError(null);
     setHits(null);
     setExtras(null);
     try {
-      const r = await syncStart();
+      const r = await syncStart(secrets);
       if (r.kind === "done") {
         const sm = finished(r.summary, { skipped: r.skipped, missing: r.missing_skills, removed: r.removed_elsewhere });
         push("success", fmt(s.doneToast, { pulled: sm.pulled, pushed: sm.pushed, merged: sm.merged }));
@@ -244,7 +245,13 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
             </section>
 
             {error ? <InlineError message={error} /> : null}
-            {hits ? <SecretHits hits={hits} /> : null}
+            <SecretsDialog
+              hits={hits}
+              busy={syncing}
+              onCancel={() => setHits(null)}
+              onSkip={() => void run("skip")}
+              onAllow={() => void run("allow")}
+            />
             {extras && extras.skipped.length > 0 ? <SkippedList items={extras.skipped} /> : null}
             {extras ? <MissingSkills missing={extras.missing} removed={extras.removed} projects={projects} notify={push} /> : null}
 
@@ -328,6 +335,60 @@ export function SecretHits({ hits }: { hits: FileSecretHit[] }) {
         ))}
       </ul>
     </section>
+  );
+}
+
+/** Secrets found: let the user cancel, leave those files out, or sync them anyway. */
+export function SecretsDialog({
+  hits,
+  busy,
+  onCancel,
+  onSkip,
+  onAllow,
+}: {
+  hits: FileSecretHit[] | null;
+  busy: boolean;
+  onCancel: () => void;
+  onSkip: () => void;
+  onAllow: () => void;
+}) {
+  const { t } = useI18n();
+  const s = t.sync;
+  const files = hits ? new Set(hits.map((h) => h.repo_path)).size : 0;
+  return (
+    <Dialog open={!!hits} onOpenChange={(o) => (!o && !busy ? onCancel() : undefined)}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldAlert className="size-5 text-destructive" aria-hidden="true" />
+            {s.secretsTitle}
+          </DialogTitle>
+          <DialogDescription>{fmt(s.secretsBody, { n: files })}</DialogDescription>
+        </DialogHeader>
+        <ul className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-muted/40 p-3">
+          {(hits ?? []).map((h, i) => (
+            <li key={i} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+              <span className="min-w-0 font-mono text-xs break-all">{h.repo_path}</span>
+              <span className="text-xs text-muted-foreground">{fmt(s.hitLine, { line: h.line })}</span>
+              <span className="rounded bg-destructive/10 px-1.5 text-xs font-semibold text-destructive">{h.rule}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-muted-foreground">{s.secretsNote}</p>
+        <DialogFooter className="gap-2">
+          <Button type="button" variant="outline" disabled={busy} onClick={onCancel} className="cursor-pointer">
+            {s.secretsCancel}
+          </Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={onAllow} className="cursor-pointer border-destructive/50 text-destructive hover:bg-destructive/10">
+            {s.secretsAllow}
+          </Button>
+          <Button type="button" disabled={busy} onClick={onSkip} autoFocus className="cursor-pointer font-semibold">
+            {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+            {s.secretsSkip}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

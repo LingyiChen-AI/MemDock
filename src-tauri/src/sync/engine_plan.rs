@@ -210,6 +210,10 @@ pub(super) fn build_plan(
     let mut pres: Vec<Pre> = Vec::new();
     let mut has_local: HashSet<String> = HashSet::new();
     for c in cands.list {
+        if ctx.secrets.exclude.contains(&c.repo_path) {
+            skip(&mut plan, &c.repo_path, "secret");
+            continue;
+        }
         considered.insert(c.repo_path.clone());
         // symlinks / gitlinks at a memory path are never touched
         if remote_full.get(&c.repo_path).is_some_and(|e| !e.is_regular()) {
@@ -432,5 +436,8 @@ pub(super) fn build_plan(
         plan.manifest_json = Some(json);
     }
     plan.remote_tree = remote_full;
+    if ctx.secrets.allow {
+        plan.secret_hits.clear();
+    }
     Ok(plan)
 }

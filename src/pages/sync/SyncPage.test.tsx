@@ -141,10 +141,12 @@ describe("SyncPage", () => {
     });
     setup();
     await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
-    const box = await screen.findByRole("alert", { name: "发现疑似密钥，已停止同步" });
+    const box = await screen.findByRole("dialog", { name: "发现疑似密钥" });
     expect(within(box).getByText("global/claude/CLAUDE.md")).toBeInTheDocument();
     expect(within(box).getByText("第 12 行")).toBeInTheDocument();
     expect(within(box).getByText("github_token")).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: "跳过这些文件，继续同步" }));
+    expect(syncStart).toHaveBeenLastCalledWith("skip");
   });
 
   it("finish_disabled_until_resolved", async () => {

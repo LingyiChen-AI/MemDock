@@ -16,7 +16,9 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { basename, fmt } from "@/pages/memory/paths";
+import type { NavKey } from "@/layout/AppShell";
 import { AddSkillDialog } from "./AddSkillDialog";
+import { ManifestDialog } from "./ManifestDialog";
 import { BackupsDrawer } from "./BackupsDrawer";
 import { DeletedSkillDetail } from "./DeletedSkillDetail";
 import { PARTIAL_SAVE_PREFIX, describeError } from "./flowParts";
@@ -46,9 +48,11 @@ function loadWidth(): number {
 export interface SkillsPageProps {
   /** Reports unsaved file edits so the app can confirm before leaving the page. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** App navigation; the manifest dialog uses it to open the sync page. */
+  onNavigate?: (key: NavKey) => void;
 }
 
-export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
+export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
   const { t } = useI18n();
   const s = t.skills;
   const [entries, setEntries] = React.useState<SkillEntry[] | null>(null);
@@ -68,6 +72,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
   const [pending, setPending] = React.useState<{ run: () => void } | null>(null);
   // Flows: each one is opened for one concrete entry and never follows the selection afterwards.
   const [addOpen, setAddOpen] = React.useState(false);
+  const [manifestOpen, setManifestOpen] = React.useState(false);
   const [syncEntry, setSyncEntry] = React.useState<SkillEntry | null>(null);
   const [deleteEntry, setDeleteEntry] = React.useState<SkillEntry | null>(null);
   const [backupsEntry, setBackupsEntry] = React.useState<SkillEntry | null>(null);
@@ -280,6 +285,16 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
     }
   };
 
+  const manifestDialog = (
+    <ManifestDialog
+      open={manifestOpen}
+      onOpenChange={setManifestOpen}
+      notify={push}
+      onOpenSync={onNavigate ? () => onNavigate("sync") : undefined}
+      onInstalled={() => void load()}
+    />
+  );
+
   if (entries === null) {
     return (
       <LoadingState label={s.loading} />
@@ -302,11 +317,17 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
             {s.retry}
           </Button>
         ) : (
-          <Button type="button" onClick={() => setAddOpen(true)} className="h-7 cursor-pointer px-3 text-xs font-semibold">
-            {s.addSkill}
-          </Button>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => setManifestOpen(true)} className="h-7 cursor-pointer bg-card px-3 text-xs hover:bg-muted">
+              {s.manifest.open}
+            </Button>
+            <Button type="button" onClick={() => setAddOpen(true)} className="h-7 cursor-pointer px-3 text-xs font-semibold">
+              {s.addSkill}
+            </Button>
+          </div>
         )}
         {addDialog}
+        {manifestDialog}
         <ToastRegion toasts={toasts} onDismiss={dismiss} />
       </div>
     );
@@ -326,6 +347,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
           checkedUpdates={checkedUpdates}
           onCheck={() => void check()}
           onAdd={() => setAddOpen(true)}
+          onManifest={() => setManifestOpen(true)}
           deleted={deleted}
           selectedDeleted={deletedItem?.bucket}
           onSelectDeleted={selectDeleted}
@@ -406,6 +428,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
         onCancel={() => setPending(null)}
       />
       {addDialog}
+      {manifestDialog}
       {syncEntry ? (
         <SyncDialog
           entry={syncEntry}

@@ -6,7 +6,11 @@ import type {
   InspectResult,
   InstallFrom,
   InstallTarget,
+  ManifestCompare,
+  ManifestSkill,
+  SkillManifest,
   SkillEntry,
+  SkillScope,
   SkillFileDto,
   SkillFileList,
   SkillsChangedPayload,
@@ -17,6 +21,35 @@ import type {
 
 export function listSkills(): Promise<SkillEntry[]> {
   return invoke<SkillEntry[]>("list_skills");
+}
+
+/** This machine's skill install manifest. */
+export function skillManifestLocal(): Promise<SkillManifest> {
+  return invoke<SkillManifest>("skill_manifest_local");
+}
+
+/** Compares this machine with `remote`, or with the synced `skills.json` when `remote` is null. */
+export function skillManifestCompare(remote: SkillManifest | null): Promise<ManifestCompare> {
+  return invoke<ManifestCompare>("skill_manifest_compare", { remote });
+}
+
+/** Writes this machine's manifest to `path`; resolves with the number of skills. */
+export function skillManifestExport(path: string): Promise<number> {
+  return invoke<number>("skill_manifest_export", { path });
+}
+
+/** Reads and validates a manifest file (installs nothing). */
+export function skillManifestImport(path: string): Promise<SkillManifest> {
+  return invoke<SkillManifest>("skill_manifest_import", { path });
+}
+
+/** Installs one manifest entry from its git source into `scope`. */
+export function installFromManifest(m: ManifestSkill, scope: SkillScope): Promise<SkillEntry[]> {
+  return installSkill(
+    { type: "git", url: m.url, clone_url: m.url, git_ref: m.git_ref, skill_path: m.skill_path, commit: m.commit },
+    [{ tool: m.tool, scope }],
+    false,
+  );
 }
 
 export function gitAvailable(): Promise<boolean> {

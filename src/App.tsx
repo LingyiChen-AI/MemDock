@@ -46,7 +46,7 @@ function Shell() {
         pages={{
           review: <ReviewPage onNavigate={navigate} />,
           extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
-          skills: <SkillsPage onDirtyChange={onDirty} />,
+          skills: <SkillsPage onDirtyChange={onDirty} onNavigate={navigate} />,
           sync: (
             <SyncPage
               status={syncStatus}

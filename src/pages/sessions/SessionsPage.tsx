@@ -1264,7 +1264,10 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     });
   }, []);
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
-  const [preview, setPreview] = React.useState<SessionPreview | null>(null);
+  // The preview with the file it belongs to: right after another session is picked, the old one
+  // must not be shown as the new session's history (it would render one frame and then jump).
+  const [loadedPreview, setLoadedPreview] = React.useState<{ path: string; p: SessionPreview } | null>(null);
+  const setPreview = (p: SessionPreview | null, path?: string) => setLoadedPreview(p && path ? { path, p } : null);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
   const [confirm, setConfirm] = React.useState<Confirm | null>(null);
   const [converting, setConverting] = React.useState(false);
@@ -1394,7 +1397,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     shownPath.current = selectedPath;
     setPreviewError(null);
     sessionPreview(selectedTool, selectedPath, previewLimit)
-      .then((p) => alive && setPreview(p))
+      .then((p) => alive && setPreview(p, selectedPath))
       .catch((e) => alive && setPreviewError(errorMessage(e)))
       .finally(() => alive && setLoadingMore(false));
     return () => {
@@ -1402,6 +1405,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     };
   }, [selectedPath, selectedTool, previewNonce, previewLimit]);
 
+  const preview = loadedPreview && loadedPreview.path === selectedPath ? loadedPreview.p : null;
   const selectedUpdated = selected?.updated_at ?? null;
   const seenUpdated = React.useRef<{ path?: string; at: number | null }>({ at: null });
   React.useEffect(() => {

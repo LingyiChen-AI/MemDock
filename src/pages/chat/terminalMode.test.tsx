@@ -27,6 +27,7 @@ vi.mock("@/api/live", () => ({
   liveTranscript: vi.fn().mockResolvedValue([]),
   onLiveEvent: vi.fn().mockResolvedValue(() => {}),
   readImageDataUri: vi.fn(),
+  liveModels: vi.fn().mockResolvedValue([]),
 }));
 
 // Captured pty event callbacks, to play backend output.

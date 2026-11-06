@@ -331,3 +331,18 @@ fn context_after_compaction_uses_post_tokens() {
     let c = claude_context(&lines).unwrap();
     assert_eq!((c.used, c.window), (9575, 1_000_000));
 }
+
+/// `MEMDOCK_PREVIEW_FILE=<jsonl> cargo test --lib real_preview_tail -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn real_preview_tail() {
+    let Ok(f) = std::env::var("MEMDOCK_PREVIEW_FILE") else { return };
+    let paths = AgentPaths::detect();
+    let data = tempfile::tempdir().unwrap();
+    let p = session_preview_impl(&paths, data.path(), Tool::Claude, &f).unwrap();
+    println!("timeline_total={} shown={} counts={:?}", p.timeline_total, p.timeline.len(), p.counts);
+    for it in p.timeline.iter().rev().take(4) {
+        let s = serde_json::to_string(it).unwrap();
+        println!("  {}", s.chars().take(160).collect::<String>());
+    }
+}

@@ -179,6 +179,16 @@ describe("SessionsPage", () => {
     await waitFor(() => expect(convertSession).toHaveBeenLastCalledWith("claude", claudeSession.path, true));
   });
 
+  it("refresh and clicking the open session again re-read its history", async () => {
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole("button", { name: /Build fix/ }));
+    await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(3));
+  });
+
   it("renames the open session in place", async () => {
     (renameSession as Mock).mockResolvedValue(undefined);
     renderApp(<SessionsPage />);

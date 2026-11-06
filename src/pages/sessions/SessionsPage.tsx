@@ -1336,6 +1336,16 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     };
   }, [selectedPath, selectedTool, previewNonce]);
 
+  const selectedUpdated = selected?.updated_at ?? null;
+  const seenUpdated = React.useRef<{ path?: string; at: number | null }>({ at: null });
+  React.useEffect(() => {
+    const prev = seenUpdated.current;
+    seenUpdated.current = { path: selectedPath, at: selectedUpdated };
+    if (prev.path === selectedPath && prev.at !== null && selectedUpdated !== null && selectedUpdated !== prev.at) {
+      setPreviewNonce((n) => n + 1);
+    }
+  }, [selectedPath, selectedUpdated]);
+
   const visible = React.useMemo(() => filterSessions(sessions ?? [], tool, query), [sessions, tool, query]);
   // Sessions running in a worktree are listed under their repo's project (with a badge).
   const wtState = useWorktreeState();
@@ -1450,6 +1460,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   }, [request, onRequestHandled]);
 
   const select = (x: SessionSummary) => {
+    if (sessionKey(x) === selectedKey) setPreviewNonce((n) => n + 1);
     setSelectedKey(sessionKey(x));
     setResult(null);
     setConvertError(null);
@@ -1535,7 +1546,17 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
           <p className="text-xs text-muted-foreground">{c.subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void load()} className="cursor-pointer">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            onClick={() => {
+              void load();
+              setPreviewNonce((n) => n + 1);
+            }}
+            className="cursor-pointer"
+          >
             <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
             {s.refresh}
           </Button>

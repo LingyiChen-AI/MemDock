@@ -142,9 +142,13 @@ describe("SyncPage", () => {
     setup();
     await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
     const box = await screen.findByRole("dialog", { name: "发现疑似密钥" });
-    expect(within(box).getByText("global/claude/CLAUDE.md")).toBeInTheDocument();
+    expect(within(box).getByText("CLAUDE.md")).toBeInTheDocument();
+    expect(within(box).getByText("global/claude")).toBeInTheDocument();
+    expect(within(box).getByTitle("global/claude/CLAUDE.md")).toBeInTheDocument();
     expect(within(box).getByText("第 12 行")).toBeInTheDocument();
     expect(within(box).getByText("github_token")).toBeInTheDocument();
+    const allow = within(box).getByRole("button", { name: "坚持同步" });
+    expect(allow).toHaveAccessibleDescription(/密钥可能因此泄露/);
     await userEvent.click(within(box).getByRole("button", { name: "跳过这些文件，继续同步" }));
     expect(syncStart).toHaveBeenLastCalledWith("skip");
   });

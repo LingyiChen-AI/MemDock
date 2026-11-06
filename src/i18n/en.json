@@ -657,7 +657,6 @@
     "finishedToast": "Sync finished: pulled {pulled}, pushed {pushed}, merged {merged}",
     "secretsTitle": "Possible secrets found",
     "secretsBody": "{n} file(s) look like they contain passwords or keys. Pushing them to GitHub may leak them, even in a private repository.",
-    "secretsNote": "Skip: those files are left out this time and everything else syncs; they are checked again next time. Sync anyway: push them as they are to your private repository.",
     "secretsCancel": "Cancel",
     "secretsSkip": "Skip these files and sync",
     "secretsAllow": "Sync anyway",
@@ -739,7 +738,10 @@
     "restored": "Restored {path}",
     "absent": "The file does not exist in this version",
     "loading": "Loading…",
-    "retry": "Retry"
+    "retry": "Retry",
+    "secretsListLabel": "Where possible secrets were found",
+    "secretsSkipHint": "Those files stay out this time; everything else syncs. They are checked again next time.",
+    "secretsAllowHint": "Push them as they are to your repository. The keys may leak."
   },
   "usage": {
     "title": "Usage",

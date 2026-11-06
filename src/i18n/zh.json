@@ -657,7 +657,6 @@
     "finishedToast": "同步完成：拉取 {pulled}、推送 {pushed}、合并 {merged}",
     "secretsTitle": "发现疑似密钥",
     "secretsBody": "有 {n} 个文件里像是有密码或密钥，推到 GitHub 后可能泄露（即使是私有仓库）。",
-    "secretsNote": "跳过：这些文件这次不同步，其他照常同步，下次仍会检查。坚持同步：原样推到你的私有仓库。",
     "secretsCancel": "取消",
     "secretsSkip": "跳过这些文件，继续同步",
     "secretsAllow": "坚持同步",
@@ -739,7 +738,10 @@
     "restored": "已恢复 {path}",
     "absent": "这个版本里没有该文件",
     "loading": "加载中…",
-    "retry": "重试"
+    "retry": "重试",
+    "secretsListLabel": "疑似密钥所在位置",
+    "secretsSkipHint": "这些文件本次不上传，其余照常同步；下次同步会再检查。",
+    "secretsAllowHint": "原样推送到你的仓库，密钥可能因此泄露。"
   },
   "usage": {
     "title": "用量统计",

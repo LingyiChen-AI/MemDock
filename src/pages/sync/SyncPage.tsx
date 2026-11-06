@@ -1,6 +1,20 @@
 import * as React from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CircleDot, CircleCheck, ExternalLink, FileWarning, Loader2, LogIn, LogOut, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
+import {
+  CircleCheck,
+  CircleDot,
+  ExternalLink,
+  FileKey2,
+  FileWarning,
+  Loader2,
+  LogIn,
+  LogOut,
+  RefreshCw,
+  ShieldAlert,
+  SkipForward,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
 import { logout, syncDiscard, syncFinish, syncProjects, syncStart, syncStatus } from "@/api/sync";
 import type {
   FileSecretHit,
@@ -27,6 +41,7 @@ import { ChoiceButton, ConflictResolver, resolutionOf, type ConflictState } from
 import { MissingSkills } from "./MissingSkills";
 import { ProjectMapping } from "./ProjectMapping";
 import { SyncHistory } from "./SyncHistory";
+import { middleEllipsis, splitPath } from "./pathText";
 
 export interface SyncPageProps {
   status: SyncStatus | null;
@@ -355,36 +370,83 @@ export function SecretsDialog({
   const { t } = useI18n();
   const s = t.sync;
   const files = hits ? new Set(hits.map((h) => h.repo_path)).size : 0;
+  const skipHint = React.useId();
+  const allowHint = React.useId();
   return (
     <Dialog open={!!hits} onOpenChange={(o) => (!o && !busy ? onCancel() : undefined)}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="w-[600px] max-w-[calc(100vw-2rem)]">
+        <DialogHeader className="pr-8">
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="size-5 text-destructive" aria-hidden="true" />
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-destructive/10 dark:bg-destructive/20">
+              <ShieldAlert className="size-4 text-destructive" aria-hidden="true" />
+            </span>
             {s.secretsTitle}
           </DialogTitle>
-          <DialogDescription>{fmt(s.secretsBody, { n: files })}</DialogDescription>
+          <DialogDescription className="leading-relaxed">{fmt(s.secretsBody, { n: files })}</DialogDescription>
         </DialogHeader>
-        <ul className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-muted/40 p-3">
-          {(hits ?? []).map((h, i) => (
-            <li key={i} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-              <span className="min-w-0 font-mono text-xs break-all">{h.repo_path}</span>
-              <span className="text-xs text-muted-foreground">{fmt(s.hitLine, { line: h.line })}</span>
-              <span className="rounded bg-destructive/10 px-1.5 text-xs font-semibold text-destructive">{h.rule}</span>
-            </li>
-          ))}
+        <ul aria-label={s.secretsListLabel} className="mt-4 max-h-[280px] space-y-1.5 overflow-y-auto pr-1">
+          {(hits ?? []).map((h, i) => {
+            const { name, dir } = splitPath(h.repo_path);
+            return (
+              <li
+                key={i}
+                className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 dark:bg-muted/20"
+              >
+                <FileKey2 className="size-4 shrink-0 text-destructive/80" aria-hidden="true" />
+                <div className="min-w-0 flex-1" title={h.repo_path}>
+                  <p className="truncate text-sm font-semibold">{name}</p>
+                  {dir ? <p className="truncate font-mono text-xs text-muted-foreground">{middleEllipsis(dir, 56)}</p> : null}
+                </div>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{fmt(s.hitLine, { line: h.line })}</span>
+                <span className="shrink-0 rounded-sm bg-destructive/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-destructive dark:bg-destructive/20">
+                  {h.rule}
+                </span>
+              </li>
+            );
+          })}
         </ul>
-        <p className="text-xs text-muted-foreground">{s.secretsNote}</p>
-        <DialogFooter className="gap-2">
-          <Button type="button" variant="outline" disabled={busy} onClick={onCancel} className="cursor-pointer">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onSkip}
+            autoFocus
+            aria-label={s.secretsSkip}
+            aria-describedby={skipHint}
+            className="flex cursor-pointer flex-col items-start gap-1 rounded-lg bg-primary px-3.5 py-3 text-left text-primary-foreground shadow-sm transition-colors duration-150 outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
+          >
+            <span className="flex items-center gap-1.5 text-sm font-semibold">
+              {busy ? (
+                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <SkipForward className="size-4" aria-hidden="true" />
+              )}
+              {s.secretsSkip}
+            </span>
+            <span id={skipHint} className="text-xs leading-snug opacity-85">
+              {s.secretsSkipHint}
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onAllow}
+            aria-label={s.secretsAllow}
+            aria-describedby={allowHint}
+            className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-destructive/60 bg-transparent px-3.5 py-3 text-left text-destructive transition-colors duration-150 outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-destructive/50 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-destructive/50 dark:hover:bg-destructive/15"
+          >
+            <span className="flex items-center gap-1.5 text-sm font-semibold">
+              <Upload className="size-4" aria-hidden="true" />
+              {s.secretsAllow}
+            </span>
+            <span id={allowHint} className="text-xs leading-snug text-destructive/80">
+              {s.secretsAllowHint}
+            </span>
+          </button>
+        </div>
+        <DialogFooter className="mt-3">
+          <Button type="button" variant="ghost" disabled={busy} onClick={onCancel} className="h-8 cursor-pointer px-3 text-sm text-muted-foreground">
             {s.secretsCancel}
-          </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={onAllow} className="cursor-pointer border-destructive/50 text-destructive hover:bg-destructive/10">
-            {s.secretsAllow}
-          </Button>
-          <Button type="button" disabled={busy} onClick={onSkip} autoFocus className="cursor-pointer font-semibold">
-            {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-            {s.secretsSkip}
           </Button>
         </DialogFooter>
       </DialogContent>

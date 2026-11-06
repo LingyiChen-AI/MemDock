@@ -32,6 +32,11 @@ export const TERMINAL_CHROME = {
   text: "#abb2bf",
   strong: "#d7dae0",
   error: "#e06c75",
+  /** Border of the focused pane of a split terminal. */
+  focus: "#3fb950",
+  /** Pane context menu. */
+  menu: "#1e2127",
+  paneHeader: "rgba(255, 255, 255, 0.04)",
 };
 
 export const TERMINAL_FONT =

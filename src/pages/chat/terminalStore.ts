@@ -50,7 +50,10 @@ export interface TermEntry {
 /** Scrollback kept per terminal for re-attaching. */
 export const BUFFER_CAP = 2 * 1024 * 1024;
 
+/** Terminals by key: the first pane of each terminal (what lists and conversations see). */
 let entries: Record<string, TermEntry> = {};
+/** Extra split panes, keyed `<terminal key>#pane-<n>`; never listed on their own. */
+let subs: Record<string, TermEntry> = {};
 const buffers = new Map<string, string>();
 const keyByPty = new Map<string, string>();
 /** Output that arrived before `ptyOpen` answered with its id. */
@@ -66,15 +69,49 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
+export const PANE_SEP = "#pane-";
+
+/** The terminal a pane key belongs to (a terminal key is its own first pane). */
+export function paneRoot(key: string): string {
+  const i = key.indexOf(PANE_SEP);
+  return i >= 0 ? key.slice(0, i) : key;
+}
+
+function isSub(key: string): boolean {
+  return key.includes(PANE_SEP);
+}
+
+function getEntry(key: string): TermEntry | undefined {
+  return isSub(key) ? subs[key] : entries[key];
+}
+
+function putEntry(key: string, e: TermEntry) {
+  if (isSub(key)) subs = { ...subs, [key]: e };
+  else entries = { ...entries, [key]: e };
+}
+
+function dropEntry(key: string) {
+  if (isSub(key)) {
+    const rest = { ...subs };
+    delete rest[key];
+    subs = rest;
+  } else {
+    const rest = { ...entries };
+    delete rest[key];
+    entries = rest;
+  }
+}
+
 function patch(key: string, p: Partial<TermEntry>) {
-  const cur = entries[key];
+  const cur = getEntry(key);
   if (!cur) return;
-  entries = { ...entries, [key]: { ...cur, ...p } };
+  putEntry(key, { ...cur, ...p });
   emit();
 }
 
+/** The terminal (or split pane) of `key`. */
 export function getTerminal(key: string): TermEntry | undefined {
-  return entries[key];
+  return getEntry(key);
 }
 
 export function getTerminalBuffer(key: string): string {
@@ -88,7 +125,7 @@ export function useTerminal(key: string): TermEntry | undefined {
       listeners.delete(l);
     };
   }, []);
-  const get = React.useCallback(() => entries[key], [key]);
+  const get = React.useCallback(() => getEntry(key), [key]);
   return React.useSyncExternalStore(sub, get, get);
 }
 
@@ -139,33 +176,31 @@ function ensureListening(): Promise<void> {
  * `keep`: never closed automatically when its view is left (plain shell terminals).
  */
 export async function openTerminal(key: string, opts: PtyOpenOptions, keep = false): Promise<void> {
-  const cur = entries[key];
+  const cur = getEntry(key);
   if (cur && (cur.status === "starting" || cur.status === "running")) return;
-  entries = {
-    ...entries,
-    [key]: { key, ptyId: null, command: "", status: "starting", code: null, error: null, busy: null, touched: keep, opts },
-  };
+  putEntry(key, { key, ptyId: null, command: "", status: "starting", code: null, error: null, busy: null, touched: keep, opts });
   buffers.set(key, "");
   emit();
   try {
     await ensureListening();
     const { pty_id, command } = await ptyOpen(opts);
-    if (entries[key]?.status !== "starting" || entries[key]?.ptyId) {
+    if (getEntry(key)?.status !== "starting" || getEntry(key)?.ptyId) {
       // Closed (or replaced) while starting.
       if (!keyByPty.has(pty_id)) void ptyClose(pty_id).catch(() => {});
       return;
     }
     const other = keyByPty.get(pty_id);
-    if (other && other !== key && entries[other]) {
+    if (other && other !== key && getEntry(other) && !isSub(key)) {
       // The backend re-attached a terminal we already show under another key: move it here.
-      const rest = { ...entries };
-      delete rest[key];
-      entries = rest;
+      dropEntry(key);
       migrateTerminal(other, key);
       return;
     }
     keyByPty.set(pty_id, key);
     patch(key, { ptyId: pty_id, command, status: "running" });
+    // The view was laid out (or resized) while the process started.
+    const size = getEntry(key)?.opts;
+    if (size && (size.cols !== opts.cols || size.rows !== opts.rows)) void ptyResize(pty_id, size.cols, size.rows).catch(() => {});
     for (const d of early.get(pty_id) ?? []) deliver(key, d);
     early.delete(pty_id);
     if (earlyExit.has(pty_id)) {
@@ -182,13 +217,35 @@ export async function openTerminal(key: string, opts: PtyOpenOptions, keep = fal
  * moves the terminal with its scrollback; the process keeps running. False when nothing moved.
  */
 export function migrateTerminal(from: string, to: string): boolean {
-  const cur = entries[from];
-  if (from === to || !cur) return false;
+  const cur = getEntry(from);
+  if (from === to || !cur || isSub(to)) return false;
   const there = entries[to];
   if (there && (there.status === "starting" || there.status === "running")) return false;
-  const rest = { ...entries };
-  delete rest[from];
-  entries = { ...rest, [to]: { ...cur, key: to } };
+  if (isSub(from)) {
+    // A split pane becomes a terminal of its own.
+    detachPane(from);
+  } else {
+    // Its split panes move along.
+    const lay = layouts[from];
+    if (lay) {
+      const ren = (k: string) => (k === from ? to : to + k.slice(from.length));
+      for (const k of leaves(lay.tree)) if (k !== from) moveKey(k, ren(k));
+      const next = { ...layouts };
+      delete next[from];
+      layouts = { ...next, [to]: { ...lay, tree: mapLeaves(lay.tree, ren), focus: ren(lay.focus) } };
+    }
+  }
+  moveKey(from, to);
+  emit();
+  return true;
+}
+
+/** Moves one pane's entry, scrollback and pty mapping to another key (no emit). */
+function moveKey(from: string, to: string) {
+  const cur = getEntry(from);
+  if (!cur) return;
+  dropEntry(from);
+  putEntry(to, { ...cur, key: to });
   buffers.set(to, buffers.get(from) ?? "");
   buffers.delete(from);
   if (cur.ptyId) keyByPty.set(cur.ptyId, to);
@@ -196,13 +253,239 @@ export function migrateTerminal(from: string, to: string): boolean {
   if (t) clearTimeout(t);
   closeTimers.delete(from);
   sinks.delete(from);
-  emit();
-  return true;
 }
 
 /** The key showing terminal `ptyId`, if any. */
 export function terminalKeyForPty(ptyId: string): string | undefined {
   return keyByPty.get(ptyId);
+}
+
+// ---------------------------------------------------------------------------
+// Split panes: each terminal's layout is a binary tree whose leaves are pane keys.
+// ---------------------------------------------------------------------------
+
+export type SplitDir = "row" | "column";
+export type PaneNode = { type: "leaf"; pane: string } | { type: "split"; id: string; dir: SplitDir; ratio: number; a: PaneNode; b: PaneNode };
+export interface PaneLayout {
+  tree: PaneNode;
+  focus: string;
+  seq: number;
+}
+
+/** Most panes one terminal can be split into. */
+export const MAX_PANES = 6;
+
+/** Layouts of split terminals by terminal key; a terminal without one is a single pane. */
+let layouts: Record<string, PaneLayout> = {};
+let splitSeq = 0;
+
+export function leaves(n: PaneNode): string[] {
+  return n.type === "leaf" ? [n.pane] : [...leaves(n.a), ...leaves(n.b)];
+}
+
+function mapLeaves(n: PaneNode, f: (k: string) => string): PaneNode {
+  return n.type === "leaf" ? { type: "leaf", pane: f(n.pane) } : { ...n, a: mapLeaves(n.a, f), b: mapLeaves(n.b, f) };
+}
+
+function removeLeaf(n: PaneNode, key: string): PaneNode | null {
+  if (n.type === "leaf") return n.pane === key ? null : n;
+  const a = removeLeaf(n.a, key);
+  const b = removeLeaf(n.b, key);
+  if (!a) return b;
+  if (!b) return a;
+  return a === n.a && b === n.b ? n : { ...n, a, b };
+}
+
+function replaceLeaf(n: PaneNode, key: string, by: PaneNode): PaneNode {
+  if (n.type === "leaf") return n.pane === key ? by : n;
+  return { ...n, a: replaceLeaf(n.a, key, by), b: replaceLeaf(n.b, key, by) };
+}
+
+function single(key: string): PaneLayout {
+  return { tree: { type: "leaf", pane: key }, focus: key, seq: 1 };
+}
+
+export function getLayout(key: string): PaneLayout {
+  return layouts[key] ?? single(key);
+}
+
+const singles = new Map<string, PaneLayout>();
+/** Bumped when another pane takes over a terminal's first pane: its view must re-attach. */
+const heirGens = new Map<string, number>();
+
+export function paneGen(key: string): number {
+  return heirGens.get(key) ?? 0;
+}
+
+/** The pane layout of terminal `key` (a single pane until it is split). */
+export function useLayout(key: string): PaneLayout {
+  const sub = React.useCallback((l: () => void) => {
+    listeners.add(l);
+    return () => {
+      listeners.delete(l);
+    };
+  }, []);
+  const get = React.useCallback(() => {
+    const lay = layouts[key];
+    if (lay) return lay;
+    let s = singles.get(key);
+    if (!s) {
+      s = single(key);
+      singles.set(key, s);
+    }
+    return s;
+  }, [key]);
+  return React.useSyncExternalStore(sub, get, get);
+}
+
+function setLayout(root: string, lay: PaneLayout | null) {
+  const next = { ...layouts };
+  if (lay && lay.tree.type === "split") next[root] = lay;
+  else delete next[root];
+  layouts = next;
+}
+
+/** Takes a split pane out of its terminal's layout (its process is left alone; no emit). */
+function detachPane(key: string) {
+  const root = paneRoot(key);
+  const lay = layouts[root];
+  if (!lay) return;
+  const tree = removeLeaf(lay.tree, key) ?? { type: "leaf", pane: root };
+  const ks = leaves(tree);
+  setLayout(root, { ...lay, tree, focus: ks.includes(lay.focus) ? lay.focus : ks[0] });
+}
+
+/**
+ * Splits pane `pane` of terminal `root`: the new pane goes right (`row`) or below (`column`),
+ * gets the focus and starts `opts` (a shell unless told otherwise). Null at the pane limit.
+ */
+export function splitPane(root: string, pane: string, dir: SplitDir, opts: PtyOpenOptions): string | null {
+  const lay = getLayout(root);
+  if (leaves(lay.tree).length >= MAX_PANES || !leaves(lay.tree).includes(pane)) return null;
+  const key = `${root}${PANE_SEP}${lay.seq + 1}`;
+  splitSeq += 1;
+  const tree = replaceLeaf(lay.tree, pane, { type: "split", id: `s${splitSeq}`, dir, ratio: 0.5, a: { type: "leaf", pane }, b: { type: "leaf", pane: key } });
+  setLayout(root, { tree, focus: key, seq: lay.seq + 1 });
+  // A split terminal is in use: it stays when its view is left.
+  const head = entries[root];
+  if (head && !head.touched) entries = { ...entries, [root]: { ...head, touched: true } };
+  emit();
+  void openTerminal(key, opts, true);
+  return key;
+}
+
+/**
+ * Closes one pane, killing only its process. Closing the first pane hands its place (and key)
+ * to the next one. Returns false when it was the last pane: the caller closes the whole terminal.
+ */
+export function closePane(root: string, pane: string): boolean {
+  const lay = layouts[root];
+  if (!lay || !leaves(lay.tree).includes(pane)) return false;
+  const tree = removeLeaf(lay.tree, pane);
+  if (!tree) return false;
+  let next: PaneLayout = { ...lay, tree, focus: lay.focus === pane ? leaves(tree)[0] : lay.focus };
+  void killKey(pane);
+  if (pane === root) {
+    const heir = leaves(tree)[0];
+    moveKey(heir, root);
+    heirGens.set(root, paneGen(root) + 1);
+    const ren = (k: string) => (k === heir ? root : k);
+    next = { ...next, tree: mapLeaves(next.tree, ren), focus: ren(next.focus) };
+  }
+  setLayout(root, next);
+  emit();
+  return true;
+}
+
+export function setPaneFocus(root: string, pane: string): void {
+  const lay = layouts[root];
+  if (!lay || lay.focus === pane || !leaves(lay.tree).includes(pane)) return;
+  layouts = { ...layouts, [root]: { ...lay, focus: pane } };
+  emit();
+}
+
+function withRatio(n: PaneNode, id: string, ratio: number): PaneNode {
+  if (n.type === "leaf") return n;
+  if (n.id === id) return { ...n, ratio };
+  return { ...n, a: withRatio(n.a, id, ratio), b: withRatio(n.b, id, ratio) };
+}
+
+export function setSplitRatio(root: string, id: string, ratio: number): void {
+  const lay = layouts[root];
+  if (!lay) return;
+  layouts = { ...layouts, [root]: { ...lay, tree: withRatio(lay.tree, id, Math.min(0.95, Math.max(0.05, ratio))) } };
+  emit();
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface SplitBox {
+  id: string;
+  dir: SplitDir;
+  ratio: number;
+  rect: Rect;
+}
+
+/** Pane and divider rectangles in the unit square. */
+export function paneRects(tree: PaneNode): { panes: Record<string, Rect>; splits: SplitBox[] } {
+  const panes: Record<string, Rect> = {};
+  const splits: SplitBox[] = [];
+  const walk = (n: PaneNode, r: Rect) => {
+    if (n.type === "leaf") {
+      panes[n.pane] = r;
+      return;
+    }
+    splits.push({ id: n.id, dir: n.dir, ratio: n.ratio, rect: r });
+    if (n.dir === "row") {
+      walk(n.a, { ...r, w: r.w * n.ratio });
+      walk(n.b, { ...r, x: r.x + r.w * n.ratio, w: r.w * (1 - n.ratio) });
+    } else {
+      walk(n.a, { ...r, h: r.h * n.ratio });
+      walk(n.b, { ...r, y: r.y + r.h * n.ratio, h: r.h * (1 - n.ratio) });
+    }
+  };
+  walk(tree, { x: 0, y: 0, w: 1, h: 1 });
+  return { panes, splits };
+}
+
+export type FocusDir = "left" | "right" | "up" | "down";
+
+/** The pane next to `from` in direction `dir` (the closest, then the most overlapping), if any. */
+export function neighborPane(tree: PaneNode, from: string, dir: FocusDir): string | null {
+  const { panes } = paneRects(tree);
+  const cur = panes[from];
+  if (!cur) return null;
+  const eps = 1e-6;
+  let best: { key: string; dist: number; overlap: number } | null = null;
+  for (const [key, r] of Object.entries(panes)) {
+    if (key === from) continue;
+    let dist: number;
+    let overlap: number;
+    if (dir === "left" || dir === "right") {
+      dist = dir === "right" ? r.x - (cur.x + cur.w) : cur.x - (r.x + r.w);
+      overlap = Math.min(cur.y + cur.h, r.y + r.h) - Math.max(cur.y, r.y);
+    } else {
+      dist = dir === "down" ? r.y - (cur.y + cur.h) : cur.y - (r.y + r.h);
+      overlap = Math.min(cur.x + cur.w, r.x + r.w) - Math.max(cur.x, r.x);
+    }
+    if (dist < -eps || overlap <= eps) continue;
+    if (!best || dist < best.dist - eps || (Math.abs(dist - best.dist) <= eps && overlap > best.overlap)) best = { key, dist, overlap };
+  }
+  return best?.key ?? null;
+}
+
+/** Moves the focus of terminal `root` to the neighbouring pane; returns the newly focused pane. */
+export function movePaneFocus(root: string, dir: FocusDir): string | null {
+  const lay = layouts[root];
+  if (!lay) return null;
+  const to = neighborPane(lay.tree, lay.focus, dir);
+  if (to) setPaneFocus(root, to);
+  return to;
 }
 
 /** Every terminal entry (re-rendered on any change). */
@@ -217,39 +500,60 @@ export function useTerminalEntries(): Record<string, TermEntry> {
   return React.useSyncExternalStore(sub, get, get);
 }
 
-/** Kills the terminal of `key` (if any) and forgets it. */
-export async function closeTerminal(key: string): Promise<void> {
-  const cur = entries[key];
+/** Kills the pty of one pane and forgets it (no emit). */
+function killKey(key: string): Promise<void> {
+  const cur = getEntry(key);
   const t = closeTimers.get(key);
   if (t) clearTimeout(t);
   closeTimers.delete(key);
-  if (!cur) return;
-  const rest = { ...entries };
-  delete rest[key];
-  entries = rest;
+  if (!cur) return Promise.resolve();
+  dropEntry(key);
   buffers.delete(key);
-  emit();
-  if (cur.ptyId) {
-    keyByPty.delete(cur.ptyId);
-    await ptyClose(cur.ptyId).catch(() => {});
+  if (!cur.ptyId) return Promise.resolve();
+  keyByPty.delete(cur.ptyId);
+  return ptyClose(cur.ptyId).catch(() => {});
+}
+
+/**
+ * Kills the terminal of `key` (if any), with all its split panes, and forgets it.
+ * A split pane's key closes just that pane.
+ */
+export async function closeTerminal(key: string): Promise<void> {
+  if (isSub(key)) {
+    detachPane(key);
+    const p = killKey(key);
+    emit();
+    await p;
+    return;
   }
+  const lay = layouts[key];
+  const kills = lay ? leaves(lay.tree).filter((k) => k !== key).map(killKey) : [];
+  if (lay) {
+    const next = { ...layouts };
+    delete next[key];
+    layouts = next;
+  }
+  const hadEntry = !!entries[key];
+  kills.push(killKey(key));
+  if (hadEntry || lay) emit();
+  await Promise.all(kills);
 }
 
 /** Replies xterm sends on its own (cursor position, device attributes, focus in/out): not user input. */
 const AUTO_REPLY = /^(\x1b\[\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[[IO])+$/;
 
 export function writeTerminal(key: string, data: string): void {
-  const cur = entries[key];
+  const cur = getEntry(key);
   if (!cur?.ptyId || cur.status !== "running") return;
   if (!cur.touched && !AUTO_REPLY.test(data)) patch(key, { touched: true });
   void ptyWrite(cur.ptyId, data).catch(() => {});
 }
 
 export function resizeTerminal(key: string, cols: number, rows: number): void {
-  const cur = entries[key];
+  const cur = getEntry(key);
   if (!cur) return;
   if (cur.opts.cols !== cols || cur.opts.rows !== rows) {
-    entries = { ...entries, [key]: { ...cur, opts: { ...cur.opts, cols, rows } } };
+    putEntry(key, { ...cur, opts: { ...cur.opts, cols, rows } });
   }
   if (cur.ptyId && cur.status === "running") void ptyResize(cur.ptyId, cols, rows).catch(() => {});
 }
@@ -266,7 +570,8 @@ export function attachTerminal(key: string, sink: (data: string) => void): () =>
   sinks.set(key, sink);
   return () => {
     if (sinks.get(key) === sink) sinks.delete(key);
-    const cur = entries[key];
+    // Split panes live and die with their terminal.
+    const cur = isSub(key) ? undefined : entries[key];
     if (cur && !cur.touched) {
       closeTimers.set(
         key,
@@ -287,6 +592,10 @@ export function resetTerminalStore(): void {
   unlisteners = [];
   listening = null;
   entries = {};
+  subs = {};
+  layouts = {};
+  singles.clear();
+  heirGens.clear();
   shells = [];
   buffers.clear();
   keyByPty.clear();

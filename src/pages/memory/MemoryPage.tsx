@@ -179,7 +179,25 @@ export function MemoryPage({ onDirtyChange, pendingByProject }: MemoryPageProps 
             pendingByProject={pendingByProject}
           />
         </div>
-        {search ? <SearchPanel index={index} initialQuery={search.initial} onOpen={openHit} onClose={() => setSearch(null)} /> : null}
+        {search ? (
+          <SearchPanel
+            index={index}
+            initialQuery={search.initial}
+            onOpen={openHit}
+            onClose={() => setSearch(null)}
+            idle={
+              <MemoryTree
+                hideHeader
+                index={index}
+                selectedKey={selectedKey}
+                onSelect={select}
+                onIndexChange={setIndex}
+                onRemoveRequest={requestRemove}
+                pendingByProject={pendingByProject}
+              />
+            }
+          />
+        ) : null}
         <div
           role="separator"
           aria-orientation="vertical"

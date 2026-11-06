@@ -340,33 +340,45 @@ export function GithubImportDialog({ open, onOpenChange, projects, onGoReview }:
     <>
       <FlowDialog open={open} onOpenChange={(o) => (busy && !o ? undefined : onOpenChange(o))} title={g.title} description={g.desc} width={scan ? 900 : 600}>
         {done ?? (
-          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-1">
             <form
-              className="flex items-end gap-2"
+              className="flex flex-col gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
                 void doScan();
               }}
             >
-              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                <label htmlFor="gh-import-input" className="text-xs font-medium text-muted-foreground">
-                  {g.linkLabel}
-                </label>
-                <Input
-                  id="gh-import-input"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={g.linkPlaceholder}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={busy}
-                  className="h-8 font-mono text-[12.5px]"
-                />
+              <label htmlFor="gh-import-input" className="text-xs font-medium text-muted-foreground">
+                {g.linkLabel}
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-lg border border-input bg-background px-3 transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40">
+                  <FolderGit2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <Input
+                    id="gh-import-input"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={g.linkPlaceholder}
+                    autoComplete="off"
+                    spellCheck={false}
+                    autoFocus
+                    disabled={busy}
+                    className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 font-mono text-[13px] shadow-none focus-visible:ring-0 dark:bg-transparent"
+                  />
+                </div>
+                <Button type="submit" disabled={!input.trim() || scanning || busy} className="h-10 cursor-pointer gap-1.5 px-4 text-sm font-semibold">
+                  {scanning ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                  {scanning ? g.scanning : g.scan}
+                </Button>
               </div>
-              <Button type="submit" variant="outline" disabled={!input.trim() || scanning || busy} className="h-8 cursor-pointer gap-1.5 bg-card px-3 text-xs hover:bg-muted">
-                {scanning ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <FolderGit2 className="size-4" aria-hidden="true" />}
-                {scanning ? g.scanning : g.scan}
-              </Button>
+              <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                <span>{g.linkFormats}</span>
+                {["owner/repo", ".../tree/<branch>/<dir>", ".../blob/<branch>/<file>"].map((f) => (
+                  <code key={f} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+                    {f}
+                  </code>
+                ))}
+              </p>
             </form>
             {scanError ? <InlineError message={scanError} /> : null}
 

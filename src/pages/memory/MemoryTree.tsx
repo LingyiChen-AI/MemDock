@@ -27,6 +27,8 @@ export interface MemoryTreeProps {
    * the page's search panel instead of filtering the tree by name.
    */
   onSearchOpen?: (initialQuery: string) => void;
+  /** Hides the search / add-project bar (used under the search panel's own box). */
+  hideHeader?: boolean;
   /** Pending review suggestions per project id (`__global__` for the global group). */
   pendingByProject?: Record<string, number>;
 }
@@ -73,7 +75,7 @@ function loadShowEmpty(): boolean {
   }
 }
 
-export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest, onSearchOpen, pendingByProject }: MemoryTreeProps) {
+export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest, onSearchOpen, pendingByProject, hideHeader }: MemoryTreeProps) {
   const { t } = useI18n();
   const m = t.memory;
   const [query, setQuery] = React.useState("");
@@ -256,7 +258,7 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="flex gap-2 border-b border-border p-3">
+      <div className={cn("flex gap-2 border-b border-border p-3", hideHeader && "hidden")}>
         <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-muted-foreground focus-within:ring-2 focus-within:ring-ring">
           <Search className="size-4 shrink-0" aria-hidden="true" />
           <Input

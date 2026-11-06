@@ -17,6 +17,8 @@ export interface SearchPanelProps {
   initialQuery?: string;
   /** Esc and the close button. */
   onClose?: () => void;
+  /** Shown instead of the hint while the query is empty (the full memory tree). */
+  idle?: React.ReactNode;
 }
 
 interface Group {
@@ -61,7 +63,7 @@ function highlight(text: string, query: string): React.ReactNode {
   return out;
 }
 
-export function SearchPanel({ onOpen, index, initialQuery = "", onClose }: SearchPanelProps) {
+export function SearchPanel({ onOpen, index, initialQuery = "", onClose, idle }: SearchPanelProps) {
   const { t } = useI18n();
   const m = t.memory;
   const [input, setInput] = React.useState(initialQuery);
@@ -192,7 +194,7 @@ export function SearchPanel({ onOpen, index, initialQuery = "", onClose }: Searc
             {fmt(m.searchFailed, { message: error })}
           </p>
         ) : !input.trim() ? (
-          <p className="px-4 py-6 text-center text-sm text-muted-foreground">{m.searchHint}</p>
+          idle ?? <p className="px-4 py-6 text-center text-sm text-muted-foreground">{m.searchHint}</p>
         ) : result === null ? (
           <p className="px-4 py-6 text-center text-sm text-muted-foreground">{m.searching}</p>
         ) : total === 0 ? (

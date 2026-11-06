@@ -221,7 +221,20 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
                     strokeWidth={1}
                     onMouseEnter={(e) => show(c, e.currentTarget)}
                   />
-                ) : null,
+                ) : (
+                  // Outside the selected range: an empty, faded cell keeps the grid whole.
+                  <rect
+                    key={`pad-${wi}-${di}`}
+                    data-pad="true"
+                    x={LABEL_W + wi * step}
+                    y={TOP_H + di * step}
+                    width={cell}
+                    height={cell}
+                    rx={cell > 16 ? 3 : 2}
+                    style={{ fill: LEVEL_FILL[0], opacity: 0.45 }}
+                    onMouseEnter={() => setHover(null)}
+                  />
+                ),
               ),
             )}
           </svg>

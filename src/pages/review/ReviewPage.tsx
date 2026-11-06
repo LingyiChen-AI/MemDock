@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CheckCheck, FolderGit2, ListChecks, Sparkles } from "lucide-react";
+import { CheckCheck, FolderGit2, ListChecks, Sparkles, XCircle } from "lucide-react";
 import {
   acceptSuggestions,
   applySuggestion,
@@ -71,6 +71,7 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
   const [bulkBusy, setBulkBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState<{ s: Suggestion; reason: string; edited: string | null } | null>(null);
   const [bulkIds, setBulkIds] = React.useState<string[] | null>(null);
+  const [rejectIds, setRejectIds] = React.useState<string[] | null>(null);
   const [evidenceFor, setEvidenceFor] = React.useState<Suggestion | null>(null);
   const [evidenceOpen, setEvidenceOpen] = React.useState(false);
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all");
@@ -210,6 +211,34 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
     if (inline) push("error", fmt(rRef.current.applyFailed, { message: inline }));
   };
 
+  /** Rejects every suggestion in the current filter, one by one. */
+  const rejectAll = async () => {
+    const ids = rejectIds;
+    setRejectIds(null);
+    if (!ids || ids.length === 0) return;
+    setBulkBusy(true);
+    let done = 0;
+    let failed = 0;
+    try {
+      for (const id of ids) {
+        try {
+          await rejectSuggestion(id);
+          removeLocal(id);
+          done++;
+        } catch (e) {
+          const code = asCommandError(e)?.code;
+          if (code === "not_pending" || code === "not_found") removeLocal(id);
+          else failed++;
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    const m = rRef.current;
+    if (failed) push("error", fmt(m.rejectAllPartial, { done, failed }));
+    else push("success", fmt(m.rejectAllDone, { n: done }));
+  };
+
   const acceptAll = async () => {
     const ids = bulkIds;
     setBulkIds(null);
@@ -289,6 +318,18 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
               <FolderGit2 className="size-4" aria-hidden="true" />
               {t.ghImport.button}
             </Button>
+            {all && total > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={bulkBusy || busy.size > 0 || visible.length === 0}
+                onClick={() => setRejectIds(visible.map(({ s }) => s.id))}
+                className="h-8 cursor-pointer bg-card px-3 text-sm text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <XCircle className="size-4" aria-hidden="true" />
+                {r.rejectAll}
+              </Button>
+            ) : null}
             {all && total > 0 ? (
               <Button
                 type="button"
@@ -399,6 +440,16 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
         cancelLabel={r.cancel}
         onConfirm={() => void acceptAll()}
         onCancel={() => setBulkIds(null)}
+      />
+      <ConfirmDialog
+        open={rejectIds !== null}
+        title={r.rejectAllTitle}
+        body={fmt(r.rejectAllBody, { n: rejectIds?.length ?? 0 })}
+        confirmLabel={fmt(r.rejectAllConfirm, { n: rejectIds?.length ?? 0 })}
+        cancelLabel={r.cancel}
+        destructive
+        onConfirm={() => void rejectAll()}
+        onCancel={() => setRejectIds(null)}
       />
       <EvidenceDrawer open={evidenceOpen} onOpenChange={setEvidenceOpen} suggestion={evidenceFor} />
       <GithubImportDialog

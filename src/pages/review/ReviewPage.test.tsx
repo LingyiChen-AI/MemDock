@@ -256,6 +256,20 @@ describe("ReviewPage", () => {
     await act(async () => resolve({ kind: "applied", hash: "x", saved: true }));
   });
 
+  it("reject all confirms, rejects every listed suggestion and clears the list", async () => {
+    (rejectSuggestion as Mock).mockResolvedValue(undefined);
+    setup();
+    await cards();
+    await userEvent.click(screen.getByRole("button", { name: "全部驳回" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/3 条待审核建议/)).toBeInTheDocument();
+    expect(rejectSuggestion).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "驳回 3 条" }));
+    await waitFor(() => expect(rejectSuggestion).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText("已驳回 3 条建议")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryAllByRole("article")).toHaveLength(0));
+  });
+
   it("accept all confirms count", async () => {
     setup();
     (acceptSuggestions as Mock).mockResolvedValue([

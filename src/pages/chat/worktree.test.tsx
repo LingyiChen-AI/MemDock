@@ -362,7 +362,8 @@ describe("worktree panel", () => {
     expect(within(dialog).getByRole("checkbox", { name: "删除工作区（保留分支）" })).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("radio", { name: "压缩成一个提交合并" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "合并" }));
-    await waitFor(() => expect(worktreeMerge).toHaveBeenCalledWith(WT, "squash", "Fix login", true));
+    await waitFor(() => expect(worktreeMerge).toHaveBeenCalledWith(WT, "squash", "Fix login", false));
+    await waitFor(() => expect(worktreeRemove).toHaveBeenCalledWith(WT, true));
     const notice = await screen.findByText(/已合并到 main/);
     expect(notice).toHaveTextContent("合并前已自动提交");
     expect(screen.queryByRole("region", { name: "独立工作区" })).toBeNull();

@@ -288,8 +288,14 @@ export function WorktreePanel({ info, title, running, c, onNotice, onError, befo
     setConflicts(null);
     let r: MergeResult;
     try {
-      if (deleteAfter) await beforeRemove();
-      r = await worktreeMerge(info.path, mode, message, deleteAfter);
+      // Merge first; the session is stopped (and the worktree removed) only once the merge succeeded,
+      // so after a conflict it keeps running and can be asked to resolve it.
+      r = await worktreeMerge(info.path, mode, message, false);
+      if (deleteAfter && r.conflicts.length === 0) {
+        await beforeRemove();
+        // "keep" keeps the branch; only the checkout goes away.
+        await worktreeRemove(info.path, mode !== "keep");
+      }
     } catch (e) {
       setShowMerge(false);
       fail(e);

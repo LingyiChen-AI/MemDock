@@ -495,5 +495,39 @@ pub fn live_transcript(mgr: tauri::State<'_, Arc<LiveManager>>, live_id: String)
     mgr.transcript(&live_id)
 }
 
+/// Largest image file `read_image_data_uri` accepts.
+pub const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Media type of an image file by extension (`None` = not an image we send).
+pub fn image_media_type(path: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Reads a dropped / picked image file as a `data:image/...;base64,` URI (max 5 MB).
+pub fn image_data_uri(path: &std::path::Path) -> Result<String, String> {
+    use base64::Engine;
+    let media = image_media_type(path).ok_or("不支持的图片格式（支持 png / jpg / gif / webp）")?;
+    let meta = std::fs::metadata(path).map_err(|e| format!("读取图片失败：{e}"))?;
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(format!("图片超过 5 MB：{}", path.display()));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("读取图片失败：{e}"))?;
+    Ok(format!("data:{media};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[tauri::command]
+pub async fn read_image_data_uri(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || image_data_uri(std::path::Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests;

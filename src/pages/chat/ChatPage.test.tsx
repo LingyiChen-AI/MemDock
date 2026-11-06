@@ -117,7 +117,7 @@ describe("ChatPage", () => {
     });
     expect(within(card).getByText("已允许")).toBeInTheDocument();
     expect(await screen.findByText(/Build fixed/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "停止" }).length).toBeGreaterThan(0);
 
     await act(async () => emit(envs([{ type: "assistant_message", id: "a1", text: "**Done**" }], 9)[0]));
     expect(await screen.findByText("Done")).toBeInTheDocument();
@@ -131,7 +131,7 @@ describe("ChatPage", () => {
     await userEvent.type(box, "hello{Shift>}{Enter}{/Shift}world");
     expect(liveSend).not.toHaveBeenCalled();
     await userEvent.type(box, "{Enter}");
-    expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld");
+    expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld", []);
     await waitFor(() => expect(box).toHaveValue(""));
   });
 

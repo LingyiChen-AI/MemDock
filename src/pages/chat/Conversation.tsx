@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
-import { CHIP_FOLD, IoBlock, KIND_ICON, KIND_TONE } from "@/pages/sessions/Timeline";
+import { CHIP_FOLD, IoBlock, KIND_ICON, KIND_TONE, Thumbs } from "@/pages/sessions/Timeline";
 import { toConvBlocks, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
 
 type C = Messages["chat"];
@@ -74,7 +74,8 @@ export function Conversation({
             case "user":
               return (
                 <ChatRow key={b.key} role="user" name={c.you}>
-                  <ChatText text={b.text} expandLabel={c.expand} collapseLabel={c.collapse} />
+                  {b.text ? <ChatText text={b.text} expandLabel={c.expand} collapseLabel={c.collapse} /> : null}
+                  {b.images?.length ? <Thumbs images={b.images} s={t.sessions} /> : null}
                 </ChatRow>
               );
             case "turn":

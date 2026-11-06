@@ -62,6 +62,12 @@ export function rememberChoice(agent: LiveAgent, permission: PermissionMode, mod
   });
 }
 
+/** Remembers the composer's permission mode / model for `agent`, keeping the other prefs. */
+export function rememberAgentSettings(agent: LiveAgent, permission: PermissionMode, model: string): void {
+  const p = loadChatPrefs();
+  saveChatPrefs({ ...p, permission: { ...p.permission, [agent]: permission }, model: { ...p.model, [agent]: model } });
+}
+
 /**
  * Splits a command line into arguments on whitespace; single or double quotes group
  * (and are removed), a backslash escapes the next character inside double quotes or outside quotes.

@@ -4,8 +4,9 @@ import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, Messages
 import { liveInterrupt, liveRespond, liveSend, type LiveSessionInfo } from "@/api/live";
 import { Conversation } from "@/pages/chat/Conversation";
 import { NewChatDialog } from "@/pages/chat/NewChatDialog";
-import { HeaderButton, LiveRow, MessageComposer, StatePill } from "@/pages/chat/ChatPage";
-import { isActive, loadChatPrefs } from "@/pages/chat/chatPrefs";
+import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
+import { ChatComposer, type ComposerMessage } from "@/pages/chat/Composer";
+import { isActive } from "@/pages/chat/chatPrefs";
 import { ensureTranscript, selectLive, startLive, useLiveStore, type LiveConv } from "@/pages/chat/liveStore";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
@@ -305,16 +306,16 @@ function ChatPane({
   const attached = live !== null && live.state !== "exited";
 
   // Any message continues the conversation: through the running process, or by resuming it.
-  const send = async (text: string) => {
-    if (attached && live) return liveSend(live.live_id, text);
-    const prefs = loadChatPrefs();
+  const send = async ({ text, images, permission, model }: ComposerMessage) => {
+    if (attached && live) return liveSend(live.live_id, text, images);
     await startLive({
       agent: target.tool,
       cwd: target.cwd,
       resume_id: target.nativeId,
-      permission: prefs.permission[target.tool],
-      model: prefs.model[target.tool] || null,
+      permission,
+      model: model || null,
       prompt: text,
+      prompt_images: images,
     });
   };
   const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
@@ -432,11 +433,20 @@ function ChatPane({
       ) : (
         <ChatSkeleton label={c.loading} className="px-4 py-4" />
       )}
-      <MessageComposer
+      <ChatComposer
         key={target.nativeId ?? live?.live_id ?? "new"}
         c={c}
-        placeholder={running ? c.inputQueued : c.inputPlaceholder}
+        agent={target.tool}
+        cwd={target.cwd}
+        placeholder={running ? c.inputQueued : undefined}
         hint={!attached ? fmt(c.continueHint, { agent: s.tools[target.tool] }) : null}
+        running={running}
+        onStop={() => {
+          if (!live) return;
+          setActionError(null);
+          liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
+        }}
+        attached={attached && live ? { permission: live.permission, model: live.model } : null}
         onError={setActionError}
         onSend={send}
       />

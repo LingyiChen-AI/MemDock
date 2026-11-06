@@ -1270,6 +1270,25 @@
       "cancel": "Cancel",
       "startFailed": "Failed to start: {error}"
     },
-    "startingAgent": "Starting {agent}… the first message is sent once it is ready"
+    "startingAgent": "Starting {agent}… the first message is sent once it is ready",
+    "composer": {
+      "placeholder": "Message {agent}… (paste screenshots, drop files)",
+      "attachFile": "Insert file paths",
+      "attachImage": "Add images",
+      "imageFilter": "Images",
+      "imageAlt": "Image {n}",
+      "removeImage": "Remove image {n}",
+      "keysHint": "Enter to send · Shift+Enter for a new line",
+      "dropTitle": "Drop to add",
+      "dropHint": "Images become attachments, other files insert their path",
+      "imageTooLarge": "Image over 5 MB, not added: {name}",
+      "imageFailed": "Could not read the image: {error}",
+      "pickFailed": "Could not pick files: {error}",
+      "permission": "Permission mode",
+      "model": "Model",
+      "modelPlaceholder": "Model name, empty for the default",
+      "lockedHint": "The session is running with the settings shown here; changes apply the next time it reconnects",
+      "nextHint": "Used when this message reconnects the session"
+    }
   }
 }

@@ -935,10 +935,12 @@
     "sessionId": "Session ID",
     "file": "File",
     "resumeHint": "Run this in a terminal to continue:",
+    "resumeHere": "Open this session in {tool} from a terminal:",
+    "resumeConverted": "Converted to a {tool} session. Continue it from a terminal:",
     "copy": "Copy",
     "copied": "Copied",
     "copyFailed": "Copy failed",
-    "codexIndexed": "Registered in Codex's session list, so the desktop app history shows it too.",
+    "codexIndexed": "Registered in Codex's session list. Quit and reopen the Codex desktop app to see it.",
     "codexNotIndexed": "Could not register it in the Codex desktop session list ({reason}); resume it by ID with the command above.",
     "reasons": {
       "state_db_missing": "Codex state database not found",

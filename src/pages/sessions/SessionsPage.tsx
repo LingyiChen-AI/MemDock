@@ -111,6 +111,45 @@ function CopyButton({ text, s }: { text: string; s: S }) {
   );
 }
 
+/** Same format as `convert::resume_command` on the Rust side. */
+function resumeCommand(tool: Tool, cwd: string, id: string): string {
+  const cd = cwd ? `cd "${cwd}" && ` : "";
+  return tool === "claude" ? `${cd}claude --resume ${id}` : `${cd}codex resume ${id}`;
+}
+
+function CommandLine({ label, command, s }: { label: string; command: string; s: S }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-xs break-all select-all">
+          {command}
+        </code>
+        <CopyButton text={command} s={s} />
+      </div>
+    </div>
+  );
+}
+
+/** Always-visible resume commands: this session itself, plus every copy converted from it. */
+function ResumeCommands({ session, s }: { session: SessionSummary; s: S }) {
+  const lines: { label: string; command: string }[] = [];
+  if (session.converted_from) {
+    lines.push({ label: fmt(s.resumeHere, { tool: s.tools[session.tool] }), command: resumeCommand(session.tool, session.cwd, session.id) });
+  }
+  for (const r of session.converted_to) {
+    lines.push({ label: fmt(s.resumeConverted, { tool: s.tools[r.tool] }), command: resumeCommand(r.tool, session.cwd, r.id) });
+  }
+  if (lines.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {lines.map((l) => (
+        <CommandLine key={l.command} label={l.label} command={l.command} s={s} />
+      ))}
+    </div>
+  );
+}
+
 function ResultCard({ result, s }: { result: ConvertResult; s: S }) {
   const reason = (w: string) => (w in s.reasons ? s.reasons[w as keyof S["reasons"]] : w);
   const indexWarning = result.warnings.find((w) => w.startsWith("state_db"));
@@ -204,7 +243,7 @@ function PreviewPane({
             {stats.degraded_calls > 0 ? <span>{fmt(s.stats.degraded, { n: stats.degraded_calls })}</span> : null}
           </div>
         ) : null}
-        {result ? <ResultCard result={result} s={s} /> : null}
+        {result ? <ResultCard result={result} s={s} /> : <ResumeCommands session={session} s={s} />}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {error ? (

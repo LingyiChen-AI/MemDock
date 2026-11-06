@@ -935,10 +935,12 @@
     "sessionId": "会话 ID",
     "file": "文件",
     "resumeHint": "在终端执行下面的命令接着做：",
+    "resumeHere": "在终端用 {tool} 打开这个会话：",
+    "resumeConverted": "已转为 {tool} 会话，在终端接着做：",
     "copy": "复制",
     "copied": "已复制",
     "copyFailed": "复制失败",
-    "codexIndexed": "已登记到 Codex 的会话列表，桌面版历史里也能看到。",
+    "codexIndexed": "已登记到 Codex 的会话列表。Codex 桌面版需要完全退出后重新打开才能看到。",
     "codexNotIndexed": "未能登记到 Codex 桌面版的会话列表（{reason}），用上面的命令按 ID 续接即可。",
     "reasons": {
       "state_db_missing": "没有找到 Codex 状态库",

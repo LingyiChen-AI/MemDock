@@ -2,3 +2,6 @@
 # exhausted the commit limit and froze the machine (2026-11-06).
 [build]
 jobs = 8
+
+# Note: a 2026-11-06 freeze traced to a third-party kernel driver (PDDHIPS) that
+# blew up the paged pool on many concurrent process launches, not to this repo.

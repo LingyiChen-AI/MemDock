@@ -17,8 +17,7 @@ import { AccountSlot } from "@/components/account/AccountSlot";
 import { LoginDialog } from "@/components/account/LoginDialog";
 import { useSyncStatus } from "@/components/account/useSyncStatus";
 import { SyncPage } from "@/pages/sync/SyncPage";
-import { initLiveStore, useLiveStore } from "@/pages/chat/liveStore";
-import { isActive } from "@/pages/chat/chatPrefs";
+import { initLiveStore, selectActiveCount, useLiveStore } from "@/pages/chat/liveStore";
 
 function Shell() {
   const { t } = useI18n();
@@ -36,8 +35,8 @@ function Shell() {
   const toasts = useToasts();
   // Live chats keep streaming (and the badge stays right) whichever page is open.
   useEffect(() => initLiveStore(), []);
-  const live = useLiveStore();
-  const activeChats = live.sessions.filter((x) => isActive(x.state)).length;
+  // Counts only: streaming tokens do not re-render the shell.
+  const activeChats = useLiveStore(selectActiveCount);
   // "New chat" / "new terminal" from the sidebar, handed to the chat page once it is open.
   const [newRequest, setNewRequest] = useState<NewRequest | null>(null);
   const requestHandled = useCallback(() => setNewRequest(null), []);

@@ -168,3 +168,40 @@ export function liveTranscript(liveId: string): Promise<LiveEnvelope[]> {
 export function onLiveEvent(cb: (env: LiveEnvelope) => void): Promise<UnlistenFn> {
   return listen<LiveEnvelope>("live://event", (e) => cb(e.payload));
 }
+
+/** Who drives a Claude session / Codex thread right now: a GUI live process or a terminal. */
+export interface NativeOwner {
+  kind: "live" | "pty";
+  id: string;
+}
+
+export function nativeOwner(agent: LiveAgent, nativeId: string): Promise<NativeOwner | null> {
+  return invoke<NativeOwner | null>("native_owner", { agent, nativeId });
+}
+
+/**
+ * `busy_live:<live_id>` / `busy_pty:<pty_id>`: the native session is already driven by
+ * another process (from `live_start` / `pty_open`). Accepts a plain string or a `{code, message}` error.
+ */
+export function parseBusy(e: unknown): NativeOwner | null {
+  const texts: string[] = [];
+  if (typeof e === "string") texts.push(e);
+  else if (e instanceof Error) texts.push(e.message);
+  else if (e && typeof e === "object") {
+    const o = e as { code?: unknown; message?: unknown };
+    if (typeof o.message === "string") texts.push(o.message);
+    if (typeof o.code === "string") texts.push(o.code);
+  }
+  for (const t of texts) {
+    const m = /busy_(live|pty):(\S+)/.exec(t);
+    if (m) return { kind: m[1] as "live" | "pty", id: m[2] };
+  }
+  return null;
+}
+
+/** Stored transcripts reference images as `memdock-image:<absolute path>` (load with `readImageDataUri`). */
+export const STORED_IMAGE_PREFIX = "memdock-image:";
+
+export function storedImagePath(src: string): string | null {
+  return src.startsWith(STORED_IMAGE_PREFIX) ? src.slice(STORED_IMAGE_PREFIX.length) : null;
+}

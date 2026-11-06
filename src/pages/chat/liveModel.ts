@@ -47,9 +47,14 @@ export interface ConvState {
   native_id: string | null;
   model: string | null;
   lastUsage: TurnUsage | null;
+  /**
+   * Envelopes that arrived ahead of a missing seq (sorted, all > lastSeq + 1). Non-empty means a gap:
+   * the store refetches the transcript to fill it. Never dropped silently.
+   */
+  pending: LiveEnvelope[];
 }
 
-export const EMPTY_CONV: ConvState = { lastSeq: 0, items: [], state: "starting", native_id: null, model: null, lastUsage: null };
+export const EMPTY_CONV: ConvState = { lastSeq: 0, items: [], state: "starting", native_id: null, model: null, lastUsage: null, pending: [] };
 
 function findIndex(items: ConvItem[], pred: (it: ConvItem) => boolean): number {
   for (let i = items.length - 1; i >= 0; i--) if (pred(items[i])) return i;
@@ -76,8 +81,51 @@ function settle(items: ConvItem[]): ConvItem[] {
   return items.map((it) => (it.type === "assistant" && it.streaming ? { ...it, streaming: false } : it));
 }
 
+/**
+ * Applies one stream envelope in seq order: duplicates are skipped, an envelope ahead of a
+ * missing seq waits in `pending` (see `hasGap`) and is applied once the gap is filled.
+ */
 export function applyLiveEvent(state: ConvState, env: LiveEnvelope): ConvState {
   if (env.seq <= state.lastSeq) return state;
+  if (env.seq > state.lastSeq + 1) {
+    if (state.pending.some((p) => p.seq === env.seq)) return state;
+    return { ...state, pending: [...state.pending, env].sort((a, b) => a.seq - b.seq) };
+  }
+  return drain(fold(state, env));
+}
+
+/** Applies pending envelopes that are now contiguous. */
+function drain(state: ConvState): ConvState {
+  let s = state;
+  while (s.pending.length && s.pending[0].seq <= s.lastSeq + 1) {
+    const [head, ...rest] = s.pending;
+    s = { ...s, pending: rest };
+    if (head.seq > s.lastSeq) s = fold(s, head);
+  }
+  return s;
+}
+
+/** True while envelopes wait behind a missing seq. */
+export function hasGap(state: ConvState): boolean {
+  return state.pending.length > 0;
+}
+
+/** Gives up on a gap: applies the pending envelopes as they are (after repeated refetches did not fill it). */
+export function forceDrain(state: ConvState): ConvState {
+  return state.pending.reduce((s, env) => (env.seq > s.lastSeq ? fold(s, env) : s), { ...state, pending: [] as LiveEnvelope[] });
+}
+
+/**
+ * Folds a transcript: authoritative and possibly with gaps (the backend compacts streamed
+ * deltas), so every envelope above `lastSeq` is applied in seq order regardless of gaps.
+ */
+export function applyTranscript(state: ConvState, envs: LiveEnvelope[]): ConvState {
+  let s = state;
+  for (const env of [...envs].sort((a, b) => a.seq - b.seq)) if (env.seq > s.lastSeq) s = fold(s, env);
+  return drain({ ...s, pending: s.pending.filter((p) => p.seq > s.lastSeq) });
+}
+
+function fold(state: ConvState, env: LiveEnvelope): ConvState {
   const s: ConvState = { ...state, lastSeq: env.seq };
   const ev = env.event;
   const items = s.items;

@@ -15,7 +15,7 @@ import { formatTime, resumeCommand } from "@/pages/sessions/sessionsUtils";
 import { isActive, relativeTime } from "./chatPrefs";
 import { ChatComposer } from "./Composer";
 import { Conversation } from "./Conversation";
-import { closeLive, selectLive, useLiveStore, type LiveConv } from "./liveStore";
+import { closeLive, selectListSlice, selectLive, shallowObjectEqual, useLiveConv, useLiveStore, type LiveConv } from "./liveStore";
 
 type C = Messages["chat"];
 
@@ -255,6 +255,12 @@ function LiveComposer({ info, c, onError }: { info: LiveSessionInfo; c: C; onErr
   );
 }
 
+/** Subscribes to its own conversation only. */
+function SelectedConversation({ info, c }: { info: LiveSessionInfo; c: C }) {
+  const lc = useLiveConv(info.live_id);
+  return <ConversationPane info={info} lc={lc} c={c} />;
+}
+
 export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: LiveConv | undefined; c: C }) {
   const [error, setError] = React.useState<string | null>(null);
   const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
@@ -283,7 +289,7 @@ export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: L
           <ChatSkeleton label={c.loading} className="px-4 py-4" />
         </div>
       ) : (
-        <Conversation conv={lc.conv} agent={info.agent} running={isActive(info.state)} starting={info.state === "starting"} onRespond={respond} />
+        <Conversation scrollKey={`live:${info.live_id}`} conv={lc.conv} agent={info.agent} running={isActive(info.state)} starting={info.state === "starting"} onRespond={respond} />
       )}
       <LiveComposer key={info.live_id} info={info} c={c} onError={setError} />
     </div>
@@ -316,7 +322,7 @@ export interface ChatPageProps {
 export function ChatPage({ onNewChat }: ChatPageProps) {
   const { t } = useI18n();
   const c = t.chat;
-  const store = useLiveStore();
+  const store = useLiveStore(selectListSlice, shallowObjectEqual);
   const now = useNow();
   const sessions = React.useMemo(() => [...store.sessions].sort((a, b) => b.created_at - a.created_at), [store.sessions]);
   const selected = sessions.find((x) => x.live_id === store.selectedId) ?? null;
@@ -368,7 +374,7 @@ export function ChatPage({ onNewChat }: ChatPageProps) {
 
         <main className="flex min-w-0 flex-1 flex-col">
           {selected ? (
-            <ConversationPane key={selected.live_id} info={selected} lc={store.convs[selected.live_id]} c={c} />
+            <SelectedConversation key={selected.live_id} info={selected} c={c} />
           ) : store.ready && sessions.length === 0 ? (
             <EmptyState c={c} onNew={onNewChat} />
           ) : (

@@ -20,6 +20,9 @@ export interface ConfirmDialogProps {
   destructive?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Optional third choice between cancel and confirm. */
+  extraLabel?: string;
+  onExtra?: () => void;
 }
 
 /** Two-button modal (shadcn AlertDialog look): cancel is the default focus. */
@@ -32,6 +35,8 @@ export function ConfirmDialog({
   destructive,
   onConfirm,
   onCancel,
+  extraLabel,
+  onExtra,
 }: ConfirmDialogProps) {
   // Radix also reports "closed" after the action button; that must not count as a cancel.
   const confirmed = React.useRef(false);
@@ -56,6 +61,18 @@ export function ConfirmDialog({
                 {cancelLabel}
               </Button>
             </AlertDialogCancel>
+            {extraLabel && onExtra ? (
+              <Button
+                variant="outline"
+                className="h-7 cursor-pointer px-3 text-xs"
+                onClick={() => {
+                  confirmed.current = true;
+                  onExtra();
+                }}
+              >
+                {extraLabel}
+              </Button>
+            ) : null}
             <AlertDialogAction asChild>
               <Button
                 variant={destructive ? "destructive" : "default"}

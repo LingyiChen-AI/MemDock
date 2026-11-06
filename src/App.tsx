@@ -8,6 +8,7 @@ import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
 import { UsagePage } from "@/pages/usage/UsagePage";
+import { SessionsPage } from "@/pages/sessions/SessionsPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
@@ -48,6 +49,7 @@ function Shell() {
           sync: (
             <SyncPage status={syncStatus} onStatus={setSyncStatus} onOpenLogin={() => setLoginOpen(true)} onDirtyChange={onDirty} />
           ),
+          sessions: <SessionsPage />,
           usage: <UsagePage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}

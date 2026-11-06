@@ -4,6 +4,7 @@
     "review": "待审核",
     "extract": "提取任务",
     "skills": "Skill 管理",
+    "sessions": "会话",
     "sync": "同步",
     "usage": "用量统计",
     "settings": "环境与设置"
@@ -813,6 +814,66 @@
       "open": "打开文件夹",
       "openFailed": "打开失败：{error}",
       "copy": "复制路径"
+    }
+  },
+  "sessions": {
+    "title": "会话",
+    "subtitle": "在 Claude Code 与 Codex 之间转换会话，同一份工作换个工具接着做",
+    "refresh": "刷新",
+    "search": "搜索会话内容、项目或 ID",
+    "all": "全部",
+    "loading": "正在读取本机会话…",
+    "loadFailed": "读取会话失败：{error}",
+    "empty": "没有找到会话",
+    "emptyHint": "使用 Claude Code 或 Codex 后，这里会列出本机的会话",
+    "noMatch": "没有匹配的会话",
+    "count": "{n} 个会话",
+    "messages": "{n} 条消息",
+    "toolCalls": "{n} 次工具调用",
+    "untitled": "（无标题）",
+    "convertedFrom": "由 {tool} 会话转换",
+    "convertedTo": "已转为 {tool}",
+    "selectHint": "选择左侧的会话查看预览并转换",
+    "previewLoading": "正在读取会话…",
+    "previewFailed": "读取会话失败：{error}",
+    "previewTitle": "转换预览",
+    "previewMore": "仅显示前 {shown} 条，共 {total} 条",
+    "roles": {
+      "user": "用户",
+      "assistant": "助手",
+      "shell": "命令"
+    },
+    "stats": {
+      "mapped": "{n} 个 shell 命令保留为工具调用",
+      "degraded": "{n} 个其他工具调用转为文字摘要",
+      "none": "没有工具调用"
+    },
+    "convertTo": "转换为 {tool} 会话",
+    "converting": "正在转换…",
+    "confirmTitle": "转换为 {tool} 会话？",
+    "confirmBody": "将新建一个 {tool} 会话文件，写入：\n{dir}\n\n原会话文件不会被修改。思考过程不会带过去；shell 命令保留为工具调用，其他工具调用转为文字摘要，过长的输出会被截断。",
+    "confirmAgain": "\n\n注意：这个会话之前已经转换过（{ids}），继续会再生成一份新的。",
+    "confirm": "转换",
+    "cancel": "取消",
+    "doneTitle": "已生成 {tool} 会话",
+    "sessionId": "会话 ID",
+    "file": "文件",
+    "resumeHint": "在终端执行下面的命令接着做：",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "codexIndexed": "已登记到 Codex 的会话列表，桌面版历史里也能看到。",
+    "codexNotIndexed": "未能登记到 Codex 桌面版的会话列表（{reason}），用上面的命令按 ID 续接即可。",
+    "reasons": {
+      "state_db_missing": "没有找到 Codex 状态库",
+      "state_db_schema": "Codex 状态库结构不认识"
+    },
+    "warning": "提示：{text}",
+    "convertFailed": "转换失败：{error}",
+    "empty_session": "这个会话没有用户消息，无法转换",
+    "tools": {
+      "claude": "Claude Code",
+      "codex": "Codex"
     }
   }
 }

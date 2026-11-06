@@ -37,7 +37,7 @@ pub struct Turn {
 }
 
 /// Parses an RFC 3339 timestamp (`2026-11-05T10:00:00.000Z`, optional offset) to unix ms.
-fn parse_ts(s: &str) -> Option<i64> {
+pub(crate) fn parse_ts(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || !(b[10] == b'T' || b[10] == b' ') {
         return None;
@@ -121,7 +121,7 @@ fn next_line(r: &mut dyn BufRead) -> Option<Option<Vec<u8>>> {
 }
 
 /// Calls `f` for each parsed JSON line of `path`. Oversized lines and unparsable lines are skipped.
-fn for_each_json<F: FnMut(Value)>(path: &Path, mut f: F) {
+pub(crate) fn for_each_json<F: FnMut(Value)>(path: &Path, mut f: F) {
     let Ok(meta) = std::fs::metadata(path) else { return };
     if meta.len() > MAX_FILE_BYTES {
         eprintln!("extract: skipping oversized session file {}", path.display());
@@ -136,7 +136,7 @@ fn for_each_json<F: FnMut(Value)>(path: &Path, mut f: F) {
     }
 }
 
-fn mtime_ms(path: &Path) -> Option<i64> {
+pub(crate) fn mtime_ms(path: &Path) -> Option<i64> {
     let m = std::fs::metadata(path).ok()?.modified().ok()?;
     let d = m.duration_since(std::time::UNIX_EPOCH).ok()?;
     i64::try_from(d.as_millis()).ok()
@@ -150,7 +150,7 @@ fn is_noise(text: &str, role: Role) -> bool {
         || t.starts_with("<system-reminder>")
 }
 
-fn claude_files(paths: &AgentPaths) -> Vec<PathBuf> {
+pub(crate) fn claude_files(paths: &AgentPaths) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = WalkDir::new(paths.claude_home.join("projects"))
         .min_depth(2)
         .max_depth(2)
@@ -240,7 +240,7 @@ pub fn read_claude_turns(paths: &AgentPaths, since_ms: i64) -> Vec<Turn> {
     out
 }
 
-fn codex_files(paths: &AgentPaths) -> Vec<PathBuf> {
+pub(crate) fn codex_files(paths: &AgentPaths) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = ["sessions", "archived_sessions"]
         .iter()
         .flat_map(|d| WalkDir::new(paths.codex_home.join(d)))
@@ -277,7 +277,7 @@ fn codex_text(content: &Value) -> Option<String> {
 }
 
 /// Injected user context such as `<environment_context>` starts with an angle-bracket tag.
-fn is_injected_codex(text: &str) -> bool {
+pub(crate) fn is_injected_codex(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("<environment_context>")
         || t.starts_with("<user_instructions>")
@@ -291,7 +291,7 @@ fn is_injected_codex(text: &str) -> bool {
 }
 
 /// Session id from a rollout file name: the trailing uuid, else the last dash segment.
-fn codex_id_from_path(path: &Path) -> String {
+pub(crate) fn codex_id_from_path(path: &Path) -> String {
     let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let stem = name
         .trim_end_matches(".zst")

@@ -99,7 +99,12 @@ export type CommandErrorCode =
   | "plan_not_found"
   // Environment install
   | "npm_missing"
-  | "busy";
+  | "busy"
+  // Session conversion
+  /** The session was converted to the target tool before; retry with `force`. `paths` lists the earlier files. */
+  | "already_converted"
+  /** The session has no user message to convert. */
+  | "empty_session";
 
 /** Error thrown by failing commands. `current_hash` is set for `disk_changed`. */
 export interface CommandError {
@@ -680,3 +685,69 @@ export interface EnvReport {
 export type InstallEvent =
   | { kind: "log"; tool: string; line: string }
   | { kind: "done"; tool: string; ok: boolean; code: number | null; error: string | null };
+
+// ---- Session conversion (src-tauri/src/convert, commands_sessions.rs) ----
+
+export interface SessionRef {
+  tool: Tool;
+  id: string;
+}
+
+export interface SessionSummary {
+  tool: Tool;
+  id: string;
+  path: string;
+  cwd: string;
+  project_id: string;
+  project_name: string;
+  title: string | null;
+  first_prompt: string;
+  message_count: number;
+  tool_calls: number;
+  /** Unix milliseconds. */
+  started_at: number | null;
+  updated_at: number | null;
+  model: string | null;
+  /** Set when MemDock wrote this session. */
+  converted_from: SessionRef | null;
+  /** Sessions MemDock already wrote from this one (files that still exist). */
+  converted_to: SessionRef[];
+}
+
+export interface PlanStats {
+  user_messages: number;
+  assistant_messages: number;
+  tool_calls: number;
+  /** Shell calls kept as shell calls in the target tool. */
+  mapped_calls: number;
+  /** Calls rewritten as assistant text. */
+  degraded_calls: number;
+}
+
+export type PreviewRole = "user" | "assistant" | "shell";
+
+export interface PreviewMessage {
+  role: PreviewRole;
+  ts: string;
+  text: string;
+}
+
+export interface SessionPreview {
+  summary: SessionSummary;
+  messages: PreviewMessage[];
+  total_messages: number;
+  stats: PlanStats;
+}
+
+export interface ConvertResult {
+  tool: Tool;
+  session_id: string;
+  path: string;
+  cwd: string;
+  resume_command: string;
+  /** Codex target: registered in Codex's thread list database. */
+  indexed: boolean;
+  /** `state_db_missing`, `state_db_schema`, or `<area>: <error>` strings. */
+  warnings: string[];
+  stats: PlanStats;
+}

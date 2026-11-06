@@ -29,6 +29,8 @@ pub mod usage;
 pub mod watcher;
 pub mod window;
 pub mod worktree;
+#[cfg(test)]
+mod e2e_tests;
 
 use std::sync::Arc;
 

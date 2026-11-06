@@ -49,7 +49,14 @@ export function ExternalLink({ href, children }: { href?: string; children: Reac
  * Markdown for chat bubbles: tighter than the memory preview. Links never
  * navigate the app webview (Ctrl+click opens them in the browser) and images are never loaded (no network egress).
  */
-export function ChatMarkdown({ text }: { text: string }) {
+/** Claude Code occasionally writes a broken character (U+FFFD) at the very start of a reply; it carries nothing. */
+export function cleanReplyText(text: string): string {
+  return text.replace(/^[\uFFFD\s]*\uFFFD\s*/, "");
+}
+
+export function ChatMarkdown({ text: raw }: { text: string }) {
+  const text = cleanReplyText(raw);
+  if (!text.trim()) return null;
   return (
     <div className="min-w-0 text-sm leading-relaxed [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown

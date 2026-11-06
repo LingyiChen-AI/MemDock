@@ -32,3 +32,15 @@ describe("chat links", () => {
     expect(openUrl).toHaveBeenCalledWith("https://freecallai.feishu.cn/docx/abc");
   });
 });
+
+import { cleanReplyText } from "./ChatMarkdown";
+
+describe("cleanReplyText", () => {
+  it("drops a broken character at the start of a reply only", () => {
+    expect(cleanReplyText("�你好！")).toBe("你好！");
+    expect(cleanReplyText("�\n\n你好")).toBe("你好");
+    expect(cleanReplyText("�")).toBe("");
+    expect(cleanReplyText("正常�文本")).toBe("正常�文本");
+    expect(cleanReplyText("你好")).toBe("你好");
+  });
+});

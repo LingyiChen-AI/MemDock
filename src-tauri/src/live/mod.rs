@@ -243,6 +243,10 @@ impl LiveManager {
         {
             let mut map = sessions.lock().unwrap();
             let Some(e) = map.get_mut(live_id) else { return };
+            // `stop()` records the exit itself; the driver's reader reports it again.
+            if matches!(ev, LiveEvent::Exited { .. }) && e.events.iter().any(|x| matches!(x, LiveEvent::Exited { .. })) {
+                return;
+            }
             let next_state = match &ev {
                 LiveEvent::Started { native_id, model } => {
                     e.info.native_id = Some(native_id.clone());

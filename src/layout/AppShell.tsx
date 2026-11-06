@@ -232,12 +232,14 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
   actions.current = { onNewChat, onNewTerminal };
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.altKey || e.shiftKey) return;
+      if (e.altKey) return;
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
-      if (mod && (e.key === "n" || e.key === "N") && actions.current.onNewChat) {
+      // The backquote key by position, key or key code (IMEs may report key "Process").
+      const backquote = e.code === "Backquote" || e.key === "`" || e.key === "~" || e.keyCode === 192;
+      if (mod && !e.shiftKey && (e.key === "n" || e.key === "N") && actions.current.onNewChat) {
         e.preventDefault();
         actions.current.onNewChat();
-      } else if (e.ctrlKey && e.code === "Backquote" && actions.current.onNewTerminal) {
+      } else if (e.ctrlKey && backquote && actions.current.onNewTerminal) {
         e.preventDefault();
         actions.current.onNewTerminal();
       }

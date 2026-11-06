@@ -306,7 +306,7 @@ export function ReviewPage({ onNavigate, runFilter, onClearRunFilter }: ReviewPa
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-5xl flex-col gap-4 p-6">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
         <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-xl font-semibold">

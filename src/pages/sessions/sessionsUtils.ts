@@ -39,6 +39,14 @@ export function groupByProject(list: SessionSummary[]): ProjectGroup[] {
   return [...groups.values()].sort((a, b) => newest(b) - newest(a));
 }
 
+/** Same format as `convert::resume_command` on the Rust side. */
+export function resumeCommand(tool: Tool, cwd: string, id: string): string {
+  // Windows PowerShell 5 has no `&&`; `;` works in PowerShell 5 and 7.
+  const sep = /Windows/i.test(navigator.userAgent) ? ";" : " &&";
+  const cd = cwd ? `cd "${cwd}"${sep} ` : "";
+  return tool === "claude" ? `${cd}claude --resume ${id}` : `${cd}codex resume ${id}`;
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }

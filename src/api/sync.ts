@@ -3,6 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DeviceCodeInfo,
   LoginEvent,
+  PrefsFile,
+  PrefsInfo,
+  PrefsUploadResult,
   SyncCommit,
   SyncProject,
   SyncDirection,
@@ -64,8 +67,34 @@ export function openVerificationUrl(): Promise<void> {
 export function syncStart(
   secrets: "block" | "allow" | "skip" = "block",
   direction: SyncDirection = "up",
+  preferences?: Record<string, unknown>,
 ): Promise<SyncStartResult> {
-  return invoke<SyncStartResult>("sync_start", { secrets, direction });
+  return invoke<SyncStartResult>("sync_start", preferences ? { secrets, direction, preferences } : { secrets, direction });
+}
+
+/** Local only: the switch, and the cloud copy of the preferences as last fetched. */
+export function prefsSyncInfo(): Promise<PrefsInfo> {
+  return invoke<PrefsInfo>("prefs_sync_info");
+}
+
+/** "Upload preferences together with memory". */
+export function prefsSetWithMemory(enabled: boolean): Promise<PrefsInfo> {
+  return invoke<PrefsInfo>("prefs_set_with_memory", { enabled });
+}
+
+/** Writes memdock_settings.json (backend settings + `frontend`) and pushes it as one commit. */
+export function prefsUpload(frontend: Record<string, unknown>): Promise<PrefsUploadResult> {
+  return invoke<PrefsUploadResult>("prefs_upload", { frontend });
+}
+
+/** Fetches the cloud copy (applies nothing). Codes: prefs_missing, prefs_too_new, prefs_invalid. */
+export function prefsDownload(): Promise<PrefsFile> {
+  return invoke<PrefsFile>("prefs_download");
+}
+
+/** Records that the cloud preferences written at `updatedAt` were applied here. */
+export function prefsMarkApplied(updatedAt: string): Promise<PrefsInfo> {
+  return invoke<PrefsInfo>("prefs_mark_applied", { updatedAt });
 }
 
 /** Files left out of a sync and not synced since, mapped to local files (local only). */

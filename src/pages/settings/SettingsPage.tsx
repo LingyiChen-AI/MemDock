@@ -14,6 +14,7 @@ import {
   Settings as SettingsIcon,
   Sparkles,
   TerminalSquare,
+  UploadCloud,
   TriangleAlert,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -22,6 +23,8 @@ import { getSettings } from "@/api/memory";
 import { setClaudeQuotaEnabled, setCodexQuotaEnabled } from "@/api/usage";
 import type { EnvReport, EnvToolStatus } from "@/api/types";
 import { AppearanceControls } from "@/components/appearance/AppearanceControls";
+import { NewChatDirSettings } from "./NewChatDirSection";
+import { PrefsSyncSection } from "./PrefsSyncSection";
 import { Button } from "@/components/ui/button";
 import type { NavKey } from "@/layout/AppShell";
 import { Switch } from "@/components/ui/switch";
@@ -171,8 +174,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   const sRef = React.useRef(s);
   sRef.current = s;
 
-  React.useEffect(() => {
-    void detect();
+  const loadQuota = React.useCallback(() => {
     void getSettings()
       .then((x) => {
         setQuotaOn(Boolean(x.claude_quota_enabled));
@@ -182,6 +184,11 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         setQuotaOn(false);
         setCodexQuotaOn(false);
       });
+  }, []);
+
+  React.useEffect(() => {
+    void detect();
+    loadQuota();
     const offs: (() => void)[] = [];
     let alive = true;
     const keep = (p: Promise<() => void>) =>
@@ -203,7 +210,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
       alive = false;
       offs.forEach((f) => f());
     };
-  }, [detect, push]);
+  }, [detect, push, loadQuota]);
 
   React.useEffect(() => {
     const el = logRef.current;
@@ -253,7 +260,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <SettingsIcon className="size-5 text-muted-foreground" aria-hidden="true" />
           {s.title}
@@ -307,6 +314,10 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
           <AppearanceControls />
         </Section>
 
+        <Section icon={FolderOpen} title={s.newChatDir.title} desc={s.newChatDir.desc}>
+          <NewChatDirSettings />
+        </Section>
+
         <Section icon={Gauge} title={s.quota.title} desc={t.usage.quota.explain}>
           <label className="flex cursor-pointer items-center gap-3 text-sm">
             <Switch checked={quotaOn === true} disabled={quotaOn === null} onCheckedChange={() => void toggleQuota()} />
@@ -320,6 +331,16 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
             {s.codexQuota.toggle}
           </label>
         </Section>
+
+        <PrefsSyncSection
+          notify={push}
+          onApplied={loadQuota}
+          frame={(children) => (
+            <Section icon={UploadCloud} title={s.prefsSync.title} desc={s.prefsSync.desc}>
+              {children}
+            </Section>
+          )}
+        />
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Section

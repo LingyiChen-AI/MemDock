@@ -271,6 +271,15 @@ pub fn reset_unloadable(appdata: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+/// The saved extraction config alone (preferences sync); `None` when the file
+/// is missing or cannot be loaded.
+pub fn load_config(appdata: &Path) -> Option<ExtractConfig> {
+    load_file::<ConfigFile>(appdata, CONFIG_FILE)
+        .ok()
+        .flatten()
+        .map(|f| f.config.normalized())
+}
+
 impl Store {
     /// Loads all three files from `appdata`. Missing files give defaults;
     /// corrupt or too-new files are backed up and reported as an error.

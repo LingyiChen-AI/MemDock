@@ -70,6 +70,16 @@ pub struct SyncState {
     /// Visibility of the bound repository as GitHub last reported it.
     #[serde(default)]
     pub repo_private: Option<bool>,
+    /// Memory uploads also refresh `memdock_settings.json`.
+    #[serde(default = "default_true")]
+    pub prefs_with_memory: bool,
+    /// `updated_at` of the preferences this machine last uploaded or applied.
+    #[serde(default)]
+    pub prefs_seen: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for SyncState {
@@ -90,6 +100,8 @@ impl Default for SyncState {
             needs: None,
             clone_of: None,
             repo_private: None,
+            prefs_with_memory: true,
+            prefs_seen: None,
         }
     }
 }
@@ -148,6 +160,7 @@ mod tests {
         let partial = load_state(&p).unwrap();
         assert_eq!(partial.login.as_deref(), Some("a"));
         assert_eq!(partial.repo_name, "MemDockHub");
+        assert!(partial.prefs_with_memory);
 
         // Corrupt: backed up, default returned.
         std::fs::write(&p, "{not json").unwrap();

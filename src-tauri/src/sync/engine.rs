@@ -41,6 +41,7 @@ pub const SYNC_AUTHOR: (&str, &str) = ("MemDock", "memdock@users.noreply.github.
 const GLOBAL_PATHS: [&str; 2] = ["global/claude/CLAUDE.md", "global/codex/AGENTS.md"];
 const SKILLS_JSON: &str = "skills.json";
 const README_MD: &str = "README.md";
+use super::prefs::PREFS_FILE;
 
 /// Everything one sync run needs.
 /// How a sync treats files that look like they hold secrets.
@@ -83,6 +84,9 @@ pub struct SyncCtx<'a> {
     pub secrets: SecretPolicy,
     /// Download only: bring remote changes to this machine, push nothing.
     pub download: bool,
+    /// Upload: `memdock_settings.json` text to write into the repository
+    /// (`None` leaves the file as it is). Never read as a memory file.
+    pub preferences: Option<String>,
 }
 
 /// Projects of `index` that take part in sync, as `(key, directory)`; same key
@@ -879,7 +883,25 @@ fn run(
             }
         }
     }
-    if pushed == 0 && !manifest_changed && !readme_changed {
+    // Uploads may also refresh the preferences file (unchanged content is not rewritten).
+    let mut prefs_changed = false;
+    if let Some(json) = &ctx.preferences {
+        let same = match (&plan.remote_commit, plan.remote_tree.get(PREFS_FILE)) {
+            (Some(head), Some(_)) => ctx
+                .git
+                .read_at(ctx.repo_dir, head, PREFS_FILE)
+                .ok()
+                .flatten()
+                .and_then(|b| String::from_utf8(b).ok())
+                .is_some_and(|old| super::prefs::same_content(&old, json)),
+            _ => false,
+        };
+        if !same {
+            tree.insert(PREFS_FILE.to_string(), TreeBlob::Data(json.clone().into_bytes()));
+            prefs_changed = true;
+        }
+    }
+    if pushed == 0 && !manifest_changed && !readme_changed && !prefs_changed {
         return Ok(summary(plan.remote_commit.clone(), false, 0));
     }
 

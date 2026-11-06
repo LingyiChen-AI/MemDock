@@ -417,6 +417,35 @@ pub fn register_thread(db: &Path, row: &ThreadRow) -> Result<bool, String> {
     Ok(n > 0)
 }
 
+/// Thread names from `session_index.jsonl` (the last entry of an id wins).
+pub fn read_session_names(codex_home: &Path) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(text) = fs::read_to_string(codex_home.join("session_index.jsonl")) else { return out };
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let (Some(id), Some(name)) = (v.get("id").and_then(Value::as_str), v.get("thread_name").and_then(Value::as_str)) else {
+            continue;
+        };
+        if name.trim().is_empty() {
+            out.remove(id);
+        } else {
+            out.insert(id.to_string(), name.trim().to_string());
+        }
+    }
+    out
+}
+
+/// Sets the thread title in the state database (best effort; `false` when no row).
+pub fn set_thread_title(db: &Path, id: &str, title: &str) -> Result<bool, String> {
+    use rusqlite::{Connection, OpenFlags};
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| e.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?;
+    let n = conn
+        .execute("UPDATE threads SET title = ?1 WHERE id = ?2", rusqlite::params![title, id])
+        .map_err(|e| e.to_string())?;
+    Ok(n > 0)
+}
+
 /// Appends `{id, thread_name, updated_at}` to `session_index.jsonl`.
 pub fn append_session_index(codex_home: &Path, id: &str, name: &str) -> std::io::Result<()> {
     let path = codex_home.join("session_index.jsonl");

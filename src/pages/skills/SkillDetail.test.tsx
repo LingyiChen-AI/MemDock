@@ -50,12 +50,12 @@ beforeEach(() => vi.clearAllMocks());
 describe("SkillDetail", () => {
   it("writable detail shows all actions and wires the handlers", async () => {
     const p = setup(withSource);
-    for (const n of ["更新", "编辑文件", "同步到…", "删除"]) {
+    for (const n of ["更新", "编辑文件", "同步到其他工具", "删除"]) {
       expect(screen.getByRole("button", { name: n })).toBeInTheDocument();
     }
     await userEvent.click(screen.getByRole("button", { name: "更新" }));
     expect(p.onUpdate).toHaveBeenCalledWith(withSource);
-    await userEvent.click(screen.getByRole("button", { name: "同步到…" }));
+    await userEvent.click(screen.getByRole("button", { name: "同步到其他工具" }));
     expect(p.onSync).toHaveBeenCalledWith(withSource);
     await userEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(p.onDelete).toHaveBeenCalledWith(withSource);
@@ -66,7 +66,7 @@ describe("SkillDetail", () => {
     const btn = screen.getByRole("button", { name: "更新" });
     expect(btn).toBeDisabled();
     expect(btn.closest("span")).toHaveAttribute("title", "来源未知，先补登来源");
-    expect(screen.getByRole("button", { name: "同步到…" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "同步到其他工具" })).toBeEnabled();
   });
 
   it("update is disabled without git", () => {
@@ -74,7 +74,7 @@ describe("SkillDetail", () => {
     const btn = screen.getByRole("button", { name: "更新" });
     expect(btn).toBeDisabled();
     expect(btn.closest("span")).toHaveAttribute("title", "需要安装 git");
-    expect(screen.getByRole("button", { name: "同步到…" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "同步到其他工具" })).toBeEnabled();
   });
 
   it("each install row shows its own source tag", () => {
@@ -90,7 +90,7 @@ describe("SkillDetail", () => {
 
   it("disables every action while removed", () => {
     setup(withSource, { removed: true });
-    for (const name of ["更新", "编辑文件", "同步到…", "备份与回滚", "删除"]) {
+    for (const name of ["更新", "编辑文件", "同步到其他工具", "备份与回滚", "删除"]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
     }
   });
@@ -105,7 +105,7 @@ describe("SkillDetail", () => {
     expect(screen.queryByRole("button", { name: "编辑文件" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
     expect(screen.queryByRole("button", { name: "更新" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "同步到…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "同步到其他工具" })).toBeNull();
     expect(screen.getByRole("button", { name: "复制到可写位置" })).toBeInTheDocument();
   });
 

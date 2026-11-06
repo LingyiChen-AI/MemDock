@@ -238,7 +238,7 @@ export function ExtractPage({ onNavigate, onDirtyChange, onOpenRunReview }: Extr
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
         <header className="flex items-center justify-between gap-4">
           <h1 className="flex items-center gap-2 text-xl font-semibold">
             <Sparkles className="size-5 text-muted-foreground" aria-hidden="true" />

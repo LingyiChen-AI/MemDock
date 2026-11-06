@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppProviders } from "@/providers";
 import { AppShell, type NavKey } from "@/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -9,7 +9,7 @@ import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
 import { UsagePage } from "@/pages/usage/UsagePage";
-import { SessionsPage } from "@/pages/sessions/SessionsPage";
+import { SessionsPage, type NewRequest } from "@/pages/sessions/SessionsPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
@@ -17,10 +17,11 @@ import { AccountSlot } from "@/components/account/AccountSlot";
 import { LoginDialog } from "@/components/account/LoginDialog";
 import { useSyncStatus } from "@/components/account/useSyncStatus";
 import { SyncPage } from "@/pages/sync/SyncPage";
+import { initLiveStore, selectActiveCount, useLiveStore } from "@/pages/chat/liveStore";
 
 function Shell() {
   const { t } = useI18n();
-  const [current, setCurrent] = useState<NavKey>("memory");
+  const [current, setCurrent] = useState<NavKey>("chat");
   // The open page reports unsaved edits; leaving it (pages unmount on navigation) asks first.
   const [dirty, setDirty] = useState(false);
   const [pendingNav, setPendingNav] = useState<NavKey | null>(null);
@@ -32,6 +33,13 @@ function Shell() {
   const [reviewRun, setReviewRun] = useState<RunRecord | null>(null);
   const [openRequest, setOpenRequest] = useState<{ fileId: string; nonce: number } | null>(null);
   const toasts = useToasts();
+  // Live chats keep streaming (and the badge stays right) whichever page is open.
+  useEffect(() => initLiveStore(), []);
+  // Counts only: streaming tokens do not re-render the shell.
+  const activeChats = useLiveStore(selectActiveCount);
+  // "New chat" / "new terminal" from the sidebar, handed to the chat page once it is open.
+  const [newRequest, setNewRequest] = useState<NewRequest | null>(null);
+  const requestHandled = useCallback(() => setNewRequest(null), []);
 
   const navigate = (key: NavKey) => {
     if (key === current) return;
@@ -44,7 +52,15 @@ function Shell() {
       <AppShell
         current={current}
         onNavigate={navigate}
-        badges={{ review: pending?.total }}
+        badges={{ review: pending?.total, chat: activeChats }}
+        onNewChat={() => {
+          setNewRequest("chat");
+          navigate("chat");
+        }}
+        onNewTerminal={() => {
+          setNewRequest("terminal");
+          navigate("chat");
+        }}
         status={<AccountSlot status={syncStatus} onLogin={() => setLoginOpen(true)} onOpenSync={() => navigate("sync")} />}
         pages={{
           review: <ReviewPage onNavigate={navigate} runFilter={reviewRun} onClearRunFilter={() => setReviewRun(null)} />,
@@ -71,7 +87,7 @@ function Shell() {
               }}
             />
           ),
-          sessions: <SessionsPage />,
+          chat: <SessionsPage request={newRequest} onRequestHandled={requestHandled} />,
           usage: <UsagePage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}
@@ -92,7 +108,10 @@ function Shell() {
           }
           setPendingNav(null);
         }}
-        onCancel={() => setPendingNav(null)}
+        onCancel={() => {
+          setPendingNav(null);
+          setNewRequest(null);
+        }}
       />
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} status={syncStatus} onStatus={setSyncStatus} notify={toasts.push} />
       <ToastRegion toasts={toasts.toasts} onDismiss={toasts.dismiss} />

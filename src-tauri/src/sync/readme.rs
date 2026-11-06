@@ -17,11 +17,13 @@ This is the sync repository of [MemDock]({PROJECT_URL}): your Claude Code / Code
 - `global/`：全局记忆 / global memories\n\
 - `projects/`：按项目（git 远程地址或目录名）存放的项目记忆 / project memories\n\
 - `skills.json`：Skill 安装清单 / skills install list\n\
+- `memdock_settings.json`：MemDock 偏好设置（不含本机路径）/ MemDock preferences (no local paths)\n\
 - `memdock.json`：仓库标记，请勿删除 / repository marker, do not delete\n\n\
 项目地址 / Project: {PROJECT_URL}\n\n\
 ---\n\n\
 {}",
-        PROJECT_README.trim_start_matches('\u{feff}')
+        // Same bytes whatever line endings the checkout used (keeps the blob id stable).
+        PROJECT_README.trim_start_matches('\u{feff}').replace("\r\n", "\n")
     )
 }
 

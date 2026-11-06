@@ -27,7 +27,7 @@ type ToolItem = Extract<TimelineItem, { type: "tool" }>;
 type TextItem = Exclude<TimelineItem, ToolItem>;
 export type TimelineFilter = "all" | "chat" | "tools" | "shell" | "files" | "errors";
 
-const KIND_ICON: Record<ToolKind, LucideIcon> = {
+export const KIND_ICON: Record<ToolKind, LucideIcon> = {
   shell: SquareTerminal,
   read: FileText,
   edit: FilePen,
@@ -39,7 +39,7 @@ const KIND_ICON: Record<ToolKind, LucideIcon> = {
   other: Wrench,
 };
 
-const KIND_TONE: Record<ToolKind, string> = {
+export const KIND_TONE: Record<ToolKind, string> = {
   shell: "text-emerald-600 dark:text-emerald-400",
   read: "text-sky-600 dark:text-sky-400",
   edit: "text-amber-600 dark:text-amber-400",
@@ -52,7 +52,7 @@ const KIND_TONE: Record<ToolKind, string> = {
 };
 
 /** Chips shown in one run before the rest fold into a "+N" chip. */
-const CHIP_FOLD = 8;
+export const CHIP_FOLD = 8;
 
 function matches(it: TimelineItem, f: TimelineFilter): boolean {
   switch (f) {
@@ -102,8 +102,21 @@ function toBlocks(items: TimelineItem[]): Block[] {
   return out;
 }
 
-export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Tool }) {
+export function Timeline({
+  preview,
+  tool,
+  bare = false,
+  startAtBottom = false,
+}: {
+  preview: SessionPreview;
+  tool: Tool;
+  /** Only the messages: no filter bar and no scroll container (embedded above a live chat). */
+  bare?: boolean;
+  /** Open scrolled to the newest message. */
+  startAtBottom?: boolean;
+}) {
   const { t } = useI18n();
+  const scroller = React.useRef<HTMLDivElement>(null);
   const s = t.sessions;
   const [filter, setFilter] = React.useState<TimelineFilter>("all");
   const [detail, setDetail] = React.useState<ToolItem | null>(null);
@@ -117,6 +130,32 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
     { key: "errors", label: s.timeline.errors, n: c.errors },
   ];
   const blocks = toBlocks(preview.timeline.filter((it) => matches(it, filter)));
+
+  React.useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && startAtBottom) el.scrollTop = el.scrollHeight;
+  }, [preview, startAtBottom]);
+
+  const list = (
+    <>
+      {preview.timeline_total > preview.timeline.length ? (
+        <p className="mb-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
+      ) : null}
+      {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
+      <ol className="flex flex-col gap-5">
+        {blocks.map((b) =>
+          b.kind === "user" ? (
+            <UserRow key={b.key} item={b.item} s={s} />
+          ) : (
+            <TurnCard key={b.key} segments={b.segments} ts={b.ts} tool={tool} onOpen={setDetail} s={s} />
+          ),
+        )}
+      </ol>
+      <ToolDialog it={detail} onClose={() => setDetail(null)} s={s} />
+    </>
+  );
+
+  if (bare) return list;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -141,23 +180,9 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
-        <ol className="flex flex-col gap-5">
-          {blocks.map((b) =>
-            b.kind === "user" ? (
-              <UserRow key={b.key} item={b.item} s={s} />
-            ) : (
-              <TurnCard key={b.key} segments={b.segments} ts={b.ts} tool={tool} onOpen={setDetail} s={s} />
-            ),
-          )}
-        </ol>
-        {preview.timeline_total > preview.timeline.length ? (
-          <p className="mt-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
-        ) : null}
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        {list}
       </div>
-
-      <ToolDialog it={detail} onClose={() => setDetail(null)} s={s} />
     </div>
   );
 }
@@ -176,7 +201,7 @@ function UserRow({ item, s }: { item: TextItem; s: S }) {
 }
 
 /** Pasted screenshots as thumbnails; click one to see it full size. */
-function Thumbs({ images, s }: { images: string[]; s: S }) {
+export function Thumbs({ images, s }: { images: string[]; s: S }) {
   const [open, setOpen] = React.useState<number | null>(null);
   return (
     <>
@@ -327,7 +352,7 @@ function ToolDialog({ it, onClose, s }: { it: ToolItem | null; onClose: () => vo
   );
 }
 
-function IoBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
+export function IoBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <span className={cn("text-[11px] font-medium", error ? "text-destructive" : "text-muted-foreground")}>{label}</span>

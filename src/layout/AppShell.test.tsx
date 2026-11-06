@@ -68,13 +68,13 @@ describe("AppShell", () => {
     mockSettings({ language: "zh" });
     setup();
     await screen.findByText("记忆总览");
-    const labels = screen.getAllByRole("button", { name: /^(记忆总览|记忆提取|待审核记忆|Skill 管理|会话转换|记忆同步|用量统计|环境与设置)$/ });
+    const labels = screen.getAllByRole("button", { name: /^(对话|记忆总览|记忆提取|待审核记忆|Skill 管理|记忆同步|用量统计|环境与设置)$/ });
     expect(labels.map((b) => b.textContent)).toEqual([
+      "对话",
       "记忆总览",
       "记忆提取",
       "待审核记忆",
       "Skill 管理",
-      "会话转换",
       "记忆同步",
       "用量统计",
       "环境与设置",

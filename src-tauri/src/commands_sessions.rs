@@ -23,17 +23,102 @@ const TIMELINE_IO_CHARS: usize = 4000;
 
 type CacheEntry = (u64, i64, SessionSummary);
 
+/// Parsed previews kept for quick re-opening (keyed by path, checked by size + mtime).
+const PREVIEW_CACHE: usize = 6;
+/// Worker threads for parsing changed session files.
+const PARSE_THREADS: usize = 4;
+
 pub struct SessionsState {
     pub app: Arc<AppState>,
     cache: Mutex<HashMap<PathBuf, CacheEntry>>,
+    previews: Mutex<Vec<(PathBuf, u64, i64, SessionPreview)>>,
     /// Serializes conversions (store load-modify-save).
     convert_lock: Mutex<()>,
 }
 
 impl SessionsState {
     pub fn new(app: Arc<AppState>) -> Self {
-        Self { app, cache: Mutex::new(HashMap::new()), convert_lock: Mutex::new(()) }
+        // Summaries from the last run: only files whose size / mtime changed are parsed again.
+        let cache = load_index(&app.data_dir);
+        Self { app, cache: Mutex::new(cache), previews: Mutex::new(Vec::new()), convert_lock: Mutex::new(()) }
     }
+}
+
+fn index_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("session-index.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct IndexEntry {
+    path: PathBuf,
+    len: u64,
+    mtime: i64,
+    summary: SessionSummary,
+}
+
+fn load_index(data_dir: &Path) -> HashMap<PathBuf, CacheEntry> {
+    let Ok(text) = std::fs::read_to_string(index_path(data_dir)) else { return HashMap::new() };
+    serde_json::from_str::<Vec<IndexEntry>>(&text)
+        .map(|v| v.into_iter().map(|e| (e.path, (e.len, e.mtime, e.summary))).collect())
+        .unwrap_or_default()
+}
+
+fn save_index(data_dir: &Path, cache: &HashMap<PathBuf, CacheEntry>) {
+    let entries: Vec<IndexEntry> = cache
+        .iter()
+        .map(|(p, (len, mtime, s))| IndexEntry { path: p.clone(), len: *len, mtime: *mtime, summary: s.clone() })
+        .collect();
+    if let Ok(json) = serde_json::to_vec(&entries) {
+        let path = index_path(data_dir);
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
+/// Titles set in MemDock (`tool:id` -> title); they win over the tools' own names.
+fn titles_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("session-titles.json")
+}
+
+fn load_titles(data_dir: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(titles_path(data_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn title_key(tool: Tool, id: &str) -> String {
+    format!("{}:{id}", match tool {
+        Tool::Claude => "claude",
+        Tool::Codex => "codex",
+    })
+}
+
+/// Parses `jobs` on a few threads.
+fn parse_parallel(jobs: Vec<(Tool, PathBuf, u64, i64)>) -> Vec<(PathBuf, CacheEntry)> {
+    if jobs.len() <= 1 {
+        return jobs
+            .into_iter()
+            .map(|(tool, path, len, mtime)| {
+                let s = convert::summarize(&convert::parse(tool, &path), &path);
+                (path, (len, mtime, s))
+            })
+            .collect();
+    }
+    let queue = Mutex::new(jobs);
+    let out = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..PARSE_THREADS {
+            scope.spawn(|| loop {
+                let Some((tool, path, len, mtime)) = lock(&queue).pop() else { break };
+                let s = convert::summarize(&convert::parse(tool, &path), &path);
+                lock(&out).push((path, (len, mtime, s)));
+            });
+        }
+    });
+    out.into_inner().unwrap_or_default()
 }
 
 fn file_key(path: &Path) -> Option<(u64, i64)> {
@@ -61,16 +146,25 @@ pub fn list_sessions_impl(
         .chain(codex_files(paths).into_iter().map(|p| (Tool::Codex, p)))
         .collect();
     let mut fresh: HashMap<PathBuf, CacheEntry> = HashMap::new();
-    let old = std::mem::take(&mut *lock(cache));
+    let old = lock(cache).clone();
+    let mut jobs = vec![];
     for (tool, path) in files {
         let Some((len, mtime)) = file_key(&path) else { continue };
-        let summary = match old.get(&path) {
-            Some((l, m, s)) if *l == len && *m == mtime => s.clone(),
-            _ => convert::summarize(&convert::parse(tool, &path), &path),
-        };
-        fresh.insert(path, (len, mtime, summary));
+        match old.get(&path) {
+            Some((l, m, s)) if *l == len && *m == mtime => {
+                fresh.insert(path, (len, mtime, s.clone()));
+            }
+            _ => jobs.push((tool, path, len, mtime)),
+        }
+    }
+    let changed = !jobs.is_empty() || fresh.len() != old.len();
+    fresh.extend(parse_parallel(jobs));
+    if changed {
+        save_index(data_dir, &fresh);
     }
     let store = load_store(data_dir);
+    let codex_names = codex::read_session_names(&paths.codex_home);
+    let titles = load_titles(data_dir);
     let mut out: Vec<SessionSummary> = fresh
         .values()
         .filter(|(_, _, s)| !s.first_prompt.is_empty())
@@ -79,6 +173,13 @@ pub fn list_sessions_impl(
             let me = SessionRef { tool: s.tool, id: s.id.clone() };
             s.converted_from = store.source_of(&me).cloned();
             s.converted_to = store.targets_of(&me);
+            if let Some(t) = titles.get(&title_key(s.tool, &s.id)) {
+                s.title = Some(t.clone());
+            } else if s.tool == Tool::Codex {
+                if let Some(n) = codex_names.get(&s.id) {
+                    s.title = Some(n.clone());
+                }
+            }
             s
         })
         .collect();
@@ -326,7 +427,73 @@ pub fn list_sessions(ss: Ss) -> Vec<SessionSummary> {
 
 #[tauri::command(async)]
 pub fn session_preview(ss: Ss, tool: Tool, path: String) -> Result<SessionPreview, CommandError> {
-    session_preview_impl(&ss.app.paths, &ss.app.data_dir, tool, &path)
+    let key = std::fs::canonicalize(&path).ok().and_then(|p| file_key(&p).map(|k| (p, k)));
+    if let Some((p, (len, mtime))) = &key {
+        if let Some((_, _, _, pv)) = lock(&ss.previews).iter().find(|(q, l, m, _)| q == p && l == len && m == mtime) {
+            return Ok(with_title(pv.clone(), &ss.app.data_dir));
+        }
+    }
+    let pv = session_preview_impl(&ss.app.paths, &ss.app.data_dir, tool, &path)?;
+    if let Some((p, (len, mtime))) = key {
+        let mut cache = lock(&ss.previews);
+        cache.retain(|(q, ..)| *q != p);
+        cache.insert(0, (p, len, mtime, pv.clone()));
+        cache.truncate(PREVIEW_CACHE);
+    }
+    Ok(with_title(pv, &ss.app.data_dir))
+}
+
+/// Applies a MemDock title to a (possibly cached) preview.
+fn with_title(mut pv: SessionPreview, data_dir: &Path) -> SessionPreview {
+    if let Some(t) = load_titles(data_dir).get(&title_key(pv.summary.tool, &pv.summary.id)) {
+        pv.summary.title = Some(t.clone());
+    }
+    pv
+}
+
+/// Renames a session. The name is also written where each tool keeps it, so
+/// Claude Code's `/resume` and Codex's history show it too: a `custom-title`
+/// line in the Claude session file (what `/rename` writes); for Codex an entry
+/// in `session_index.jsonl` and the thread title in the state database.
+pub fn rename_session_impl(paths: &AgentPaths, data_dir: &Path, tool: Tool, path: &str, title: &str) -> Result<(), CommandError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(CommandError::new("empty_title", "名称不能为空"));
+    }
+    let title: String = title.chars().take(200).collect();
+    let p = authorize(paths, tool, path)?;
+    let id = convert::summarize(&convert::parse(tool, &p), &p).id;
+    match tool {
+        Tool::Claude => {
+            use std::io::Write;
+            let line = serde_json::json!({"type": "custom-title", "customTitle": title, "sessionId": id});
+            let needs_nl = std::fs::read(&p).ok().and_then(|b| b.last().copied()).is_some_and(|b| b != b'\n');
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&p)
+                .map_err(|e| CommandError::new("io", e.to_string()))?;
+            f.write_all(format!("{}{line}\n", if needs_nl { "\n" } else { "" }).as_bytes())
+                .map_err(|e| CommandError::new("io", e.to_string()))?;
+        }
+        Tool::Codex => {
+            codex::append_session_index(&paths.codex_home, &id, &title).map_err(|e| CommandError::new("io", e.to_string()))?;
+            if let Some(db) = codex::state_db_path(&paths.codex_home) {
+                if let Err(e) = codex::set_thread_title(&db, &id, &title) {
+                    eprintln!("memdock: codex thread title: {e}");
+                }
+            }
+        }
+    }
+    let mut titles = load_titles(data_dir);
+    titles.insert(title_key(tool, &id), title);
+    std::fs::write(titles_path(data_dir), serde_json::to_vec_pretty(&titles).unwrap_or_default())
+        .map_err(|e| CommandError::new("io", e.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn rename_session(ss: Ss, tool: Tool, path: String, title: String) -> Result<(), CommandError> {
+    rename_session_impl(&ss.app.paths, &ss.app.data_dir, tool, &path, &title)
 }
 
 #[tauri::command(async)]

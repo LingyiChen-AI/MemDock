@@ -41,6 +41,7 @@ base64 = "0.23"
 sha1 = "0.10"
 ureq = { version = "3", features = ["json", "socks-proxy"] }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+portable-pty = "0.9.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -56,3 +57,7 @@ tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+
+# Optimize dependencies (serde_json etc.) in dev builds too: large session files parse several times faster.
+[profile.dev.package."*"]
+opt-level = 2

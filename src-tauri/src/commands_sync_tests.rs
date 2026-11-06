@@ -910,3 +910,103 @@ fn invalid_direction_is_rejected() {
     let err = sync_start_dir(&e.state, "block", "sideways").unwrap_err();
     assert_eq!(err.code, "invalid");
 }
+
+// ------------------------------------------------------------ preferences
+
+const PREFS: &str = "memdock_settings.json";
+
+fn frontend_prefs() -> Value {
+    serde_json::json!({
+        "memdock.chat.prefs": {"agent": "codex", "cwd": "C:\\codes\\private"},
+        "memdock.diffLayout": "unified",
+        "memdock.treeWidth": "320"
+    })
+}
+
+#[test]
+fn prefs_upload_then_download_roundtrip() {
+    let e = env();
+    e.login();
+    crate::commands::update_ui_prefs_impl(&e.state, None, Some("light".into()), Some("blue".into())).unwrap();
+    let info = prefs_sync_info_impl(&e.state).unwrap();
+    assert!(info.with_memory);
+    assert!(info.remote.is_none());
+
+    let up = prefs_upload_impl(&e.state, frontend_prefs()).unwrap();
+    assert!(up.committed);
+    let text = e.remote_file(PREFS).unwrap();
+    assert!(text.contains("\"theme\": \"light\""));
+    assert!(text.contains("\"memdock.diffLayout\": \"unified\""));
+    assert!(!text.contains("private"), "no local paths: {text}");
+    assert!(!text.contains("treeWidth"));
+    assert!(!text.contains("tok-1"), "no token");
+    let msg = git(&e.bare, &["log", "-1", "--format=%s", "main"]);
+    assert_eq!(msg, "MemDock: update preferences");
+    let info = up.info;
+    assert!(info.remote.is_some());
+    assert!(!info.newer, "this machine's own upload is not newer");
+
+    // unchanged preferences: no second commit
+    let head = e.head();
+    let again = prefs_upload_impl(&e.state, frontend_prefs()).unwrap();
+    assert!(!again.committed);
+    assert_eq!(e.head(), head);
+
+    // another machine writes newer preferences
+    let newer = text
+        .replace("\"light\"", "\"dark\"")
+        .replace(&prefs::parse(&text).unwrap().updated_at, "2099-01-01T00:00:00Z");
+    e.push_remote(&[(PREFS, newer.as_str())]);
+    let f = prefs_download_impl(&e.state).unwrap();
+    assert_eq!(f.backend.theme.as_deref(), Some("dark"));
+    assert_eq!(f.frontend["memdock.diffLayout"], "unified");
+    assert!(prefs_sync_info_impl(&e.state).unwrap().newer);
+    let info = prefs_mark_applied_impl(&e.state, &f.updated_at).unwrap();
+    assert!(!info.newer);
+    assert!(prefs_mark_applied_impl(&e.state, "yesterday").is_err());
+}
+
+#[test]
+fn prefs_download_errors() {
+    let e = env();
+    e.login();
+    write(&e.global(), "g\n");
+    e.done();
+    assert_eq!(prefs_download_impl(&e.state).unwrap_err().code, "prefs_missing");
+    e.push_remote(&[(PREFS, "{\"version\": 9}")]);
+    assert_eq!(prefs_download_impl(&e.state).unwrap_err().code, "prefs_too_new");
+    e.push_remote(&[(PREFS, "nope")]);
+    assert_eq!(prefs_download_impl(&e.state).unwrap_err().code, "prefs_invalid");
+}
+
+#[test]
+fn memory_upload_carries_preferences_when_switched_on() {
+    let e = env();
+    e.login();
+    write(&e.global(), "g\n");
+    e.state.rescan();
+    // no frontend part sent: the file is not written
+    e.done();
+    assert!(e.remote_file(PREFS).is_none());
+    // with the frontend part: written in the same sync commit
+    write(&e.global(), "g2\n");
+    match sync_start_full(&e.state, "block", "up", Some(frontend_prefs())).unwrap() {
+        SyncStartDto::Done { summary, .. } => assert_eq!(summary.pushed, 1),
+        other => panic!("expected done, got {other:?}"),
+    }
+    assert!(e.remote_file(PREFS).unwrap().contains("unified"));
+    let msg = git(&e.bare, &["log", "-1", "--format=%s", "main"]);
+    assert!(msg.starts_with("sync from"));
+    assert!(e.sync_state().prefs_seen.is_some());
+    // a download never writes it
+    let head = e.head();
+    sync_start_full(&e.state, "block", "down", Some(serde_json::json!({"memdock.diffLayout": "split"}))).unwrap();
+    assert_eq!(e.head(), head);
+    // switched off: left as it is
+    let info = prefs_set_with_memory_impl(&e.state, false).unwrap();
+    assert!(!info.with_memory);
+    write(&e.global(), "g3\n");
+    sync_start_full(&e.state, "block", "up", Some(serde_json::json!({"memdock.diffLayout": "split"}))).unwrap();
+    assert!(e.remote_file(PREFS).unwrap().contains("unified"));
+    assert_eq!(e.remote_file(GLOBAL).as_deref(), Some("g3\n"));
+}

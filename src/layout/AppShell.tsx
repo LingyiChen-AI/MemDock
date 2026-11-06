@@ -106,42 +106,50 @@ export interface AppShellProps {
   onNewTerminal?: () => void;
 }
 
-/** Prominent "New chat" entry above the nav groups; icon-only when the sidebar is collapsed. */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const NEW_CHAT_KEYS = IS_MAC ? "⌘N" : "Ctrl+N";
+const NEW_TERMINAL_KEYS = IS_MAC ? "⌃`" : "Ctrl+`";
+
+/** "New chat" at the top of the nav, styled like a nav item (accented); solid icon when collapsed. */
 function NewChatButton({ onClick }: { onClick: () => void }) {
   const { t } = useI18n();
   const label = t.shell.newChat;
+  const shortcut = NEW_CHAT_KEYS;
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton
           type="button"
-          tooltip={label}
+          tooltip={`${label} (${shortcut})`}
           onClick={onClick}
-          className="h-9 cursor-pointer justify-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/16 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
+          className="h-8 cursor-pointer gap-2.5 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/10 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
         >
           <SquarePen aria-hidden="true" />
           <span>{label}</span>
+          <kbd className="ml-auto font-mono text-[10.5px] font-normal text-muted-foreground/70 group-data-[collapsible=icon]:hidden">{shortcut}</kbd>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
   );
 }
 
-/** Secondary "New terminal" entry under "New chat"; icon-only when the sidebar is collapsed. */
+/** "New terminal" under "New chat", styled like a nav item. */
 function NewTerminalButton({ onClick }: { onClick: () => void }) {
   const { t } = useI18n();
   const label = t.shell.newTerminal;
+  const shortcut = NEW_TERMINAL_KEYS;
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton
           type="button"
-          tooltip={label}
+          tooltip={`${label} (${shortcut})`}
           onClick={onClick}
-          className="h-8 cursor-pointer justify-center gap-2 rounded-md border border-border bg-transparent px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center"
+          className="h-8 cursor-pointer gap-2.5 px-2.5 transition-colors duration-150 hover:bg-muted motion-reduce:transition-none text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:mx-auto"
         >
           <SquareTerminal aria-hidden="true" />
           <span>{label}</span>
+          <kbd className="ml-auto font-mono text-[10.5px] font-normal text-muted-foreground/70 group-data-[collapsible=icon]:hidden">{shortcut}</kbd>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
@@ -218,6 +226,24 @@ function AppearanceButton() {
 
 export function AppShell({ current, onNavigate, badges, status, children, pages, onNewChat, onNewTerminal }: AppShellProps) {
   const { t } = useI18n();
+  // Ctrl/⌘+N: new chat; Ctrl+`: new terminal (as in VS Code). Also suppresses the webview's own Ctrl+N window.
+  const actions = React.useRef({ onNewChat, onNewTerminal });
+  actions.current = { onNewChat, onNewTerminal };
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey || e.shiftKey) return;
+      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+      if (mod && (e.key === "n" || e.key === "N") && actions.current.onNewChat) {
+        e.preventDefault();
+        actions.current.onNewChat();
+      } else if (e.ctrlKey && e.code === "Backquote" && actions.current.onNewTerminal) {
+        e.preventDefault();
+        actions.current.onNewTerminal();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   const page = NAV.find((n) => n.key === current)!;
   const [collapsed, setCollapsed] = React.useState<NavGroupKey[]>(loadCollapsed);
   const toggleGroup = (g: NavGroupKey) =>
@@ -242,7 +268,7 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
         </SidebarHeader>
         <SidebarContent className="px-2">
           {onNewChat ? (
-            <div className="flex flex-col gap-1 pb-1">
+            <div className="flex flex-col gap-0.5 pb-1">
               <NewChatButton onClick={onNewChat} />
               {onNewTerminal ? <NewTerminalButton onClick={onNewTerminal} /> : null}
             </div>

@@ -32,10 +32,14 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppearanceControls } from "@/components/appearance/AppearanceControls";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { GithubMark } from "@/components/brand/GithubMark";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Placeholder } from "@/pages/Placeholder";
 import logoUrl from "@/assets/memdock-logo.svg";
+
+export const PROJECT_URL = "https://github.com/LingyiChen-AI/MemDock";
 
 export type NavKey = "memory" | "review" | "extract" | "skills" | "sessions" | "sync" | "usage" | "settings";
 
@@ -110,6 +114,27 @@ function CollapseToggle() {
       <Icon aria-hidden="true" />
       <span>{label}</span>
     </SidebarMenuButton>
+  );
+}
+
+/** Opens the MemDock repository on GitHub in the default browser. */
+function GithubButton() {
+  const { t } = useI18n();
+  const label = t.shell.github;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={() => void openUrl(PROJECT_URL).catch(() => {})}
+          className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+        >
+          <GithubMark className="size-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -222,6 +247,7 @@ export function AppShell({ current, onNavigate, badges, status, children, pages 
             <div className="min-w-0 flex-1 group-data-[collapsible=icon]:flex-none">
               <CollapseToggle />
             </div>
+            <GithubButton />
             <AppearanceButton />
           </div>
         </SidebarFooter>

@@ -50,10 +50,24 @@ export function Conversation({
   const stick = React.useRef(saved.current.scrollTop === null || saved.current.stuck);
   const waiting = blocks.some((b) => b.kind === "approval" && b.approval.decision === null && !b.approval.expired);
 
+  // Where we last scrolled to ourselves. Content that grows after that (history, images) fires a
+  // scroll event that looks "not at the bottom"; only a move *up* from here is the reader scrolling.
+  const pinnedTop = React.useRef<number | null>(null);
+  const toBottom = (el: HTMLDivElement) => {
+    el.scrollTop = el.scrollHeight;
+    pinnedTop.current = el.scrollTop;
+  };
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_SLACK;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_SLACK;
+    if (!atBottom && stick.current && pinnedTop.current !== null && el.scrollTop >= pinnedTop.current - 1) {
+      toBottom(el); // the content grew under us: keep following
+      return;
+    }
+    stick.current = atBottom;
+    if (!atBottom) pinnedTop.current = null;
     patchConvUi(scrollKey, { scrollTop: el.scrollTop, stuck: stick.current });
   };
 
@@ -66,7 +80,7 @@ export function Conversation({
 
   React.useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (el && stick.current) toBottom(el);
   }, [conv.items, running]);
 
   // The history arrives after the pane opens (and images load later): keep following the bottom
@@ -77,7 +91,7 @@ export function Conversation({
     const inner = content.current;
     if (!el || !inner || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (stick.current) toBottom(el);
     });
     ro.observe(inner);
     return () => ro.disconnect();

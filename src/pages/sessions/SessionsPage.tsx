@@ -393,12 +393,12 @@ function SessionRow({
     >
       <div className="flex min-w-0 items-center gap-2">
         <ToolBadge tool={session.tool} s={s} />
-        {worktree ? <WorktreeBadge slug={worktree.slug} branch={worktree.info?.branch} deleted={worktree.deleted} w={c.worktree} /> : null}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{heading}</span>
         {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
         <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(live ? Math.max(live.updated_at, session.updated_at ?? 0) : session.updated_at)}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
+        {worktree ? <WorktreeBadge slug={worktree.slug} branch={worktree.info?.branch} deleted={worktree.deleted} w={c.worktree} /> : null}
         {session.continued ? (
           <span className="rounded bg-muted px-1.5 text-foreground/70" title={s.continuedHint}>
             {s.continued}
@@ -1492,7 +1492,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
               {sessions ? <span className="text-xs text-muted-foreground">{fmt(s.count, { n: visible.length })}</span> : null}
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
             {looseShells.length > 0 ? (
               <section aria-label={c.terminals} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.terminals}</h2>

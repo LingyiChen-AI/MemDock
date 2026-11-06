@@ -23,16 +23,15 @@ type W = C["worktree"];
 export function WorktreeBadge({ slug, branch, deleted, w }: { slug: string; branch?: string; deleted?: boolean; w: W }) {
   if (deleted) {
     return (
-      <span title={w.deletedHint} className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-muted px-1.5 text-[11px] font-medium text-muted-foreground line-through decoration-muted-foreground/50">
-        🌿 {slug}
-        <span className="no-underline">· {w.deleted}</span>
+      <span title={`${slug} · ${w.deletedHint}`} className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-muted px-1.5 text-[11px] font-medium text-muted-foreground">
+        🌿 {w.deleted}
       </span>
     );
   }
   return (
     <span
-      title={branch ? fmt(w.badgeHint, { branch }) : undefined}
-      className="inline-flex h-5 max-w-36 shrink-0 items-center gap-1 truncate rounded bg-violet-500/12 px-1.5 text-[11px] font-medium text-violet-700 dark:text-violet-300"
+      title={branch ? fmt(w.badgeHint, { branch }) : slug}
+      className="inline-flex h-5 max-w-full min-w-0 items-center gap-1 rounded bg-violet-500/12 px-1.5 text-[11px] font-medium text-violet-700 dark:text-violet-300"
     >
       🌿 <span className="truncate">{slug}</span>
     </span>

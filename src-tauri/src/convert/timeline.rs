@@ -24,7 +24,13 @@ pub enum ToolKind {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TimelineItem {
-    User { ts: String, text: String },
+    User {
+        ts: String,
+        text: String,
+        /// Pasted images as data: URIs (capped).
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
+    },
     Assistant { ts: String, text: String },
     Tool {
         ts: String,
@@ -108,19 +114,44 @@ fn pretty(input: &Value, max: usize) -> String {
 }
 
 /// Builds the timeline (calls paired with results by id) and its counts.
+/// Largest single image passed to the viewer, and the budget for all of them.
+const IMAGE_MAX_BYTES: usize = 8 << 20;
+const IMAGES_TOTAL_BYTES: usize = 48 << 20;
+
 pub fn build(items: &[Item], text_max: usize, io_max: usize) -> (Vec<TimelineItem>, TimelineCounts) {
+    build_with_images(items, &[], text_max, io_max)
+}
+
+/// `images`: `(index of the user item, data: URI)` from the parser.
+pub fn build_with_images(items: &[Item], images: &[(usize, String)], text_max: usize, io_max: usize) -> (Vec<TimelineItem>, TimelineCounts) {
     let mut out: Vec<TimelineItem> = Vec::new();
     let mut counts = TimelineCounts::default();
     // call id -> index in `out`
     let mut open: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for it in items {
+    let mut budget = IMAGES_TOTAL_BYTES;
+    for (idx, it) in items.iter().enumerate() {
         match it {
             Item::User { ts, text } => {
-                if text.trim().is_empty() {
+                let mut pics: Vec<String> = Vec::new();
+                for (_, uri) in images.iter().filter(|(i, _)| *i == idx) {
+                    if uri.len() <= IMAGE_MAX_BYTES && uri.len() <= budget {
+                        budget -= uri.len();
+                        pics.push(uri.clone());
+                    }
+                }
+                let shown_text = if pics.is_empty() { text.trim().to_string() } else { text.replace("[image]", "").trim().to_string() };
+                if shown_text.is_empty() && pics.is_empty() {
                     continue;
                 }
+                // An image-only message right after a user text joins that bubble.
+                if shown_text.is_empty() {
+                    if let Some(TimelineItem::User { images: prev, .. }) = out.last_mut() {
+                        prev.extend(pics);
+                        continue;
+                    }
+                }
                 counts.user += 1;
-                out.push(TimelineItem::User { ts: ts.clone(), text: truncate_chars(text.trim(), text_max) });
+                out.push(TimelineItem::User { ts: ts.clone(), text: truncate_chars(&shown_text, text_max), images: pics });
             }
             Item::Assistant { ts, text } => {
                 if text.trim().is_empty() {
@@ -216,6 +247,28 @@ mod tests {
     }
 
     #[test]
+    fn attaches_pasted_images_to_the_user_bubble() {
+        let items = vec![
+            Item::User { ts: "1".into(), text: "[Image #1] look".into() },
+            Item::User { ts: "1".into(), text: "[image]".into() },
+            Item::User { ts: "2".into(), text: "[image]".into() },
+        ];
+        let imgs = vec![(1, "data:image/png;base64,AAA".to_string())];
+        let (tl, c) = build_with_images(&items, &imgs, 100, 100);
+        // The image-only message joins the text bubble; one whose data is missing keeps its placeholder.
+        assert_eq!(tl.len(), 2);
+        assert!(matches!(&tl[1], TimelineItem::User { text, images, .. } if text == "[image]" && images.is_empty()));
+        assert_eq!(c.user, 2);
+        match &tl[0] {
+            TimelineItem::User { text, images, .. } => {
+                assert_eq!(text, "[Image #1] look");
+                assert_eq!(images, &vec!["data:image/png;base64,AAA".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn skips_blank_messages() {
         let items = vec![
             Item::User { ts: "1".into(), text: "  
@@ -228,7 +281,7 @@ mod tests {
 ".into() },
         ];
         let (tl, c) = build(&items, 100, 100);
-        assert_eq!(tl, vec![TimelineItem::User { ts: "3".into(), text: "hi".into() }]);
+        assert_eq!(tl, vec![TimelineItem::User { ts: "3".into(), text: "hi".into(), images: vec![] }]);
         assert_eq!(c.user, 1);
         assert_eq!(c.assistant, 0);
     }

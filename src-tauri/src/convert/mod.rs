@@ -46,6 +46,8 @@ pub struct Conversation {
     pub title: Option<String>,
     pub model: Option<String>,
     pub items: Vec<Item>,
+    /// Pasted images as `(index of the user item in `items`, data: URI)`, for display only.
+    pub images: Vec<(usize, String)>,
 }
 
 /// An output unit: a text message or a shell call paired with its result.

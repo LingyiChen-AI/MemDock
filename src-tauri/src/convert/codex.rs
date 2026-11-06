@@ -92,6 +92,7 @@ pub fn parse(path: &Path) -> Conversation {
         title: None,
         model: None,
         items: Vec::new(),
+        images: Vec::new(),
     };
     let mut seen_meta = false;
     let mut last_ts = String::new();
@@ -129,14 +130,14 @@ pub fn parse(path: &Path) -> Conversation {
                     });
                 }
             }
-            "response_item" => parse_response_item(p, ts, &mut conv.items),
+            "response_item" => parse_response_item(p, ts, &mut conv.items, &mut conv.images),
             _ => {}
         }
     });
     conv
 }
 
-fn parse_response_item(p: &Value, ts: String, items: &mut Vec<Item>) {
+fn parse_response_item(p: &Value, ts: String, items: &mut Vec<Item>, images: &mut Vec<(usize, String)>) {
     let str_field = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     match p.get("type").and_then(Value::as_str) {
         Some("message") => {
@@ -145,7 +146,17 @@ fn parse_response_item(p: &Value, ts: String, items: &mut Vec<Item>) {
                 return;
             }
             match p.get("role").and_then(Value::as_str) {
-                Some("user") if !is_injected_codex(&text) => items.push(Item::User { ts, text }),
+                Some("user") if !is_injected_codex(&text) => {
+                    items.push(Item::User { ts, text });
+                    let at = items.len() - 1;
+                    for part in p.get("content").and_then(Value::as_array).into_iter().flatten() {
+                        if part.get("type").and_then(Value::as_str) == Some("input_image") {
+                            if let Some(url) = part.get("image_url").and_then(Value::as_str).filter(|u| u.starts_with("data:image/")) {
+                                images.push((at, url.to_string()));
+                            }
+                        }
+                    }
+                }
                 Some("assistant") => items.push(Item::Assistant { ts, text }),
                 _ => {}
             }

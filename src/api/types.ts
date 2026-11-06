@@ -813,7 +813,7 @@ export type ToolKind = "shell" | "read" | "edit" | "write" | "search" | "web" | 
 
 /** The original conversation for the viewer (convert/timeline.rs). */
 export type TimelineItem =
-  | { type: "user"; ts: string; text: string }
+  | { type: "user"; ts: string; text: string; /** Pasted images as data: URIs. */ images?: string[] }
   | { type: "assistant"; ts: string; text: string }
   | {
       type: "tool";

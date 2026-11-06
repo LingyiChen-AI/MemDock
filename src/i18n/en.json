@@ -992,6 +992,8 @@
     "continued": "Continued",
     "continuedHint": "Picks up from an earlier conversation; it opens with an automatic summary",
     "timeline": {
+      "imageOpen": "Open image {n}",
+      "imageTitle": "Image {n} of {total}",
       "more": "+{n} more",
       "filterLabel": "Filter by type",
       "all": "All",

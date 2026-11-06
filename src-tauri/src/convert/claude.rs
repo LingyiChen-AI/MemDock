@@ -49,6 +49,17 @@ fn tool_result_text(content: &Value) -> String {
     }
 }
 
+/// `data:` URI of an Anthropic image block with an inline base64 source.
+fn image_data_uri(b: &Value) -> Option<String> {
+    let src = b.get("source")?;
+    if src.get("type").and_then(Value::as_str) != Some("base64") {
+        return None;
+    }
+    let mt = src.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
+    let data = src.get("data").and_then(Value::as_str)?;
+    Some(format!("data:{mt};base64,{data}"))
+}
+
 /// The uuids on the active branch: walk `parentUuid` back from the last
 /// non-sidechain message. `None` when the file has no usable chain.
 fn active_chain(path: &Path) -> Option<HashSet<String>> {
@@ -90,6 +101,7 @@ pub fn parse(path: &Path) -> Conversation {
         title: None,
         model: None,
         items: Vec::new(),
+        images: Vec::new(),
     };
     let mut have_id = false;
     let mut last_ts = String::new();
@@ -177,6 +189,9 @@ pub fn parse(path: &Path) -> Conversation {
                 }
                 Some("image") if kind == "user" => {
                     conv.items.push(Item::User { ts: ts.clone(), text: "[image]".into() });
+                    if let Some(uri) = image_data_uri(&b) {
+                        conv.images.push((conv.items.len() - 1, uri));
+                    }
                 }
                 Some("tool_use") => {
                     let name = b.get("name").and_then(Value::as_str).unwrap_or("tool").to_string();

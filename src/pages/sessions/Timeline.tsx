@@ -194,11 +194,62 @@ function UserRow({ item, s }: { item: TextItem; s: S }) {
           <span className="font-medium text-foreground/80">{s.roles.user}</span>
           <span className="tabular-nums">{formatIso(item.ts)}</span>
         </div>
-        <div className="max-w-full min-w-0 overflow-hidden rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm leading-relaxed">
-          <LongText text={item.text} s={s} />
+        <div className="flex max-w-full min-w-0 flex-col gap-2 overflow-hidden rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm leading-relaxed">
+          {item.text ? <LongText text={item.text} s={s} /> : null}
+          {item.type === "user" && item.images?.length ? <Thumbs images={item.images} s={s} /> : null}
         </div>
       </div>
     </li>
+  );
+}
+
+/** Pasted screenshots as thumbnails; click one to see it full size. */
+function Thumbs({ images, s }: { images: string[]; s: S }) {
+  const [open, setOpen] = React.useState<number | null>(null);
+  return (
+    <>
+      <div className="flex flex-wrap justify-end gap-1.5">
+        {images.map((src, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => setOpen(i)}
+            className="cursor-zoom-in overflow-hidden rounded-lg border border-border bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={fmt(s.timeline.imageOpen, { n: i + 1 })}
+          >
+            <img src={src} alt="" loading="lazy" className="block max-h-40 max-w-[240px] object-contain" />
+          </button>
+        ))}
+      </div>
+      <Dialog open={open !== null} onOpenChange={(o) => (!o ? setOpen(null) : undefined)}>
+        <DialogContent className="flex max-h-[92vh] flex-col gap-2 sm:max-w-[min(1200px,94vw)]">
+          <DialogHeader>
+            <DialogTitle>{fmt(s.timeline.imageTitle, { n: (open ?? 0) + 1, total: images.length })}</DialogTitle>
+            <DialogDescription className="sr-only">{s.timeline.imageTitle}</DialogDescription>
+          </DialogHeader>
+          {open !== null ? (
+            <div className="min-h-0 overflow-auto rounded-md bg-muted/40">
+              <img src={images[open]} alt="" className="mx-auto block max-w-full" />
+            </div>
+          ) : null}
+          {images.length > 1 ? (
+            <div className="flex justify-center gap-1.5">
+              {images.map((src, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setOpen(i)}
+                  className={cn("overflow-hidden rounded border-2 outline-none", i === open ? "border-primary" : "border-transparent opacity-70 hover:opacity-100")}
+                  aria-label={fmt(s.timeline.imageOpen, { n: i + 1 })}
+                >
+                  <img src={src} alt="" className="block h-12 w-16 object-cover" />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

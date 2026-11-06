@@ -174,7 +174,7 @@ pub fn session_preview_impl(
             },
         })
         .collect();
-    let (mut timeline, counts) = convert::timeline::build(&conv.items, PREVIEW_CHARS, TIMELINE_IO_CHARS);
+    let (mut timeline, counts) = convert::timeline::build_with_images(&conv.items, &conv.images, PREVIEW_CHARS, TIMELINE_IO_CHARS);
     let timeline_total = timeline.len();
     timeline.truncate(PREVIEW_LIMIT);
     Ok(SessionPreview { summary, messages, total_messages: out.len(), stats, timeline, counts, timeline_total })

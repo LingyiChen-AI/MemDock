@@ -191,6 +191,7 @@ pub fn run() {
             commands_env::open_data_dir,
             commands_sessions::list_sessions,
             commands_sessions::session_preview,
+            commands_sessions::rename_session,
             commands_sessions::convert_target_dir,
             commands_sessions::convert_session,
             commands_ghimport::gh_import_scan,

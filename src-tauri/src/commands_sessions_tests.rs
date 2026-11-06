@@ -161,3 +161,66 @@ fn empty_session_is_rejected() {
         .unwrap_err();
     assert_eq!(err.code, "empty_session");
 }
+
+/// Timing on this machine's real sessions: `cargo test --lib real_session_timing -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn real_session_timing() {
+    let paths = AgentPaths::detect();
+    let data = tempfile::tempdir().unwrap();
+    let cache = Mutex::new(HashMap::new());
+    let t = std::time::Instant::now();
+    let list = list_sessions_impl(&paths, data.path(), &cache);
+    println!("cold list: {} sessions in {:?}", list.len(), t.elapsed());
+    let t = std::time::Instant::now();
+    let list = list_sessions_impl(&paths, data.path(), &cache);
+    println!("warm list: {} sessions in {:?}", list.len(), t.elapsed());
+    let mut by_size: Vec<_> = list.iter().map(|s| (std::fs::metadata(&s.path).map(|m| m.len()).unwrap_or(0), s)).collect();
+    by_size.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+    for (n, s) in by_size.iter().take(3) {
+        let t = std::time::Instant::now();
+        let p = session_preview_impl(&paths, data.path(), s.tool, &s.path).unwrap();
+        println!("preview {:?} {} KB: {} items in {:?}", s.tool, n / 1024, p.timeline.len(), t.elapsed());
+    }
+}
+
+#[test]
+fn rename_writes_native_titles_and_lists_them() {
+    let e = env();
+    let db = make_state_db(&e.paths.codex_home);
+    let cache = Mutex::new(HashMap::new());
+    let claude = e.claude_src.to_string_lossy().into_owned();
+    let codex_p = e.codex_src.to_string_lossy().into_owned();
+    rename_session_impl(&e.paths, &e.data, Tool::Claude, &claude, "  登录页修复  ").unwrap();
+    let last = read_lines(&claude).pop().unwrap();
+    let v: Value = serde_json::from_str(&last).unwrap();
+    assert_eq!(v["type"], "custom-title");
+    assert_eq!(v["customTitle"], "登录页修复");
+    rename_session_impl(&e.paths, &e.data, Tool::Codex, &codex_p, "列文件").unwrap();
+    let idx = fs::read_to_string(e.paths.codex_home.join("session_index.jsonl")).unwrap();
+    assert!(idx.contains("\"thread_name\":\"列文件\""));
+    let _ = db;
+    let list = list_sessions_impl(&e.paths, &e.data, &cache);
+    let t = |tool: Tool| list.iter().find(|s| s.tool == tool).unwrap().title.clone();
+    assert_eq!(t(Tool::Claude).as_deref(), Some("登录页修复"));
+    assert_eq!(t(Tool::Codex).as_deref(), Some("列文件"));
+    assert!(rename_session_impl(&e.paths, &e.data, Tool::Claude, &claude, "   ").is_err());
+}
+
+#[test]
+fn summaries_persist_across_restarts() {
+    let e = env();
+    let cache = Mutex::new(HashMap::new());
+    let first = list_sessions_impl(&e.paths, &e.data, &cache);
+    assert!(e.data.join("session-index.json").is_file());
+    // A new process starts from the saved index and gives the same list.
+    let reloaded = Mutex::new(load_index(&e.data));
+    assert_eq!(lock(&reloaded).len(), 2);
+    assert_eq!(list_sessions_impl(&e.paths, &e.data, &reloaded), first);
+    // A changed file is parsed again.
+    let mut lines = read_lines(&e.claude_src.to_string_lossy());
+    lines.push(r#"{"type":"custom-title","customTitle":"New name","sessionId":"x"}"#.into());
+    fs::write(&e.claude_src, lines.join("\n") + "\n").unwrap();
+    let after = list_sessions_impl(&e.paths, &e.data, &reloaded);
+    assert_eq!(after.iter().find(|s| s.tool == Tool::Claude).unwrap().title.as_deref(), Some("New name"));
+}

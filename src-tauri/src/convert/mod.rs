@@ -211,7 +211,7 @@ pub fn clean_cwd(cwd: &str) -> String {
 }
 
 /// A session row for the list.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
 pub struct SessionSummary {
     pub tool: Tool,
     pub id: String,

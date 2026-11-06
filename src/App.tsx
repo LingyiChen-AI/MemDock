@@ -22,7 +22,7 @@ import { isActive } from "@/pages/chat/chatPrefs";
 
 function Shell() {
   const { t } = useI18n();
-  const [current, setCurrent] = useState<NavKey>("memory");
+  const [current, setCurrent] = useState<NavKey>("chat");
   // The open page reports unsaved edits; leaving it (pages unmount on navigation) asks first.
   const [dirty, setDirty] = useState(false);
   const [pendingNav, setPendingNav] = useState<NavKey | null>(null);

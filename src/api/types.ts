@@ -65,6 +65,10 @@ export type CommandErrorCode =
   | "io"
   | "forbidden"
   | "invalid"
+  // Preferences sync
+  | "prefs_missing"
+  | "prefs_too_new"
+  | "prefs_invalid"
   // Skill management
   | "exists"
   | "read_only"
@@ -553,6 +557,41 @@ export interface SyncSkippedRecord {
 }
 
 export type SyncDirection = "up" | "down";
+
+/** `memdock_settings.json` in the sync repository (preferences sync). */
+export interface PrefsFile {
+  version: number;
+  /** RFC 3339, UTC. */
+  updated_at: string;
+  device: string;
+  app_version: string;
+  backend: {
+    language: string | null;
+    theme: string | null;
+    accent: string | null;
+    claude_quota_enabled: boolean;
+    codex_quota_enabled: boolean;
+    /** `ExtractConfig` without `projects`. */
+    extract: Partial<Omit<ExtractConfig, "projects">> | null;
+  };
+  /** localStorage key -> parsed value (only synced keys). */
+  frontend: Record<string, unknown>;
+}
+
+export interface PrefsInfo {
+  /** Memory uploads also refresh memdock_settings.json. */
+  with_memory: boolean;
+  /** The cloud copy as last fetched; null when absent. */
+  remote: { updated_at: string; device: string; app_version: string } | null;
+  /** The cloud copy is newer than what this computer last uploaded / applied. */
+  newer: boolean;
+  seen: string | null;
+}
+
+export interface PrefsUploadResult {
+  committed: boolean;
+  info: PrefsInfo;
+}
 
 export type ManifestScope = { type: "global" } | { type: "project"; key: string };
 

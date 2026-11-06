@@ -19,7 +19,8 @@ import {
   TriangleAlert,
   Upload,
 } from "lucide-react";
-import { logout, syncDiscard, syncFinish, syncProjects, syncSkippedFiles, syncStart, syncStatus } from "@/api/sync";
+import { logout, prefsSyncInfo, syncDiscard, syncFinish, syncProjects, syncSkippedFiles, syncStart, syncStatus } from "@/api/sync";
+import { collectFrontendPrefs } from "@/prefs/prefsSync";
 import type {
   FileSecretHit,
   ManifestSkill,
@@ -179,16 +180,26 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenM
       ? fmt(s.downloadDoneToast, { pulled: sm.pulled, merged: sm.merged })
       : fmt(after ? s.finishedToast : s.doneToast, { pulled: sm.pulled, pushed: sm.pushed, merged: sm.merged });
 
+  // Preferences are never applied by a download; only point at newer ones.
+  const hintNewerPrefs = () => {
+    void prefsSyncInfo()
+      .then((i) => {
+        if (i.newer) push("info", t.settings.prefsSync.newerHint);
+      })
+      .catch(() => undefined);
+  };
+
   const run = async (secrets: "block" | "allow" | "skip" = "block", direction: SyncDirection = "up") => {
     setRunning(direction);
     setError(null);
     setHits(null);
     setExtras(null);
     try {
-      const r = await syncStart(secrets, direction);
+      const r = await syncStart(secrets, direction, direction === "up" ? collectFrontendPrefs() : undefined);
       if (r.kind === "done") {
         const sm = finished(r.summary, extrasOf(r));
         push("success", toastFor(!!r.download, sm, false));
+        if (r.download) hintNewerPrefs();
       } else if (r.kind === "blocked") {
         setHits(r.secret_hits);
       } else {
@@ -222,6 +233,7 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenM
             setPlan(null);
             finished(summary, extrasOf(p));
             push("success", toastFor(!!p.download, summary, true));
+            if (p.download) hintNewerPrefs();
           }}
           onBlocked={(h) => {
             setPlan(null);

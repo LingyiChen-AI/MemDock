@@ -25,6 +25,7 @@ vi.mock("@/api/sync", () => ({
   syncFileAt: vi.fn(),
   restoreFromHistory: vi.fn().mockResolvedValue(undefined),
   logout: vi.fn(),
+  prefsSyncInfo: vi.fn().mockResolvedValue({ with_memory: true, remote: null, newer: false, seen: null }),
 }));
 
 import { installSkill } from "@/api/skills";
@@ -156,7 +157,7 @@ describe("SyncPage", () => {
     const allow = within(box).getByRole("button", { name: "坚持同步" });
     expect(allow).toHaveAccessibleDescription(/密钥可能因此泄露/);
     await userEvent.click(within(box).getByRole("button", { name: "跳过这些文件，继续同步" }));
-    expect(syncStart).toHaveBeenLastCalledWith("skip", "up");
+    expect(syncStart).toHaveBeenLastCalledWith("skip", "up", expect.any(Object));
   });
 
   it("leaving the page mid-resolution discards the plan", async () => {
@@ -303,7 +304,7 @@ describe("SyncPage directions", () => {
     );
     setup();
     await userEvent.click(await screen.findByRole("button", { name: "同步到本地" }));
-    expect(syncStart).toHaveBeenLastCalledWith("block", "down");
+    expect(syncStart).toHaveBeenLastCalledWith("block", "down", undefined);
     expect(await screen.findByText("已同步到本地：写入 4、合并 1")).toBeInTheDocument();
     expect(screen.getByText("本机还有 1 处改动没有上传，需要时点「上传到云端」。")).toBeInTheDocument();
     const absent = screen.getByRole("region", { name: "这些云端文件没有写入本机（2）" });
@@ -317,7 +318,7 @@ describe("SyncPage directions", () => {
     setup({ ...status, remote_has_memory: true });
     const banner = await screen.findByRole("region", { name: "检测到云端已有记忆" });
     await userEvent.click(within(banner).getByRole("button", { name: "一键同步到本机" }));
-    expect(syncStart).toHaveBeenLastCalledWith("block", "down");
+    expect(syncStart).toHaveBeenLastCalledWith("block", "down", undefined);
   });
 
   it("no new-computer banner after a sync", async () => {

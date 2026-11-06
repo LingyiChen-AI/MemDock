@@ -303,11 +303,11 @@ describe("new chats and terminals", () => {
     saveChatPrefs({ ...DEFAULT_PREFS, cwd: "" });
     renderApp(<SessionsPage />);
     const group = await screen.findByRole("region", { name: "demo" });
-    await userEvent.click(within(group).getByRole("button", { name: "新建会话" }));
+    await projectMenu(group, /^新建会话/);
     expect(within(await screen.findByLabelText("当前设置")).getByText("demo")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /新对话/ })).toBeInTheDocument();
 
-    await userEvent.click(within(group).getByRole("button", { name: "新建终端" }));
+    await projectMenu(group, /^新建终端/);
     await waitFor(() => expect(ptyOpen).toHaveBeenCalledWith(expect.objectContaining({ tool: "shell", cwd: "/work/demo" })));
     expect(screen.queryByRole("radiogroup", { name: "视图" })).toBeNull();
     expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
@@ -336,7 +336,7 @@ describe("new chats and terminals", () => {
   it("pasting a screenshot into a terminal saves it and types the quoted path", async () => {
     (saveTempImage as Mock).mockResolvedValue("C:\\Temp\\memdock images\\a.png");
     renderApp(<SessionsPage />);
-    await userEvent.click(within(await screen.findByRole("region", { name: "demo" })).getByRole("button", { name: "新建终端" }));
+    await projectMenu(await screen.findByRole("region", { name: "demo" }), /^新建终端/);
     await waitFor(() => expect(getTerminal(getShells()[0].key)?.status).toBe("running"));
     const host = screen.getByTestId("terminal-host");
     fireEvent.paste(host, { clipboardData: { files: [new File([new Uint8Array(3)], "s.png", { type: "image/png" })] } });
@@ -350,6 +350,12 @@ describe("new chats and terminals", () => {
     expect(saveTempImage).toHaveBeenCalledTimes(1);
   });
 });
+
+/** The project group's "＋" menu. */
+async function projectMenu(group: HTMLElement, item: RegExp) {
+  await userEvent.click(within(group).getByRole("button", { name: "新建" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
 
 describe("appendCapped", () => {
   it("keeps the tail, cut at a line start", () => {

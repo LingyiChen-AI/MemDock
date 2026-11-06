@@ -14,6 +14,8 @@ export interface ConvUi {
   stuck: boolean;
   /** Composer settings chosen in this conversation (null: global prefs / the attached process). */
   settings: Partial<AgentSettings> | null;
+  /** Draft only: start in an isolated git worktree ("独立工作区"). */
+  worktree?: boolean;
 }
 
 const EMPTY: ConvUi = { text: "", images: [], scrollTop: null, stuck: true, settings: null };

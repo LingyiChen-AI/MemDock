@@ -1,13 +1,30 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { ArrowLeftRight, Check, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
-import { liveInterrupt, liveRespond, liveSend, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
+import { liveInterrupt, liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
+import { worktreeCreate } from "@/api/worktree";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { WorktreeBadge, WorktreePanel } from "@/pages/chat/WorktreePanel";
+import {
+  addWorktree,
+  checkWorktree,
+  normPath,
+  parseWorktreePath,
+  refreshWorktrees,
+  useGitRepo,
+  useStatusRefreshOnTurnEnd,
+  useWorktreeState,
+  useWorktreeStatus,
+  worktreeOf,
+  type WorktreeLink,
+} from "@/pages/chat/worktreeStore";
 import { ptyClose } from "@/api/pty";
 import { TerminalView } from "@/pages/chat/TerminalView";
 import {
   addShell,
   closeTerminal,
+  getTerminal,
   initialMode,
   migrateTerminal,
   prepareTerminal,
@@ -26,10 +43,10 @@ import {
 import { Conversation } from "@/pages/chat/Conversation";
 import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
 import { ChatComposer, type ComposerMessage, type ProjectChoice } from "@/pages/chat/Composer";
-import { isActive, loadChatPrefs, rememberLast } from "@/pages/chat/chatPrefs";
+import { agentSettings, isActive, loadChatPrefs, parseExtraArgs, rememberLast } from "@/pages/chat/chatPrefs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
-import { moveConvUi, newDraftKey } from "@/pages/chat/convUiState";
+import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { Pencil } from "lucide-react";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
@@ -97,23 +114,95 @@ function samePath(a: string, b: string): boolean {
   return /^[a-zA-Z]:/.test(x) || /^[a-zA-Z]:/.test(y) ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
-/** Small icon button with a tooltip (project group header actions). */
-function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function MenuAction({
+  icon,
+  label,
+  sub,
+  kbd,
+  disabled,
+  violet,
+  autoFocus,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  sub: string;
+  kbd?: string;
+  disabled?: boolean;
+  violet?: boolean;
+  autoFocus?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          onClick={onClick}
-          className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5"
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
+    <button
+      type="button"
+      role="menuitem"
+      autoFocus={autoFocus}
+      disabled={disabled}
+      title={disabled ? sub : undefined}
+      onClick={onClick}
+      className="flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:bg-muted disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent"
+    >
+      <span className={cn("mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4", violet && "text-violet-600 dark:text-violet-400")}>{icon}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-sm">{label}</span>
+        <span className="truncate text-[11px] text-muted-foreground">{sub}</span>
+      </span>
+      {kbd ? <kbd className="mt-0.5 shrink-0 rounded border border-border px-1 font-sans text-[10px] text-muted-foreground">{kbd}</kbd> : null}
+    </button>
   );
+}
+
+/** The project group's single "＋": new session / new session in a worktree / new terminal. */
+function ProjectAddMenu({ name, cwd, onNew, onNewWorktree, onTerminal, c }: { name: string; cwd: string; onNew: () => void; onNewWorktree: () => void; onTerminal: () => void; c: C }) {
+  const w = c.worktree;
+  const [open, setOpen] = React.useState(false);
+  const git = useGitRepo(cwd, open);
+  const run = (f: () => void) => {
+    setOpen(false);
+    f();
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={w.addLabel}
+              className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted data-[state=open]:text-foreground [&_svg]:size-3.5"
+            >
+              <Plus aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{w.addLabel}</TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" className="w-72 p-1">
+        <div role="menu" aria-label={name}>
+          <MenuAction autoFocus icon={<SquarePen aria-hidden="true" />} label={w.menuNew} sub={fmt(w.menuNewSub, { name })} kbd="Enter" onClick={() => run(onNew)} />
+          <MenuAction
+            violet
+            icon={<GitBranch aria-hidden="true" />}
+            label={w.menuWorktree}
+            sub={git === false ? w.menuWorktreeNoGit : w.menuWorktreeSub}
+            disabled={git !== true}
+            onClick={() => run(onNewWorktree)}
+          />
+          <div role="separator" className="my-1 h-px bg-border" />
+          <MenuAction icon={<SquareTerminal aria-hidden="true" />} label={w.menuTerminal} sub={fmt(w.menuTerminalSub, { name })} onClick={() => run(onTerminal)} />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** "改了 N 个文件" for a worktree session row (status fetched lazily, refreshed when a turn ends). */
+function WorktreeRowMeta({ path, active, c }: { path: string; active: boolean; c: C }) {
+  const st = useWorktreeStatus(path);
+  useStatusRefreshOnTurnEnd(path, active);
+  if (!st || st.files.length === 0) return null;
+  return <span className="text-violet-700 dark:text-violet-300">{fmt(c.worktree.changedFiles, { n: st.files.length })}</span>;
 }
 
 /** A plain shell terminal in the list: badge, shell name, folder and state; a close button. */
@@ -272,10 +361,13 @@ function SessionRow({
   selectedLiveId,
   onSelect,
   onSelectLive,
+  worktree = null,
   s,
   c,
 }: {
   session: SessionSummary;
+  /** The worktree the session runs in (badge + changed files). */
+  worktree?: WorktreeLink | null;
   /** Every live process of this session, newest first. */
   lives?: LiveSessionInfo[];
   selected: boolean;
@@ -301,6 +393,7 @@ function SessionRow({
     >
       <div className="flex min-w-0 items-center gap-2">
         <ToolBadge tool={session.tool} s={s} />
+        {worktree ? <WorktreeBadge slug={worktree.slug} branch={worktree.info?.branch} deleted={worktree.deleted} w={c.worktree} /> : null}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{heading}</span>
         {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
         <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(live ? Math.max(live.updated_at, session.updated_at ?? 0) : session.updated_at)}</span>
@@ -312,6 +405,7 @@ function SessionRow({
           </span>
         ) : null}
         <span>{fmt(s.messages, { n: session.message_count })}</span>
+        {worktree?.info ? <WorktreeRowMeta path={worktree.info.path} active={!!live && isActive(live.state)} c={c} /> : null}
         {session.tool_calls > 0 ? <span>{fmt(s.toolCalls, { n: session.tool_calls })}</span> : null}
         {session.converted_from ? (
           <span className="text-primary">{fmt(s.convertedFrom, { tool: s.tools[session.converted_from.tool] })}</span>
@@ -613,10 +707,13 @@ function ChatPane({
   onRenamed,
   onRefresh,
   onDraftChange,
+  onOpenShell,
   projects,
   s,
   c,
 }: {
+  /** Opens a plain shell terminal in a folder (worktree conflict handling). */
+  onOpenShell?: (cwd: string) => void;
   target: Target;
   preview: SessionPreview | null;
   error: string | null;
@@ -644,6 +741,51 @@ function ChatPane({
   // Options are fixed when the terminal opens; later list refreshes must not restart it.
   const [termOpts, setTermOpts] = React.useState(() => terminalOptions(target));
 
+  // Worktree sessions ("独立工作区").
+  const w = c.worktree;
+  const wtState = useWorktreeState();
+  const wt = worktreeOf(wtState, target.cwd);
+  const wtDeleted = !!wt?.deleted;
+  const [creatingWt, setCreatingWt] = React.useState(false);
+  const [notice, setNotice] = React.useState<string | null>(null);
+
+  /** A draft with `/worktree` on: creates its worktree (once); returns the path, or null when not wanted. */
+  const ensureDraftWorktree = async (hint: string): Promise<string | null> => {
+    if (!target.draft || !target.cwd || !getConvUi(termKey).worktree || parseWorktreePath(target.cwd)) return null;
+    if (!(await checkWorktree(target.cwd))) return null;
+    setCreatingWt(true);
+    try {
+      const info = await worktreeCreate(target.cwd, hint);
+      addWorktree(info);
+      patchConvUi(termKey, { worktree: false });
+      onDraftChange?.({ cwd: info.path });
+      return info.path;
+    } catch (e) {
+      throw new Error(fmt(w.createFailed, { error: errorMessage(e) }));
+    } finally {
+      setCreatingWt(false);
+    }
+  };
+
+  // A draft that opens straight in terminal mode with the worktree on: create it before the terminal starts.
+  const [wtPending, setWtPending] = React.useState(() => mode === "terminal" && !!target.draft && !!getConvUi(termKey).worktree && !getTerminal(termKey));
+  const wtStarted = React.useRef(false);
+  React.useEffect(() => {
+    if (!wtPending || wtStarted.current) return;
+    wtStarted.current = true;
+    ensureDraftWorktree("terminal")
+      .then((p) => {
+        if (p) setTermOpts(terminalOptions({ ...target, cwd: p }));
+      })
+      .catch((e) => {
+        setActionError(errorMessage(e));
+        setMode("gui");
+      })
+      .finally(() => setWtPending(false));
+    // Runs once for the draft that mounted in terminal mode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wtPending]);
+
   const switchMode = async (next: ChatMode) => {
     setActionError(null);
     setSwitching(true);
@@ -651,7 +793,8 @@ function ChatPane({
       if (next === "terminal") {
         const ok = await prepareTerminal(target, termKey, getLiveState().sessions, () => new Promise<boolean>((resolve) => setConfirmStop(() => resolve)));
         if (!ok) return;
-        setTermOpts(terminalOptions(target));
+        const wtPath = await ensureDraftWorktree("terminal");
+        setTermOpts(terminalOptions({ ...target, cwd: wtPath ?? target.cwd }));
         setMode("terminal");
       } else {
         await closeTerminal(termKey);
@@ -707,9 +850,10 @@ function ChatPane({
       const owner = await nativeOwner(target.tool, target.nativeId).catch(() => null);
       if (owner?.kind === "pty" && !(await resolvePtyOwner(owner))) return false;
     }
+    const wtPath = await ensureDraftWorktree(text.split(/\r?\n/)[0].trim() || "chat");
     const opts = {
       agent: target.tool,
-      cwd: target.cwd,
+      cwd: wtPath ?? target.cwd,
       resume_id: target.nativeId,
       permission,
       model: model || null,
@@ -738,7 +882,18 @@ function ChatPane({
         throw parseBusy(e2) ? new Error(c.busyPty) : e2;
       }
     }
-    if (target.draft) rememberLast({ agent: target.tool, cwd: target.cwd });
+    if (target.draft) rememberLast({ agent: target.tool, cwd: parseWorktreePath(target.cwd)?.repoRoot ?? target.cwd });
+  };
+  /** Before a worktree folder is removed: nothing may still run in it. */
+  const stopForRemove = async () => {
+    if (live && live.state !== "exited") await liveStop(live.live_id).catch(() => {});
+    await closeTerminal(termKey);
+    if (mode === "terminal") setMode("gui");
+  };
+  /** Sends the session a message with the remembered settings (conflict help). */
+  const askAi = async (text: string) => {
+    const st = agentSettings(loadChatPrefs(), target.tool);
+    await send({ text, images: [], permission: st.permission, model: st.model, effort: st.effort, args: parseExtraArgs(target.tool, st.args) });
   };
   const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
     if (!live) return;
@@ -771,6 +926,7 @@ function ChatPane({
           <div className="flex min-w-0 flex-col gap-2">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
               <ToolBadge tool={target.tool} s={s} />
+              {wt ? <WorktreeBadge slug={wt.slug} branch={wt.info?.branch} deleted={wt.deleted} w={w} /> : null}
               <TitleEditor
                 title={target.title}
                 onSave={session ? (title) => renameSession(session.tool, session.path, title).then(onRenamed) : undefined}
@@ -800,7 +956,7 @@ function ChatPane({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching || !target.cwd} c={c} />
+            <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching || !target.cwd || wtDeleted || creatingWt} c={c} />
             {mode === "gui" && running && live ? (
               <HeaderButton
                 label={c.stop}
@@ -824,6 +980,34 @@ function ChatPane({
         </div>
         {result ? <ResultCard result={result} s={s} /> : session && mode === "gui" ? <ResumeCommands session={session} s={s} /> : null}
       </div>
+      {wt?.info ? (
+        <WorktreePanel
+          info={wt.info}
+          title={target.title}
+          running={running}
+          c={c}
+          onNotice={setNotice}
+          onError={setActionError}
+          beforeRemove={stopForRemove}
+          onOpenShell={onOpenShell}
+          onAskAi={askAi}
+        />
+      ) : null}
+      {creatingWt ? (
+        <p role="status" className="flex items-center gap-2 border-b border-violet-500/25 bg-violet-500/6 px-4 py-2 text-sm text-violet-700 dark:text-violet-300">
+          <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          {w.creating}
+        </p>
+      ) : null}
+      {notice ? (
+        <p role="status" className="flex items-center gap-2 border-b border-border px-4 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+          <Check className="size-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{notice}</span>
+          <Button type="button" size="icon-xs" variant="ghost" className="cursor-pointer" aria-label={w.dismiss} onClick={() => setNotice(null)}>
+            <X aria-hidden="true" />
+          </Button>
+        </p>
+      ) : null}
       {actionError ? (
         <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
           {actionError}
@@ -860,7 +1044,9 @@ function ChatPane({
           setBusyPty(null);
         }}
       />
-      {mode === "terminal" ? (
+      {mode === "terminal" && wtPending ? (
+        <div className="grid flex-1 place-items-center p-6 text-sm text-muted-foreground">{w.creating}</div>
+      ) : mode === "terminal" ? (
         <TerminalView termKey={termKey} opts={termOpts} c={c} />
       ) : (
         <>
@@ -912,7 +1098,9 @@ function ChatPane({
             c={c}
             agent={target.tool}
             cwd={target.cwd}
-            placeholder={running ? c.inputQueued : undefined}
+            disabled={wtDeleted || creatingWt}
+            placeholder={wtDeleted ? w.deletedHint : running ? c.inputQueued : undefined}
+            hint={wtDeleted ? w.deletedHint : creatingWt ? w.creating : undefined}
             draft={
               target.draft && onDraftChange
                 ? { onAgentChange: (agent) => onDraftChange({ agent }), onCwdChange: (cwd) => onDraftChange({ cwd }) }
@@ -988,6 +1176,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
 
   const load = React.useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
+    void refreshWorktrees();
     try {
       setSessions(await listSessions());
       setLoadError(null);
@@ -1085,11 +1274,36 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   }, [selectedPath, selectedTool, previewNonce]);
 
   const visible = React.useMemo(() => filterSessions(sessions ?? [], tool, query), [sessions, tool, query]);
-  const groups = React.useMemo(() => groupByProject(visible), [visible]);
+  // Sessions running in a worktree are listed under their repo's project (with a badge).
+  const wtState = useWorktreeState();
+  const wtLinks = React.useMemo(() => {
+    const m = new Map<string, WorktreeLink>();
+    for (const x of sessions ?? []) {
+      const l = worktreeOf(wtState, x.cwd);
+      if (l) m.set(sessionKey(x), l);
+    }
+    return m;
+  }, [sessions, wtState]);
+  const groups = React.useMemo(() => {
+    if (wtLinks.size === 0) return groupByProject(visible);
+    const all = sessions ?? [];
+    const regrouped = visible.map((x) => {
+      const l = wtLinks.get(sessionKey(x));
+      if (!l) return x;
+      const parent = all.find((y) => !wtLinks.has(sessionKey(y)) && normPath(y.cwd) === normPath(l.repoRoot));
+      const name = l.repoRoot.split("/").filter(Boolean).pop() ?? l.repoRoot;
+      return parent
+        ? { ...x, project_id: parent.project_id, project_name: parent.project_name, cwd: parent.cwd }
+        : { ...x, project_id: `wt:${normPath(l.repoRoot)}`, project_name: name, cwd: l.repoRoot };
+    });
+    return groupByProject(regrouped);
+  }, [visible, sessions, wtLinks]);
   // Folders the composer's /cwd offers: every project, most recent first.
   const projects: ProjectChoice[] = React.useMemo(() => {
     const out: ProjectChoice[] = [];
-    for (const g of groupByProject(sessions ?? [])) if (g.cwd && !out.some((p) => samePath(p.path, g.cwd))) out.push({ path: g.cwd, name: g.name });
+    for (const g of groupByProject(sessions ?? [])) {
+      if (g.cwd && !parseWorktreePath(g.cwd) && !out.some((p) => samePath(p.path, g.cwd))) out.push({ path: g.cwd, name: g.name });
+    }
     return out;
   }, [sessions]);
   // Shell terminals sit at the top of their folder's group; the rest in a "terminals" group.
@@ -1101,9 +1315,10 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     setPageError(null);
   };
   /** Opens a new, not yet started chat in the right pane. */
-  const openDraft = (cwd?: string) => {
+  const openDraft = (cwd?: string, worktree = false) => {
     const p = loadChatPrefs();
     const key = newDraftKey();
+    if (worktree) patchConvUi(key, { worktree: true });
     setDraft({ key, agent: p.agent, cwd: cwd ?? p.cwd });
     setSelectedKey(key);
     resetPane();
@@ -1337,13 +1552,15 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                       <span className="font-normal text-muted-foreground">{g.sessions.length}</span>
                     </h2>
                     {g.cwd ? (
-                      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
-                        <IconAction label={c.newSessionHere} onClick={() => openDraft(g.cwd)}>
-                          <SquarePen aria-hidden="true" />
-                        </IconAction>
-                        <IconAction label={c.newTerminalHere} onClick={() => openShell(g.cwd)}>
-                          <SquareTerminal aria-hidden="true" />
-                        </IconAction>
+                      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 motion-reduce:transition-none">
+                        <ProjectAddMenu
+                          name={g.name}
+                          cwd={g.cwd}
+                          onNew={() => openDraft(g.cwd)}
+                          onNewWorktree={() => openDraft(g.cwd, true)}
+                          onTerminal={() => openShell(g.cwd)}
+                          c={c}
+                        />
                       </span>
                     ) : null}
                   </div>
@@ -1358,6 +1575,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                           selectedLiveId={selectedKey?.startsWith(LIVE_PREFIX) ? selectedKey.slice(LIVE_PREFIX.length) : null}
                           onSelect={() => select(x)}
                           onSelectLive={selectLiveRow}
+                          worktree={wtLinks.get(sessionKey(x)) ?? null}
                           s={s}
                           c={c}
                         />
@@ -1398,6 +1616,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                 void load(true);
               }}
               onDraftChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))}
+              onOpenShell={openShell}
               projects={projects}
               s={s}
               c={c}

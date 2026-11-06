@@ -11,6 +11,7 @@ import {
   File as FileIcon,
   Folder,
   FolderOpen,
+  GitBranch,
   ImagePlus,
   Loader2,
   Paperclip,
@@ -45,6 +46,7 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { errorMessage } from "@/pages/skills/skillUtils";
 import { getConvUi, patchConvUi } from "./convUiState";
+import { parseWorktreePath, useGitRepo } from "./worktreeStore";
 import { MODEL_SUGGESTIONS, agentSettings, loadChatPrefs, parseExtraArgs, rememberAgentSettings, rememberLast, type AgentSettings } from "./chatPrefs";
 import {
   IMAGE_EXTS,
@@ -116,7 +118,8 @@ export interface ComposerProps {
   onError: (e: string | null) => void;
 }
 
-type PickerKind = "model" | "effort" | "permissions" | "agent" | "cwd" | "args";
+/** `worktree` is a toggle (no picker). */
+type PickerKind = "model" | "effort" | "permissions" | "agent" | "cwd" | "args" | "worktree";
 
 function Tip({ tip, children }: { tip: React.ReactNode; children: React.ReactElement }) {
   return (
@@ -461,6 +464,7 @@ const SETTING_ICONS: Record<PickerKind, React.ReactNode> = {
   agent: <ArrowLeftRight aria-hidden="true" />,
   cwd: <Folder aria-hidden="true" />,
   args: <SlidersHorizontal aria-hidden="true" />,
+  worktree: <GitBranch aria-hidden="true" />,
 };
 
 const SETTING_NAMES: Record<PickerKind, string> = {
@@ -470,10 +474,12 @@ const SETTING_NAMES: Record<PickerKind, string> = {
   agent: "agent",
   cwd: "cwd",
   args: "args",
+  worktree: "worktree",
 };
 
-function settingDescription(p: PickerKind, k: K): string {
-  return { model: k.cmdModel, effort: k.cmdEffort, permissions: k.cmdPermissions, agent: k.cmdAgent, cwd: k.cmdCwd, args: k.cmdArgs }[p];
+function settingDescription(p: PickerKind, c: C): string {
+  const k = c.composer;
+  return { model: k.cmdModel, effort: k.cmdEffort, permissions: k.cmdPermissions, agent: k.cmdAgent, cwd: k.cmdCwd, args: k.cmdArgs, worktree: c.worktree.cmd }[p];
 }
 
 /** Commands whose name starts with the query first, then those containing it. */
@@ -486,7 +492,25 @@ function filterCommands(list: CommandOption[], q: string): CommandOption[] {
 }
 
 /** Clickable item of the status line. */
-function StatusItem({ label, onClick, warn, next, k, children }: { label: string; onClick?: () => void; warn?: boolean; next?: boolean; k: K; children: React.ReactNode }) {
+function StatusItem({
+  label,
+  onClick,
+  warn,
+  next,
+  violet,
+  title,
+  k,
+  children,
+}: {
+  label: string;
+  onClick?: () => void;
+  warn?: boolean;
+  next?: boolean;
+  violet?: boolean;
+  title?: string;
+  k: K;
+  children: React.ReactNode;
+}) {
   const body = (
     <>
       {children}
@@ -498,11 +522,12 @@ function StatusItem({ label, onClick, warn, next, k, children }: { label: string
     <button
       type="button"
       aria-label={label}
-      title={next ? k.nextTimeHint : undefined}
+      title={next ? k.nextTimeHint : title}
       onClick={onClick}
       className={cn(
         "max-w-48 cursor-pointer truncate rounded-sm border-b border-dashed border-muted-foreground/40 outline-none transition-colors hover:border-foreground/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
         warn && "border-amber-500/60 text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200",
+        violet && "border-violet-500/60 font-medium text-violet-700 hover:text-violet-800 dark:text-violet-300 dark:hover:text-violet-200",
       )}
     >
       {body}
@@ -586,6 +611,17 @@ export function ChatComposer({
   const args = mine.args;
   const argList = parseExtraArgs(agent, args);
   const curModel = effectiveModel(models, model);
+
+  // `/worktree`: drafts in a git repo only (a folder that already is a worktree has nothing to toggle).
+  const w = c.worktree;
+  const wtAvail = useGitRepo(cwd, !!draft && !!cwd && !parseWorktreePath(cwd)) === true;
+  const [wtOn, setWtOn] = React.useState(() => !!getConvUi(stateKey).worktree);
+  const worktreeOn = wtAvail && wtOn;
+  const toggleWorktree = () => {
+    const v = !wtOn;
+    setWtOn(v);
+    patchConvUi(stateKey, { worktree: v });
+  };
 
   const setSetting = (patch: Partial<AgentSettings>) => {
     if (perConv) {
@@ -689,6 +725,8 @@ export function ChatComposer({
         return cwd ? baseName(cwd) : k.cwdNone;
       case "args":
         return args || k.argsNone;
+      case "worktree":
+        return wtOn ? w.on : w.off;
     }
   };
 
@@ -698,16 +736,18 @@ export function ChatComposer({
       return (files.list ?? []).map((f) => ({ id: `f-${f.path}`, type: "file" as const, file: f }));
     }
     const q = token.query.toLowerCase();
-    const kinds: PickerKind[] = draft ? ["model", "effort", "permissions", "agent", "cwd", "args"] : ["model", "effort", "permissions", "args"];
+    const kinds: PickerKind[] = draft
+      ? ["model", "effort", "permissions", "agent", "cwd", ...(wtAvail ? (["worktree"] as const) : []), "args"]
+      : ["model", "effort", "permissions", "args"];
     const settings: MenuItem[] = kinds
       .filter((p) => SETTING_NAMES[p].includes(q))
-      .map((p) => ({ id: `s-${p}`, type: "setting", picker: p, name: SETTING_NAMES[p], description: settingDescription(p, k), value: settingValue(p), icon: SETTING_ICONS[p] }));
+      .map((p) => ({ id: `s-${p}`, type: "setting", picker: p, name: SETTING_NAMES[p], description: settingDescription(p, c), value: settingValue(p), icon: SETTING_ICONS[p] }));
     const cli: MenuItem[] = filterCommands(cmds?.agent === agent ? (cmds.list ?? []) : [], token.query)
       .slice(0, 100)
       .map((x) => ({ id: `c-${x.name}`, type: "cli", cmd: x }));
     return [...settings, ...cli];
     // settingValue reads the current settings, all listed below.
-  }, [menuKind, token?.query, files.list, cmds, agent, draft, model, effort, permission, args, cwd, models, k]);
+  }, [menuKind, token?.query, files.list, cmds, agent, draft, model, effort, permission, args, cwd, models, k, c, wtAvail, wtOn]);
 
   const [active, setActive] = React.useState(0);
   React.useEffect(() => setActive(0), [menuKind, token?.query]);
@@ -722,6 +762,11 @@ export function ChatComposer({
     if (item.type === "setting") {
       const r = replaceToken(text, token, "");
       setText(r.text);
+      if (item.picker === "worktree") {
+        toggleWorktree();
+        focusText(r.caret);
+        return;
+      }
       setCaret(r.caret);
       setPicker(item.picker);
       return;
@@ -1193,6 +1238,14 @@ export function ChatComposer({
         <StatusItem label={`${k.permissionTitle}: ${c.permissions[permission]}`} onClick={() => setPicker("permissions")} warn={permission === "bypass"} next={changed.has("permission")} k={k}>
           {c.permissions[permission]}
         </StatusItem>
+        {worktreeOn ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <StatusItem label={`${w.cmd}: ${w.on}`} title={w.statusHint} onClick={toggleWorktree} violet k={k}>
+              {w.status}
+            </StatusItem>
+          </>
+        ) : null}
         {argList.length ? (
           <>
             <span aria-hidden="true">·</span>

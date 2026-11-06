@@ -1,22 +1,29 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert } from "lucide-react";
-import { liveInterrupt, liveRespond, liveSend, type LiveSessionInfo } from "@/api/live";
+import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { homeDir } from "@tauri-apps/api/path";
+import { liveInterrupt, liveRespond, liveSend, type LiveAgent, type LiveSessionInfo } from "@/api/live";
 import { TerminalView } from "@/pages/chat/TerminalView";
 import {
+  addShell,
   closeTerminal,
   initialMode,
   releaseGuiProcess,
+  removeShell,
   saveChatMode,
+  shellOptions,
   terminalKey,
   terminalOptions,
+  useShells,
+  useTerminal,
   type ChatMode,
+  type ShellTerm,
 } from "@/pages/chat/terminalStore";
 import { Conversation } from "@/pages/chat/Conversation";
-import { NewChatDialog } from "@/pages/chat/NewChatDialog";
 import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
-import { ChatComposer, type ComposerMessage } from "@/pages/chat/Composer";
-import { isActive } from "@/pages/chat/chatPrefs";
+import { ChatComposer, type ComposerMessage, type ProjectChoice } from "@/pages/chat/Composer";
+import { isActive, loadChatPrefs, rememberLast } from "@/pages/chat/chatPrefs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ensureTranscript, selectLive, startLive, useLiveStore, type LiveConv } from "@/pages/chat/liveStore";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { Pencil } from "lucide-react";
@@ -38,6 +45,114 @@ type S = Messages["sessions"];
 type C = Messages["chat"];
 
 const LIVE_PREFIX = "live:";
+const DRAFT_KEY = "draft";
+const SHELL_PREFIX = "term:";
+
+/** Same folder, ignoring slash style, a trailing slash and (Windows) case. */
+function samePath(a: string, b: string): boolean {
+  const n = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const x = n(a);
+  const y = n(b);
+  return /^[a-zA-Z]:/.test(x) || /^[a-zA-Z]:/.test(y) ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
+/** Small icon button with a tooltip (project group header actions). */
+function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={onClick}
+          className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A plain shell terminal in the list: badge, shell name, folder and state; a close button. */
+function ShellRow({ shell, selected, onSelect, onClose, c }: { shell: ShellTerm; selected: boolean; onSelect: () => void; onClose: () => void; c: C }) {
+  const entry = useTerminal(shell.key);
+  const name = entry?.command || c.shellName;
+  const status = entry?.status ?? "starting";
+  const state = status === "running" ? c.terminalRunning : status === "starting" ? c.terminalStartingShort : c.terminalEnded;
+  return (
+    <div className="group/shell relative">
+      <button
+        type="button"
+        aria-current={selected ? "true" : undefined}
+        onClick={onSelect}
+        className={cn(
+          "flex w-full cursor-pointer flex-col gap-1 rounded-md px-2.5 py-2 pr-9 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+          selected ? "list-active" : "hover:bg-muted/60",
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-foreground/8 px-1.5 text-[11px] font-medium text-foreground/80">
+            <SquareTerminal className="size-3" aria-hidden="true" />
+            {c.terminalBadge}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{name}</span>
+        </div>
+        <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate font-mono" title={shell.cwd}>
+            {shell.cwd}
+          </span>
+          <span className={cn("shrink-0", status === "running" && "text-emerald-700 dark:text-emerald-400")}>{state}</span>
+        </div>
+      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={c.terminalClose}
+            onClick={onClose}
+            className="absolute top-2 right-2 grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground opacity-60 outline-none transition-opacity hover:bg-muted hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/shell:opacity-100"
+          >
+            <X className="size-3.5" aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">{c.terminalCloseHint}</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+/** A plain shell terminal in the right pane: full height, no chat / terminal switch, no composer. */
+function ShellPane({ shell, onClose, c }: { shell: ShellTerm; onClose: () => void; c: C }) {
+  const entry = useTerminal(shell.key);
+  const [opts] = React.useState(() => shellOptions(shell.cwd));
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-3 border-b border-border p-4">
+        <div className="flex min-w-0 flex-col gap-2">
+          <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
+            <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-foreground/8 px-1.5 text-[11px] font-medium text-foreground/80">
+              <SquareTerminal className="size-3" aria-hidden="true" />
+              {c.terminalBadge}
+            </span>
+            <span className="truncate">{entry?.command || c.shellName}</span>
+          </h2>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <MetaChip icon={<Folder aria-hidden="true" />} title={shell.cwd} mono>
+              {shell.cwd}
+            </MetaChip>
+          </div>
+        </div>
+        <HeaderButton label={c.terminalClose} hint={c.terminalCloseHint} onClick={onClose}>
+          <X aria-hidden="true" />
+          {c.terminalClose}
+        </HeaderButton>
+      </div>
+      <TerminalView key={shell.key} termKey={shell.key} opts={opts} c={c} keepAlive />
+    </div>
+  );
+}
 
 function sessionKey(s: { tool: Tool; path: string }): string {
   return `${s.tool}:${s.path}`;
@@ -286,6 +401,8 @@ interface Target {
   title: string;
   session: SessionSummary | null;
   live: LiveSessionInfo | null;
+  /** A new chat that has not started yet (no session, no process). */
+  draft?: boolean;
 }
 
 /** The session title; with `onSave`, a pencil button edits it in place (Enter saves, Esc cancels). */
@@ -404,6 +521,8 @@ function ChatPane({
   onConvert,
   onRenamed,
   onRefresh,
+  onDraftChange,
+  projects,
   lc,
   s,
   c,
@@ -417,6 +536,9 @@ function ChatPane({
   onRenamed: () => void;
   /** Re-read the session file (preview + list), after the terminal wrote to it. */
   onRefresh: () => void;
+  /** Draft only: the agent / folder picked in the composer. */
+  onDraftChange?: (patch: { agent?: LiveAgent; cwd?: string }) => void;
+  projects: ProjectChoice[];
   lc: LiveConv | undefined;
   s: S;
   c: C;
@@ -424,7 +546,7 @@ function ChatPane({
   const { session, live } = target;
   const [actionError, setActionError] = React.useState<string | null>(null);
   const termKey = terminalKey(target);
-  const [mode, setMode] = React.useState<ChatMode>(() => initialMode(termKey, live));
+  const [mode, setMode] = React.useState<ChatMode>(() => (target.cwd ? initialMode(termKey, live) : "gui"));
   const [switching, setSwitching] = React.useState(false);
   const [confirmStop, setConfirmStop] = React.useState<((ok: boolean) => void) | null>(null);
   // Options are fixed when the terminal opens; later list refreshes must not restart it.
@@ -461,7 +583,7 @@ function ChatPane({
   const attached = live !== null && live.state !== "exited";
 
   // Any message continues the conversation: through the running process, or by resuming it.
-  const send = async ({ text, images, permission, model }: ComposerMessage) => {
+  const send = async ({ text, images, permission, model, effort, args }: ComposerMessage) => {
     if (attached && live) return liveSend(live.live_id, text, images);
     await startLive({
       agent: target.tool,
@@ -469,9 +591,12 @@ function ChatPane({
       resume_id: target.nativeId,
       permission,
       model: model || null,
+      effort: effort || null,
+      extra_args: args,
       prompt: text,
       prompt_images: images,
     });
+    if (target.draft) rememberLast({ agent: target.tool, cwd: target.cwd });
   };
   const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
     if (!live) return;
@@ -533,7 +658,7 @@ function ChatPane({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching} c={c} />
+            <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching || !target.cwd} c={c} />
             {mode === "gui" && running && live ? (
               <HeaderButton
                 label={c.stop}
@@ -606,6 +731,14 @@ function ChatPane({
             ) : (
               <Timeline preview={preview} tool={session.tool} startAtBottom />
             )
+          ) : target.draft ? (
+            <div className="grid flex-1 place-items-center p-6 text-center text-sm text-muted-foreground">
+              <div className="flex max-w-sm flex-col items-center gap-2">
+                <MessagesSquare className="size-8 text-muted-foreground/60" aria-hidden="true" />
+                <p className="font-medium text-foreground">{c.emptyConv}</p>
+                <p className="text-xs">{c.draftHint}</p>
+              </div>
+            </div>
           ) : (
             <ChatSkeleton label={c.loading} className="px-4 py-4" />
           )}
@@ -615,7 +748,12 @@ function ChatPane({
             agent={target.tool}
             cwd={target.cwd}
             placeholder={running ? c.inputQueued : undefined}
-            hint={!attached ? fmt(c.continueHint, { agent: s.tools[target.tool] }) : null}
+            draft={
+              target.draft && onDraftChange
+                ? { onAgentChange: (agent) => onDraftChange({ agent }), onCwdChange: (cwd) => onDraftChange({ cwd }) }
+                : null
+            }
+            projects={projects}
             running={running}
             onStop={() => {
               if (!live) return;
@@ -638,13 +776,16 @@ interface Confirm {
   force: boolean;
 }
 
+/** "New chat" / "new terminal" asked for from outside the page (the sidebar). */
+export type NewRequest = "chat" | "terminal";
+
 export interface SessionsPageProps {
-  newChatOpen?: boolean;
-  onNewChatOpenChange?: (open: boolean) => void;
+  request?: NewRequest | null;
+  onRequestHandled?: () => void;
 }
 
 /** The 对话 page: every Claude Code / Codex session on disk plus live chats; any of them can be continued. */
-export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => {} }: SessionsPageProps = {}) {
+export function SessionsPage({ request = null, onRequestHandled = () => {} }: SessionsPageProps = {}) {
   const { t } = useI18n();
   const s = t.sessions;
   const c = t.chat;
@@ -666,6 +807,9 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
   const [converting, setConverting] = React.useState(false);
   const [convertError, setConvertError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<ConvertResult | null>(null);
+  const [draft, setDraft] = React.useState<{ agent: LiveAgent; cwd: string } | null>(null);
+  const shells = useShells();
+  const [pageError, setPageError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -703,13 +847,14 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
         .sort((a, b) => b.created_at - a.created_at),
     [store.sessions, knownIds, liveByNative],
   );
+  const selectedShell = selectedKey?.startsWith(SHELL_PREFIX) ? (shells.find((x) => x.key === selectedKey.slice(SHELL_PREFIX.length)) ?? null) : null;
   const selectedLive = selectedKey?.startsWith(LIVE_PREFIX)
     ? (store.sessions.find((x) => x.live_id === selectedKey.slice(LIVE_PREFIX.length)) ?? null)
     : selected
       ? (liveByNative.get(selected.id) ?? null)
       : null;
 
-  // A chat started from the new-chat dialog becomes the selection.
+  // A chat started from a draft (or elsewhere) becomes the selection.
   const lastLiveSel = React.useRef(store.selectedId);
   React.useEffect(() => {
     if (store.selectedId && store.selectedId !== lastLiveSel.current) setSelectedKey(LIVE_PREFIX + store.selectedId);
@@ -756,6 +901,69 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
 
   const visible = React.useMemo(() => filterSessions(sessions ?? [], tool, query), [sessions, tool, query]);
   const groups = React.useMemo(() => groupByProject(visible), [visible]);
+  // Folders the composer's /cwd offers: every project, most recent first.
+  const projects: ProjectChoice[] = React.useMemo(() => {
+    const out: ProjectChoice[] = [];
+    for (const g of groupByProject(sessions ?? [])) if (g.cwd && !out.some((p) => samePath(p.path, g.cwd))) out.push({ path: g.cwd, name: g.name });
+    return out;
+  }, [sessions]);
+  // Shell terminals sit at the top of their folder's group; the rest in a "terminals" group.
+  const looseShells = shells.filter((x) => !groups.some((g) => samePath(g.cwd, x.cwd)));
+
+  const resetPane = () => {
+    setResult(null);
+    setConvertError(null);
+    setPageError(null);
+  };
+  /** Opens a new, not yet started chat in the right pane. */
+  const openDraft = (cwd?: string) => {
+    const p = loadChatPrefs();
+    setDraft({ agent: p.agent, cwd: cwd ?? p.cwd });
+    setSelectedKey(DRAFT_KEY);
+    resetPane();
+  };
+  const openShell = (cwd: string) => {
+    const key = addShell(cwd);
+    setSelectedKey(SHELL_PREFIX + key);
+    resetPane();
+  };
+  const openHomeShell = async () => {
+    try {
+      openShell(await homeDir());
+    } catch (e) {
+      setPageError(fmt(c.actionFailed, { error: errorMessage(e) }));
+    }
+  };
+  const closeShell = (key: string) => {
+    if (selectedKey === SHELL_PREFIX + key) setSelectedKey(null);
+    void removeShell(key);
+  };
+  const shellRow = (x: ShellTerm) => (
+    <li key={x.key}>
+      <ShellRow
+        shell={x}
+        selected={selectedKey === SHELL_PREFIX + x.key}
+        onSelect={() => {
+          setSelectedKey(SHELL_PREFIX + x.key);
+          resetPane();
+        }}
+        onClose={() => closeShell(x.key)}
+        c={c}
+      />
+    </li>
+  );
+
+  // Requests from the sidebar ("new chat" / "new terminal").
+  const openDraftRef = React.useRef(openDraft);
+  openDraftRef.current = openDraft;
+  const openHomeShellRef = React.useRef(openHomeShell);
+  openHomeShellRef.current = openHomeShell;
+  React.useEffect(() => {
+    if (!request) return;
+    if (request === "chat") openDraftRef.current();
+    else void openHomeShellRef.current();
+    onRequestHandled();
+  }, [request, onRequestHandled]);
 
   const select = (x: SessionSummary) => {
     setSelectedKey(sessionKey(x));
@@ -769,7 +977,9 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
     setConvertError(null);
   };
 
-  const target: Target | null = selected
+  const target: Target | null = selectedKey === DRAFT_KEY && draft
+    ? { tool: draft.agent, cwd: draft.cwd, nativeId: null, title: c.untitled, session: null, live: null, draft: true }
+    : selected
     ? {
         tool: selected.tool,
         cwd: selected.cwd,
@@ -845,7 +1055,11 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
             <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
             {s.refresh}
           </Button>
-          <Button type="button" size="sm" className="cursor-pointer" onClick={() => onNewChatOpenChange(true)}>
+          <Button type="button" variant="outline" size="sm" className="cursor-pointer" onClick={() => void openHomeShell()}>
+            <SquareTerminal aria-hidden="true" />
+            {c.newTerminal}
+          </Button>
+          <Button type="button" size="sm" className="cursor-pointer" onClick={() => openDraft()}>
             <SquarePen aria-hidden="true" />
             {c.newChat}
           </Button>
@@ -872,6 +1086,12 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {looseShells.length > 0 ? (
+              <section aria-label={c.terminals} className="mb-2">
+                <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.terminals}</h2>
+                <ul className="flex flex-col gap-0.5">{looseShells.map(shellRow)}</ul>
+              </section>
+            ) : null}
             {liveOnly.length > 0 ? (
               <section aria-label={c.newChats} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.newChats}</h2>
@@ -899,12 +1119,25 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
               <p className="p-2 text-sm text-muted-foreground">{s.noMatch}</p>
             ) : (
               groups.map((g) => (
-                <section key={g.projectId} aria-label={g.name} className="mb-2">
-                  <h2 className="flex items-baseline gap-2 px-2.5 pt-2 pb-1 text-xs font-semibold" title={g.cwd}>
-                    <span className="truncate">{g.name}</span>
-                    <span className="font-normal text-muted-foreground">{g.sessions.length}</span>
-                  </h2>
+                <section key={g.projectId} aria-label={g.name} className="group/project mb-2">
+                  <div className="flex min-h-7 items-center gap-1 pt-1 pr-1 pl-2.5">
+                    <h2 className="flex min-w-0 flex-1 items-baseline gap-2 text-xs font-semibold" title={g.cwd}>
+                      <span className="truncate">{g.name}</span>
+                      <span className="font-normal text-muted-foreground">{g.sessions.length}</span>
+                    </h2>
+                    {g.cwd ? (
+                      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
+                        <IconAction label={c.newSessionHere} onClick={() => openDraft(g.cwd)}>
+                          <SquarePen aria-hidden="true" />
+                        </IconAction>
+                        <IconAction label={c.newTerminalHere} onClick={() => openShell(g.cwd)}>
+                          <SquareTerminal aria-hidden="true" />
+                        </IconAction>
+                      </span>
+                    ) : null}
+                  </div>
                   <ul className="flex flex-col gap-0.5">
+                    {shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
                     {g.sessions.map((x) => (
                       <li key={sessionKey(x)}>
                         <SessionRow session={x} live={liveByNative.get(x.id)} selected={sessionKey(x) === selectedKey} onSelect={() => select(x)} s={s} c={c} />
@@ -918,14 +1151,21 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
+          {pageError ? (
+            <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+              {pageError}
+            </p>
+          ) : null}
           {convertError ? (
             <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
               {fmt(s.convertFailed, { error: convertError })}
             </p>
           ) : null}
-          {target ? (
+          {selectedShell ? (
+            <ShellPane key={selectedShell.key} shell={selectedShell} onClose={() => closeShell(selectedShell.key)} c={c} />
+          ) : target ? (
             <ChatPane
-              key={selectedLive ? LIVE_PREFIX + selectedLive.live_id : selected ? sessionKey(selected) : selectedKey}
+              key={target.draft ? DRAFT_KEY : selectedLive ? LIVE_PREFIX + selectedLive.live_id : selected ? sessionKey(selected) : selectedKey}
               target={target}
               preview={selected ? preview : null}
               error={selected ? previewError : null}
@@ -938,6 +1178,8 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
                 setPreviewNonce((n) => n + 1);
                 void load(true);
               }}
+              onDraftChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))}
+              projects={projects}
               s={s}
               c={c}
             />
@@ -956,7 +1198,6 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
         onConfirm={() => confirm && void runConvert(confirm)}
         onCancel={() => setConfirm(null)}
       />
-      <NewChatDialog open={newChatOpen} onOpenChange={onNewChatOpenChange} />
     </div>
   );
 }

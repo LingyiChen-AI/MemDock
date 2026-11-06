@@ -3,13 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { LiveAgent, PermissionMode } from "./live";
 
+/** What runs in the terminal: an agent CLI or the plain system shell. */
+export type PtyTool = LiveAgent | "shell";
+
 export interface PtyOpenOptions {
-  tool: LiveAgent;
+  tool: PtyTool;
   cwd: string;
   /** Claude session id / Codex thread id; null starts a new conversation. */
   resume_id: string | null;
   permission: PermissionMode;
   model: string | null;
+  /** Thinking effort for the agent CLI; ignored for the shell. */
+  effort?: string | null;
   cols: number;
   rows: number;
 }
@@ -53,4 +58,9 @@ export function onPtyData(cb: (d: PtyData) => void): Promise<UnlistenFn> {
 
 export function onPtyExit(cb: (d: PtyExit) => void): Promise<UnlistenFn> {
   return listen<PtyExit>("pty://exit", (e) => cb(e.payload));
+}
+
+/** Saves a pasted image (`data:image/...;base64,` URI) to a temp file; returns its absolute path. */
+export function saveTempImage(dataUri: string): Promise<string> {
+  return invoke<string>("save_temp_image", { dataUri });
 }

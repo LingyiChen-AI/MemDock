@@ -4,11 +4,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Loader2, RotateCw, SquareTerminal } from "lucide-react";
-import type { PtyOpenOptions } from "@/api/pty";
+import { ImageIcon, Loader2, RotateCw, SquareTerminal } from "lucide-react";
+import { saveTempImage, type PtyOpenOptions } from "@/api/pty";
 import { Button } from "@/components/ui/button";
 import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
+import { errorMessage } from "@/pages/skills/skillUtils";
+import { fileToDataUri, quotePath } from "./composerUtils";
 import { attachTerminal, getTerminal, getTerminalBuffer, openTerminal, resizeTerminal, useTerminal, writeTerminal } from "./terminalStore";
 import { TERMINAL_CHROME, TERMINAL_FONT, TERMINAL_THEME } from "./terminalTheme";
 
@@ -17,13 +19,47 @@ type C = Messages["chat"];
 /**
  * The real CLI in xterm.js. The pseudo terminal lives in `terminalStore`, keyed by
  * conversation: mounting attaches (replaying the scrollback) or starts it.
+ * `keepAlive`: the process stays when the view is left even if nothing was typed.
  */
-export function TerminalView({ termKey, opts, c }: { termKey: string; opts: PtyOpenOptions; c: C }) {
+export function TerminalView({ termKey, opts, c, keepAlive = false }: { termKey: string; opts: PtyOpenOptions; c: C; keepAlive?: boolean }) {
   const entry = useTerminal(termKey);
+  const [toast, setToast] = React.useState<{ text: string; error: boolean } | null>(null);
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = React.useCallback((text: string, error = false) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ text, error });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    },
+    [],
+  );
+  const pasteRef = React.useRef<(e: ClipboardEvent) => void>(() => {});
+  // A pasted screenshot: saved as a temp file and its path typed at the cursor (both CLIs read image paths).
+  pasteRef.current = (e: ClipboardEvent) => {
+    const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
+    if (!file) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    void (async () => {
+      try {
+        const path = await saveTempImage(await fileToDataUri(file));
+        writeTerminal(termKey, quotePath(path));
+        showToast(c.terminalImagePasted);
+      } catch (err) {
+        showToast(fmt(c.terminalImageFailed, { error: errorMessage(err) }), true);
+      }
+      term.current?.focus();
+    })();
+  };
   const host = React.useRef<HTMLDivElement>(null);
   const term = React.useRef<Terminal | null>(null);
   const optsRef = React.useRef(opts);
   optsRef.current = opts;
+  const keepRef = React.useRef(keepAlive);
+  keepRef.current = keepAlive;
 
   React.useEffect(() => {
     const el = host.current;
@@ -51,7 +87,10 @@ export function TerminalView({ termKey, opts, c }: { termKey: string; opts: PtyO
     if (replay) t.write(replay);
     const detach = attachTerminal(termKey, (d) => t.write(d));
     const input = t.onData((d) => writeTerminal(termKey, d));
-    if (!getTerminal(termKey)) void openTerminal(termKey, { ...optsRef.current, cols: t.cols, rows: t.rows });
+    if (!getTerminal(termKey)) void openTerminal(termKey, { ...optsRef.current, cols: t.cols, rows: t.rows }, keepRef.current);
+    // Capture phase: runs before xterm's own paste handler on its hidden textarea.
+    const onPaste = (e: ClipboardEvent) => pasteRef.current(e);
+    el.addEventListener("paste", onPaste, true);
     let last = `${t.cols}x${t.rows}`;
     const ro = new ResizeObserver(() => {
       try {
@@ -68,6 +107,7 @@ export function TerminalView({ termKey, opts, c }: { termKey: string; opts: PtyO
     ro.observe(el);
     t.focus();
     return () => {
+      el.removeEventListener("paste", onPaste, true);
       ro.disconnect();
       input.dispose();
       detach();
@@ -79,7 +119,7 @@ export function TerminalView({ termKey, opts, c }: { termKey: string; opts: PtyO
   const restart = () => {
     const t = term.current;
     t?.reset();
-    void openTerminal(termKey, { ...optsRef.current, cols: t?.cols ?? opts.cols, rows: t?.rows ?? opts.rows });
+    void openTerminal(termKey, { ...optsRef.current, cols: t?.cols ?? opts.cols, rows: t?.rows ?? opts.rows }, keepAlive);
     t?.focus();
   };
 
@@ -120,7 +160,19 @@ export function TerminalView({ termKey, opts, c }: { termKey: string; opts: PtyO
           </Button>
         ) : null}
       </div>
-      <div ref={host} data-testid="terminal-host" className="min-h-0 flex-1 overflow-hidden py-1 pl-2" />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={host} data-testid="terminal-host" className="min-h-0 flex-1 overflow-hidden py-1 pl-2" />
+        {toast ? (
+          <div
+            role={toast.error ? "alert" : "status"}
+            className="pointer-events-none absolute right-3 bottom-3 flex max-w-[80%] items-center gap-2 rounded-md border px-3 py-1.5 text-xs shadow-lg"
+            style={{ background: TERMINAL_CHROME.background, borderColor: TERMINAL_CHROME.border, color: toast.error ? TERMINAL_CHROME.error : TERMINAL_CHROME.strong }}
+          >
+            <ImageIcon className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">{toast.text}</span>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

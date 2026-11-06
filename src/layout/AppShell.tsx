@@ -13,6 +13,7 @@ import {
   Settings,
   Sparkles,
   SquarePen,
+  SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -101,6 +102,8 @@ export interface AppShellProps {
   pages?: Partial<Record<NavKey, React.ReactNode>>;
   /** The "New chat" button at the top of the sidebar; hidden when not set. */
   onNewChat?: () => void;
+  /** The "New terminal" button under it (a plain shell in the home folder). */
+  onNewTerminal?: () => void;
 }
 
 /** Prominent "New chat" entry above the nav groups; icon-only when the sidebar is collapsed. */
@@ -117,6 +120,27 @@ function NewChatButton({ onClick }: { onClick: () => void }) {
           className="h-9 cursor-pointer justify-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/16 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
         >
           <SquarePen aria-hidden="true" />
+          <span>{label}</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
+  );
+}
+
+/** Secondary "New terminal" entry under "New chat"; icon-only when the sidebar is collapsed. */
+function NewTerminalButton({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n();
+  const label = t.shell.newTerminal;
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          type="button"
+          tooltip={label}
+          onClick={onClick}
+          className="h-8 cursor-pointer justify-center gap-2 rounded-md border border-border bg-transparent px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center"
+        >
+          <SquareTerminal aria-hidden="true" />
           <span>{label}</span>
         </SidebarMenuButton>
       </SidebarMenuItem>
@@ -192,7 +216,7 @@ function AppearanceButton() {
   );
 }
 
-export function AppShell({ current, onNavigate, badges, status, children, pages, onNewChat }: AppShellProps) {
+export function AppShell({ current, onNavigate, badges, status, children, pages, onNewChat, onNewTerminal }: AppShellProps) {
   const { t } = useI18n();
   const page = NAV.find((n) => n.key === current)!;
   const [collapsed, setCollapsed] = React.useState<NavGroupKey[]>(loadCollapsed);
@@ -218,8 +242,9 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
         </SidebarHeader>
         <SidebarContent className="px-2">
           {onNewChat ? (
-            <div className="pb-1">
+            <div className="flex flex-col gap-1 pb-1">
               <NewChatButton onClick={onNewChat} />
+              {onNewTerminal ? <NewTerminalButton onClick={onNewTerminal} /> : null}
             </div>
           ) : null}
           {NAV_GROUPS.map((group) => {

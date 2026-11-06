@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { SessionPreview, SessionSummary } from "@/api/types";
@@ -28,7 +28,10 @@ vi.mock("@/api/live", () => ({
   onLiveEvent: vi.fn().mockResolvedValue(() => {}),
   readImageDataUri: vi.fn(),
   liveModels: vi.fn().mockResolvedValue([]),
+  liveCommands: vi.fn().mockResolvedValue([]),
+  projectFiles: vi.fn().mockResolvedValue([]),
 }));
+vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn().mockResolvedValue("/home/u") }));
 
 // Captured pty event callbacks, to play backend output.
 const pty = vi.hoisted(() => ({
@@ -40,6 +43,7 @@ vi.mock("@/api/pty", () => ({
   ptyWrite: vi.fn().mockResolvedValue(undefined),
   ptyResize: vi.fn().mockResolvedValue(undefined),
   ptyClose: vi.fn().mockResolvedValue(undefined),
+  saveTempImage: vi.fn(),
   onPtyData: vi.fn(async (cb: (d: { pty_id: string; data: string }) => void) => {
     pty.data = cb;
     return () => {};
@@ -77,14 +81,15 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
-import { liveList, liveStop } from "@/api/live";
-import { ptyClose, ptyOpen, ptyWrite } from "@/api/pty";
+import { liveList, liveStart, liveStop } from "@/api/live";
+import { ptyClose, ptyOpen, ptyWrite, saveTempImage } from "@/api/pty";
 import { listSessions, sessionPreview } from "@/api/sessions";
 import { renderApp } from "@/test/fixtures";
 import { SessionsPage } from "@/pages/sessions/SessionsPage";
 import { refreshLiveList, resetLiveStore } from "./liveStore";
-import { appendCapped, getTerminal, loadChatMode, resetTerminalStore, writeTerminal } from "./terminalStore";
-import { saveChatPrefs, DEFAULT_PREFS } from "./chatPrefs";
+
+import { appendCapped, getShells, getTerminal, loadChatMode, resetTerminalStore, writeTerminal } from "./terminalStore";
+import { saveChatPrefs, loadChatPrefs, DEFAULT_PREFS } from "./chatPrefs";
 
 const session: SessionSummary = {
   id: "c1",
@@ -160,7 +165,7 @@ describe("terminal mode", () => {
     saveChatPrefs({ ...DEFAULT_PREFS, permission: { claude: "auto_edit", codex: "ask" }, model: { claude: "opus", codex: "" } });
     await openSession();
     await screen.findByText("Fixed.");
-    expect(screen.getByRole("radio", { name: /GUI/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: /聊天/ })).toHaveAttribute("aria-checked", "true");
 
     await userEvent.click(screen.getByRole("radio", { name: /终端/ }));
     await waitFor(() =>
@@ -170,6 +175,7 @@ describe("terminal mode", () => {
         resume_id: "c1",
         permission: "auto_edit",
         model: "opus",
+        effort: null,
         cols: 80,
         rows: 24,
       }),
@@ -186,7 +192,7 @@ describe("terminal mode", () => {
     expect(ptyWrite).toHaveBeenCalledWith("P1", "hi\r");
 
     const previews = (sessionPreview as Mock).mock.calls.length;
-    await userEvent.click(screen.getByRole("radio", { name: /GUI/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /聊天/ }));
     await waitFor(() => expect(ptyClose).toHaveBeenCalledWith("P1"));
     await waitFor(() => expect((sessionPreview as Mock).mock.calls.length).toBe(previews + 1));
     expect(await screen.findByText("Fixed.")).toBeInTheDocument();
@@ -250,6 +256,98 @@ describe("terminal mode", () => {
     await userEvent.click(screen.getByRole("button", { name: /重新启动/ }));
     await waitFor(() => expect(ptyOpen).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(getTerminal("claude:c1")?.ptyId).toBe("P2"));
+  });
+});
+
+describe("new chats and terminals", () => {
+  beforeEach(() => {
+    resetTerminalStore();
+    resetLiveStore();
+    xterm.written = [];
+    (listSessions as Mock).mockResolvedValue([session]);
+    (sessionPreview as Mock).mockResolvedValue(preview);
+    (liveList as Mock).mockResolvedValue([]);
+    (ptyOpen as Mock).mockReset().mockResolvedValue({ pty_id: "S1", command: "PowerShell" });
+    (ptyClose as Mock).mockClear();
+    (ptyWrite as Mock).mockClear();
+    (liveStart as Mock).mockReset();
+  });
+
+  it("新对话 opens a draft with the last agent and folder; the first send starts it with effort and args", async () => {
+    saveChatPrefs({ ...DEFAULT_PREFS, agent: "codex", cwd: "/work/demo", effort: { claude: "", codex: "high" }, args: { claude: "", codex: "a=1 b=2" } });
+    (liveStart as Mock).mockResolvedValue({ ...liveInfo("starting"), live_id: "L9", agent: "codex", native_id: null });
+    renderApp(<SessionsPage />);
+    await screen.findByRole("region", { name: "demo" });
+    await userEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "新对话" }));
+    const status = await screen.findByLabelText("当前设置");
+    expect(within(status).getByText("Codex")).toBeInTheDocument();
+    expect(within(status).getByText("demo")).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "hi{Enter}");
+    await waitFor(() =>
+      expect(liveStart).toHaveBeenCalledWith({
+        extra_args: ["a=1", "b=2"],
+        agent: "codex",
+        cwd: "/work/demo",
+        resume_id: null,
+        permission: "ask",
+        model: null,
+        effort: "high",
+        prompt: "hi",
+        prompt_images: [],
+      }),
+    );
+    expect(loadChatPrefs()).toMatchObject({ agent: "codex", cwd: "/work/demo" });
+  });
+
+  it("the project header opens a draft in that folder and a shell terminal at the top of the group", async () => {
+    saveChatPrefs({ ...DEFAULT_PREFS, cwd: "" });
+    renderApp(<SessionsPage />);
+    const group = await screen.findByRole("region", { name: "demo" });
+    await userEvent.click(within(group).getByRole("button", { name: "新建会话" }));
+    expect(within(await screen.findByLabelText("当前设置")).getByText("demo")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /新对话/ })).toBeInTheDocument();
+
+    await userEvent.click(within(group).getByRole("button", { name: "新建终端" }));
+    await waitFor(() => expect(ptyOpen).toHaveBeenCalledWith(expect.objectContaining({ tool: "shell", cwd: "/work/demo" })));
+    expect(screen.queryByRole("radiogroup", { name: "视图" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
+    const rows = within(group).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("终端");
+    expect(rows[0]).toHaveTextContent("PowerShell");
+    expect(rows[0]).toHaveTextContent("运行中");
+
+    // Leaving it does not kill it; closing does and removes the row.
+    await userEvent.click(within(group).getByRole("button", { name: /Build fix/ }));
+    await new Promise((r) => setTimeout(r, 1700));
+    expect(ptyClose).not.toHaveBeenCalled();
+    await userEvent.click(within(rows[0]).getByRole("button", { name: "关闭终端" }));
+    await waitFor(() => expect(ptyClose).toHaveBeenCalledWith("S1"));
+    expect(getShells()).toEqual([]);
+  });
+
+  it("新建终端 in the header opens a shell in the home folder under a 终端 group", async () => {
+    renderApp(<SessionsPage />);
+    await screen.findByRole("region", { name: "demo" });
+    await userEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "新建终端" }));
+    await waitFor(() => expect(ptyOpen).toHaveBeenCalledWith(expect.objectContaining({ tool: "shell", cwd: "/home/u" })));
+    expect(within(screen.getByRole("region", { name: "终端" })).getByText("/home/u")).toBeInTheDocument();
+  });
+
+  it("pasting a screenshot into a terminal saves it and types the quoted path", async () => {
+    (saveTempImage as Mock).mockResolvedValue("C:\\Temp\\memdock images\\a.png");
+    renderApp(<SessionsPage />);
+    await userEvent.click(within(await screen.findByRole("region", { name: "demo" })).getByRole("button", { name: "新建终端" }));
+    await waitFor(() => expect(getTerminal(getShells()[0].key)?.status).toBe("running"));
+    const host = screen.getByTestId("terminal-host");
+    fireEvent.paste(host, { clipboardData: { files: [new File([new Uint8Array(3)], "s.png", { type: "image/png" })] } });
+    await waitFor(() => expect(ptyWrite).toHaveBeenCalledWith("S1", '"C:\\Temp\\memdock images\\a.png"'));
+    expect(saveTempImage).toHaveBeenCalledWith("data:image/png;base64,AAAA");
+    expect(await screen.findByText("已把截图保存为文件，并把路径填进了命令行")).toBeInTheDocument();
+
+    // Text paste is left to xterm.
+    (ptyWrite as Mock).mockClear();
+    fireEvent.paste(host, { clipboardData: { files: [], getData: () => "ls" } });
+    expect(saveTempImage).toHaveBeenCalledTimes(1);
   });
 });
 

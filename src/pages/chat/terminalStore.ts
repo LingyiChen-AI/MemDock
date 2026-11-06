@@ -132,13 +132,16 @@ function ensureListening(): Promise<void> {
   return listening;
 }
 
-/** Starts the CLI for `key` unless one is already starting or running there. */
-export async function openTerminal(key: string, opts: PtyOpenOptions): Promise<void> {
+/**
+ * Starts the CLI for `key` unless one is already starting or running there.
+ * `keep`: never closed automatically when its view is left (plain shell terminals).
+ */
+export async function openTerminal(key: string, opts: PtyOpenOptions, keep = false): Promise<void> {
   const cur = entries[key];
   if (cur && (cur.status === "starting" || cur.status === "running")) return;
   entries = {
     ...entries,
-    [key]: { key, ptyId: null, command: "", status: "starting", code: null, error: null, touched: false, opts },
+    [key]: { key, ptyId: null, command: "", status: "starting", code: null, error: null, touched: keep, opts },
   };
   buffers.set(key, "");
   emit();
@@ -233,6 +236,7 @@ export function resetTerminalStore(): void {
   unlisteners = [];
   listening = null;
   entries = {};
+  shells = [];
   buffers.clear();
   keyByPty.clear();
   early.clear();
@@ -255,6 +259,7 @@ export function terminalOptions(t: { tool: LiveAgent; cwd: string; nativeId: str
     resume_id: t.nativeId,
     permission: prefs.permission[t.tool],
     model: prefs.model[t.tool] || null,
+    effort: prefs.effort[t.tool] || null,
     cols,
     rows,
   };
@@ -276,4 +281,55 @@ export function initialMode(key: string, live: LiveSessionInfo | null): ChatMode
   if (entries[key]) return "terminal";
   if (live && live.state !== "exited") return "gui";
   return loadChatMode();
+}
+
+/** A plain shell terminal opened from the session list (not persisted). */
+export interface ShellTerm {
+  key: string;
+  cwd: string;
+  created_at: number;
+}
+
+let shells: ShellTerm[] = [];
+let shellSeq = 0;
+
+function useShellSnapshot(): ShellTerm[] {
+  const sub = React.useCallback((l: () => void) => {
+    listeners.add(l);
+    return () => {
+      listeners.delete(l);
+    };
+  }, []);
+  const get = React.useCallback(() => shells, []);
+  return React.useSyncExternalStore(sub, get, get);
+}
+
+/** Shell terminals, newest first. */
+export function useShells(): ShellTerm[] {
+  return useShellSnapshot();
+}
+
+export function getShells(): ShellTerm[] {
+  return shells;
+}
+
+/** Adds a shell terminal in `cwd`; its view starts the process. Returns its key. */
+export function addShell(cwd: string): string {
+  shellSeq += 1;
+  const key = `shell:${Date.now().toString(36)}-${shellSeq}`;
+  shells = [{ key, cwd, created_at: Date.now() }, ...shells];
+  emit();
+  return key;
+}
+
+/** Kills a shell terminal and removes it from the list. */
+export async function removeShell(key: string): Promise<void> {
+  shells = shells.filter((x) => x.key !== key);
+  emit();
+  await closeTerminal(key);
+}
+
+/** PTY options of a plain shell in `cwd`. */
+export function shellOptions(cwd: string, cols = 100, rows = 30): PtyOpenOptions {
+  return { tool: "shell", cwd, resume_id: null, permission: "ask", model: null, effort: null, cols, rows };
 }

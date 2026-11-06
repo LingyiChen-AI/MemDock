@@ -1,10 +1,14 @@
 import type { LiveAgent, LiveState, PermissionMode } from "@/api/live";
 
-/** The new-chat dialog remembers the last agent, and per agent the permission mode and model. */
+/** The composer remembers the last agent / folder, and per agent the permission mode, model, effort and args. */
 export interface ChatPrefs {
   agent: LiveAgent;
   permission: Record<LiveAgent, PermissionMode>;
   model: Record<LiveAgent, string>;
+  /** Thinking effort; "" is the CLI / model default. */
+  effort: Record<LiveAgent, string>;
+  /** Extra start arguments as typed (Claude CLI args, Codex `key=value`). */
+  args: Record<LiveAgent, string>;
   /** Last project folder a chat was started in. */
   cwd: string;
 }
@@ -15,6 +19,8 @@ export const DEFAULT_PREFS: ChatPrefs = {
   agent: "claude",
   permission: { claude: "ask", codex: "ask" },
   model: { claude: "", codex: "" },
+  effort: { claude: "", codex: "" },
+  args: { claude: "", codex: "" },
   cwd: "",
 };
 
@@ -36,6 +42,8 @@ export function loadChatPrefs(): ChatPrefs {
       agent,
       permission: { claude: perm(raw.permission?.claude), codex: perm(raw.permission?.codex) },
       model: { claude: str(raw.model?.claude), codex: str(raw.model?.codex) },
+      effort: { claude: str(raw.effort?.claude), codex: str(raw.effort?.codex) },
+      args: { claude: str(raw.args?.claude), codex: str(raw.args?.codex) },
       cwd: str(raw.cwd),
     };
   } catch {
@@ -55,6 +63,7 @@ export function saveChatPrefs(p: ChatPrefs): void {
 export function rememberChoice(agent: LiveAgent, permission: PermissionMode, model: string, cwd: string): void {
   const p = loadChatPrefs();
   saveChatPrefs({
+    ...p,
     agent,
     permission: { ...p.permission, [agent]: permission },
     model: { ...p.model, [agent]: model },
@@ -62,10 +71,35 @@ export function rememberChoice(agent: LiveAgent, permission: PermissionMode, mod
   });
 }
 
-/** Remembers the composer's permission mode / model for `agent`, keeping the other prefs. */
-export function rememberAgentSettings(agent: LiveAgent, permission: PermissionMode, model: string): void {
+/** One agent's settings as the composer edits them. */
+export interface AgentSettings {
+  permission: PermissionMode;
+  model: string;
+  effort: string;
+  args: string;
+}
+
+export function agentSettings(p: ChatPrefs, agent: LiveAgent): AgentSettings {
+  return { permission: p.permission[agent], model: p.model[agent], effort: p.effort[agent], args: p.args[agent] };
+}
+
+/** Remembers part of `agent`'s settings, keeping the other prefs; returns the new prefs. */
+export function rememberAgentSettings(agent: LiveAgent, patch: Partial<AgentSettings>): ChatPrefs {
   const p = loadChatPrefs();
-  saveChatPrefs({ ...p, permission: { ...p.permission, [agent]: permission }, model: { ...p.model, [agent]: model } });
+  const next: ChatPrefs = { ...p };
+  if (patch.permission !== undefined) next.permission = { ...p.permission, [agent]: patch.permission };
+  if (patch.model !== undefined) next.model = { ...p.model, [agent]: patch.model };
+  if (patch.effort !== undefined) next.effort = { ...p.effort, [agent]: patch.effort };
+  if (patch.args !== undefined) next.args = { ...p.args, [agent]: patch.args };
+  saveChatPrefs(next);
+  return next;
+}
+
+/** Remembers the last agent and / or project folder. */
+export function rememberLast(patch: { agent?: LiveAgent; cwd?: string }): ChatPrefs {
+  const next = { ...loadChatPrefs(), ...patch };
+  saveChatPrefs(next);
+  return next;
 }
 
 /**

@@ -25,9 +25,8 @@ vi.mock("@/api/live", () => ({
   onLiveEvent: vi.fn(),
 }));
 
-import { liveList, liveRespond, liveSend, liveStart, liveTranscript, onLiveEvent } from "@/api/live";
+import { liveList, liveRespond, liveSend, liveTranscript, onLiveEvent } from "@/api/live";
 import { renderApp } from "@/test/fixtures";
-import { selectOption } from "@/test/selectOption";
 import { ChatPage } from "./ChatPage";
 import { initLiveStore, resetLiveStore } from "./liveStore";
 
@@ -65,7 +64,7 @@ beforeEach(() => {
 
 afterEach(() => stop());
 
-function setup(ui = <ChatPage newChatOpen={false} onNewChatOpenChange={() => {}} />) {
+function setup(ui = <ChatPage onNewChat={() => {}} />) {
   stop = initLiveStore();
   return renderApp(ui);
 }
@@ -74,10 +73,10 @@ describe("ChatPage", () => {
   it("shows the empty state with a call to action", async () => {
     (liveList as Mock).mockResolvedValue([]);
     const onOpen = vi.fn();
-    setup(<ChatPage newChatOpen={false} onNewChatOpenChange={onOpen} />);
+    setup(<ChatPage onNewChat={onOpen} />);
     expect(await screen.findByText("开始一段新对话")).toBeInTheDocument();
     await userEvent.click(within(screen.getByRole("main")).getByRole("button", { name: "新对话" }));
-    expect(onOpen).toHaveBeenCalledWith(true);
+    expect(onOpen).toHaveBeenCalled();
   });
 
   it("renders the transcript, answers an approval and streams new events", async () => {
@@ -134,32 +133,5 @@ describe("ChatPage", () => {
     await userEvent.type(box, "{Enter}");
     expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld", []);
     await waitFor(() => expect(box).toHaveValue(""));
-  });
-
-  it("starts a new chat from the dialog with the chosen options", async () => {
-    (liveList as Mock).mockResolvedValue([]);
-    (liveTranscript as Mock).mockResolvedValue([]);
-    (liveStart as Mock).mockResolvedValue(info({ live_id: "L2", state: "starting", agent: "codex", title: "" }));
-    const onOpen = vi.fn();
-    setup(<ChatPage newChatOpen onNewChatOpenChange={onOpen} />);
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("radio", { name: /Codex/ }));
-    await selectOption(within(dialog).getByRole("combobox", { name: "项目目录" }), "/work/demo");
-    await selectOption(within(dialog).getByRole("combobox", { name: "权限模式" }), "bypass");
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("关闭沙箱");
-    await userEvent.click(within(dialog).getByRole("button", { name: "高级选项" }));
-    await userEvent.type(within(dialog).getByLabelText("附加参数"), "a=1{Enter}b=2");
-    await userEvent.type(within(dialog).getByLabelText("第一条消息（可选）"), "hi");
-    await userEvent.click(within(dialog).getByRole("button", { name: "开始对话" }));
-    expect(liveStart).toHaveBeenCalledWith({
-      agent: "codex",
-      cwd: "/work/demo",
-      model: null,
-      permission: "bypass",
-      extra_args: ["a=1", "b=2"],
-      prompt: "hi",
-    });
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(false));
-    expect(JSON.parse(localStorage.getItem("memdock.chat.prefs")!)).toMatchObject({ agent: "codex", permission: { codex: "bypass" } });
   });
 });

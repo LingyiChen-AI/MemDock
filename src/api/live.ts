@@ -19,6 +19,8 @@ export interface StartOptions {
   agent: LiveAgent;
   cwd: string;
   model?: string | null;
+  /** Thinking effort (Claude `--effort`, Codex `model_reasoning_effort`); null = the CLI default. */
+  effort?: string | null;
   permission: PermissionMode;
   /** Claude session id / Codex thread id to continue. */
   resume_id?: string | null;
@@ -119,11 +121,39 @@ export interface ModelOption {
   display_name: string;
   description: string;
   is_default: boolean;
+  /** Thinking effort levels the model supports (may be empty). */
+  efforts: string[];
+  /** The model's own default effort, when the CLI reports one (Codex). */
+  default_effort: string | null;
 }
 
 /** Models of `agent` read from its CLI (cached by the backend for an hour; `force` asks again). */
 export function liveModels(agent: LiveAgent, force = false): Promise<ModelOption[]> {
   return invoke<ModelOption[]>("live_models", { agent, force });
+}
+
+/** A slash command or skill the CLI offers (name without the leading slash). */
+export interface CommandOption {
+  name: string;
+  description: string;
+  argument_hint: string;
+  kind: "skill" | "command";
+}
+
+/** Slash commands and skills of `agent` (cached by the backend for an hour; `force` asks again). */
+export function liveCommands(agent: LiveAgent, force = false): Promise<CommandOption[]> {
+  return invoke<CommandOption[]>("live_commands", { agent, force });
+}
+
+/** A file or folder of a project (`path` relative to the cwd, forward slashes; folders end with "/"). */
+export interface ProjectFile {
+  path: string;
+  is_dir: boolean;
+}
+
+/** Files under `cwd` matching `query` (fuzzy, .gitignore respected), best first. */
+export function projectFiles(cwd: string, query: string, limit = 50): Promise<ProjectFile[]> {
+  return invoke<ProjectFile[]>("project_files", { cwd, query, limit });
 }
 
 export function liveList(): Promise<LiveSessionInfo[]> {

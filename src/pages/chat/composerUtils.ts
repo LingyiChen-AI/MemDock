@@ -66,3 +66,41 @@ export function fileToDataUri(file: Blob): Promise<string> {
     r.readAsDataURL(file);
   });
 }
+
+/** The `/command` (only at the start of the message) or `@file` word the caret is in. */
+export interface MenuToken {
+  kind: "slash" | "at";
+  query: string;
+  /** Range of the whole word, including the `/` or `@`. */
+  start: number;
+  end: number;
+}
+
+export function findMenuToken(text: string, caret: number): MenuToken | null {
+  const before = text.slice(0, caret);
+  const rest = /^\S*/.exec(text.slice(caret))?.[0] ?? "";
+  const slash = /^(\s*)\/([^\s/]*)$/.exec(before);
+  if (slash) return { kind: "slash", query: slash[2] + rest, start: slash[1].length, end: caret + rest.length };
+  const at = /(^|\s)@([^\s@]*)$/.exec(before);
+  if (at) return { kind: "at", query: at[2] + rest, start: before.length - at[2].length - 1, end: caret + rest.length };
+  return null;
+}
+
+/** Replaces the token's word with `insert`; returns the new text and caret. */
+export function replaceToken(text: string, tok: MenuToken, insert: string): { text: string; caret: number } {
+  const after = text.slice(tok.end);
+  const piece = insert && after && !/^\s/.test(after) && !/\s$/.test(insert) ? insert + " " : insert;
+  const head = text.slice(0, tok.start);
+  return { text: head + piece + (insert ? after : after.replace(/^\s+/, "")), caret: head.length + piece.length };
+}
+
+/** A relative path as typed into a message: quoted when it contains whitespace. */
+export function quotePath(path: string): string {
+  return /\s/.test(path) ? `"${path}"` : path;
+}
+
+/** Last segment of a folder path (either slash style). */
+export function baseName(path: string): string {
+  const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}

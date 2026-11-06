@@ -1,8 +1,8 @@
 //! Terminal mode: the real interactive Claude Code / Codex CLI in a pseudo
 //! terminal (ConPTY on Windows), rendered by xterm.js on the chat page.
 //!
-//! `pty_open` spawns `claude [--resume id]` / `codex [resume id]` in the
-//! conversation's folder. A reader thread forwards the output as Tauri events
+//! `pty_open` spawns `claude [--resume id]` / `codex [resume id]` (or the plain
+//! shell for `tool: "shell"`) in the conversation's folder. A reader thread forwards the output as Tauri events
 //! `pty://data` {pty_id, data} (UTF-8 text, split multibyte sequences are
 //! carried over to the next chunk) and, once the process ended and its output
 //! is drained, `pty://exit` {pty_id, code}.
@@ -19,24 +19,88 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use serde::{Deserialize, Serialize};
 
 use crate::extract::runner::{find_program, path_dirs};
-use crate::live::{Agent, PermissionMode};
+use crate::live::{clean_effort, PermissionMode};
 
 #[cfg(test)]
 mod tests;
 
+/// What runs in the terminal: an agent CLI or the user's plain shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PtyTool {
+    Claude,
+    Codex,
+    Shell,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct PtyOpenOptions {
-    pub tool: Agent,
+    pub tool: PtyTool,
     pub cwd: String,
     /// Claude session id / Codex thread id; `None` starts a new conversation.
+    /// `resume_id`, `permission`, `model` and `effort` are ignored for `shell`.
     #[serde(default)]
     pub resume_id: Option<String>,
     #[serde(default)]
     pub permission: PermissionMode,
     #[serde(default)]
     pub model: Option<String>,
+    /// Thinking effort: Claude `--effort`, Codex `-c model_reasoning_effort=`.
+    #[serde(default)]
+    pub effort: Option<String>,
     pub cols: u16,
     pub rows: u16,
+}
+
+/// The plain shell to start: program, arguments and the status bar label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellChoice {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub label: String,
+}
+
+/// Windows: `pwsh.exe` when `find` locates it, else `powershell.exe` (both `-NoLogo`).
+/// macOS / Linux: `$SHELL -l`, else `/bin/zsh` when it exists, else `/bin/bash`.
+pub fn shell_choice(
+    windows: bool,
+    find: impl Fn(&str) -> Option<PathBuf>,
+    shell_env: Option<String>,
+    exists: impl Fn(&Path) -> bool,
+) -> ShellChoice {
+    if windows {
+        let program = find("pwsh")
+            .or_else(|| find("powershell"))
+            .unwrap_or_else(|| PathBuf::from("powershell.exe"));
+        return ShellChoice { program, args: vec!["-NoLogo".into()], label: "PowerShell".into() };
+    }
+    let program = shell_env
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let zsh = PathBuf::from("/bin/zsh");
+            if exists(&zsh) { zsh } else { PathBuf::from("/bin/bash") }
+        });
+    let label = program.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "shell".into());
+    ShellChoice { program, args: vec!["-l".into()], label }
+}
+
+/// The shell of this machine.
+fn local_shell() -> ShellChoice {
+    let mut dirs = path_dirs();
+    if cfg!(windows) {
+        // Windows PowerShell 5.1 lives outside PATH-only installs sometimes.
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            dirs.push(PathBuf::from(root).join("System32").join("WindowsPowerShell").join("v1.0"));
+        }
+    }
+    shell_choice(
+        cfg!(windows),
+        |name| find_program(OsStr::new(name), &dirs),
+        std::env::var("SHELL").ok(),
+        |p| p.exists(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -73,13 +137,18 @@ fn clean(v: &Option<String>) -> Option<&str> {
 pub fn build_args(opts: &PtyOpenOptions) -> Vec<String> {
     let mut a: Vec<String> = vec![];
     let s = |a: &mut Vec<String>, xs: &[&str]| a.extend(xs.iter().map(|x| x.to_string()));
+    let effort = clean_effort(&opts.effort);
     match opts.tool {
-        Agent::Claude => {
+        PtyTool::Shell => {}
+        PtyTool::Claude => {
             if let Some(id) = clean(&opts.resume_id) {
                 s(&mut a, &["--resume", id]);
             }
             if let Some(m) = clean(&opts.model) {
                 s(&mut a, &["--model", m]);
+            }
+            if let Some(e) = effort {
+                s(&mut a, &["--effort", e]);
             }
             match opts.permission {
                 PermissionMode::Ask => {}
@@ -88,7 +157,7 @@ pub fn build_args(opts: &PtyOpenOptions) -> Vec<String> {
                 PermissionMode::Bypass => s(&mut a, &["--dangerously-skip-permissions"]),
             }
         }
-        Agent::Codex => {
+        PtyTool::Codex => {
             if clean(&opts.resume_id).is_some() {
                 a.push("resume".into());
             }
@@ -102,6 +171,10 @@ pub fn build_args(opts: &PtyOpenOptions) -> Vec<String> {
             if let Some(m) = clean(&opts.model) {
                 s(&mut a, &["-m", m]);
             }
+            if let Some(e) = effort {
+                a.push("-c".into());
+                a.push(format!("model_reasoning_effort={e}"));
+            }
             if let Some(id) = clean(&opts.resume_id) {
                 a.push(id.to_string());
             }
@@ -110,15 +183,20 @@ pub fn build_args(opts: &PtyOpenOptions) -> Vec<String> {
     a
 }
 
-fn program_name(tool: Agent) -> &'static str {
+fn program_name(tool: PtyTool) -> &'static str {
     match tool {
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
+        PtyTool::Claude => "claude",
+        PtyTool::Codex => "codex",
+        PtyTool::Shell => "shell",
     }
 }
 
-/// `claude --resume 1234abcd…` for the status bar (ids shortened).
+/// `claude --resume 1234abcd…` for the status bar (ids shortened); the shell's
+/// name (`PowerShell`, `zsh`) for a plain terminal.
 pub fn display_command(opts: &PtyOpenOptions) -> String {
+    if opts.tool == PtyTool::Shell {
+        return local_shell().label;
+    }
     let mut parts = vec![program_name(opts.tool).to_string()];
     let id = clean(&opts.resume_id);
     for a in build_args(opts) {
@@ -258,11 +336,17 @@ impl PtyManager {
     }
 
     pub fn open(&self, opts: &PtyOpenOptions) -> Result<PtyOpened, String> {
-        let name = program_name(opts.tool);
         let dirs = path_dirs();
+        if opts.tool == PtyTool::Shell {
+            let sh = local_shell();
+            return self
+                .open_program(&sh.program, &sh.args, opts, &dirs)
+                .map(|pty_id| PtyOpened { pty_id, command: sh.label });
+        }
+        let name = program_name(opts.tool);
         let program = find_program(OsStr::new(name), &dirs).ok_or_else(|| match opts.tool {
-            Agent::Claude => "未找到 Claude Code 命令行（claude），请先安装并确认它在 PATH 中。".to_string(),
-            Agent::Codex => "未找到 codex 命令，请先安装 Codex CLI（npm install -g @openai/codex）".to_string(),
+            PtyTool::Codex => "未找到 codex 命令，请先安装 Codex CLI（npm install -g @openai/codex）".to_string(),
+            _ => "未找到 Claude Code 命令行（claude），请先安装并确认它在 PATH 中。".to_string(),
         })?;
         self.open_program(&program, &build_args(opts), opts, &dirs)
             .map(|pty_id| PtyOpened { pty_id, command: display_command(opts) })

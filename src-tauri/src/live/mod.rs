@@ -60,6 +60,10 @@ pub struct StartOptions {
     /// `None` = the CLI's default model.
     #[serde(default)]
     pub model: Option<String>,
+    /// Thinking effort (`low`, `medium`, `high`...). Claude: `--effort`;
+    /// Codex: `-c model_reasoning_effort=`. `None` = the CLI's default.
+    #[serde(default)]
+    pub effort: Option<String>,
     #[serde(default)]
     pub permission: PermissionMode,
     /// Native id to continue: Claude session id (`--resume`) or Codex thread id
@@ -227,6 +231,15 @@ pub fn decode_data_uri(uri: &str) -> Option<(&str, &str)> {
     let (head, data) = rest.split_once(',')?;
     let media = head.strip_suffix(";base64")?;
     (media.starts_with("image/") && !data.is_empty()).then_some((media, data))
+}
+
+/// A usable effort level: trimmed, non-empty and only `[A-Za-z0-9_-]` (it is
+/// passed on command lines, possibly through a `.cmd` shim). Others are ignored.
+pub fn clean_effort(effort: &Option<String>) -> Option<&str> {
+    effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
 }
 
 fn now_ms() -> i64 {
@@ -543,4 +556,24 @@ pub async fn live_models(
     tauri::async_runtime::spawn_blocking(move || models::models(agent, &codex_home, force.unwrap_or(false)))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Slash commands and skills for the `/` menu (same probe and cache as `live_models`).
+#[tauri::command]
+pub async fn live_commands(
+    state: tauri::State<'_, Arc<crate::commands::AppState>>,
+    agent: Agent,
+    force: Option<bool>,
+) -> Result<Vec<models::CommandOption>, String> {
+    let codex_home = state.paths.codex_home.clone();
+    tauri::async_runtime::spawn_blocking(move || models::commands(agent, &codex_home, force.unwrap_or(false)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Writes a pasted image (`data:image/...;base64,` URI) to `%TEMP%/memdock-images/`
+/// and returns its absolute path (for typing into a terminal).
+#[tauri::command]
+pub fn save_temp_image(data_uri: String) -> Result<String, String> {
+    codex::save_image(&data_uri)
 }

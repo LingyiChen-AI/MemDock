@@ -1,12 +1,13 @@
 use super::*;
 
-fn opts(tool: Agent, resume: Option<&str>, permission: PermissionMode, model: Option<&str>) -> PtyOpenOptions {
+fn opts(tool: PtyTool, resume: Option<&str>, permission: PermissionMode, model: Option<&str>) -> PtyOpenOptions {
     PtyOpenOptions {
         tool,
         cwd: ".".into(),
         resume_id: resume.map(String::from),
         permission,
         model: model.map(String::from),
+        effort: None,
         cols: 80,
         rows: 24,
     }
@@ -19,32 +20,120 @@ fn args(o: &PtyOpenOptions) -> String {
 #[test]
 fn claude_args_per_mode() {
     use PermissionMode::*;
-    assert_eq!(args(&opts(Agent::Claude, None, Ask, None)), "");
-    assert_eq!(args(&opts(Agent::Claude, Some("abc"), Ask, Some("opus"))), "--resume abc --model opus");
-    assert_eq!(args(&opts(Agent::Claude, None, AutoEdit, None)), "--permission-mode acceptEdits");
-    assert_eq!(args(&opts(Agent::Claude, None, Plan, None)), "--permission-mode plan");
-    assert_eq!(args(&opts(Agent::Claude, Some("x"), Bypass, None)), "--resume x --dangerously-skip-permissions");
+    assert_eq!(args(&opts(PtyTool::Claude, None, Ask, None)), "");
+    assert_eq!(args(&opts(PtyTool::Claude, Some("abc"), Ask, Some("opus"))), "--resume abc --model opus");
+    assert_eq!(args(&opts(PtyTool::Claude, None, AutoEdit, None)), "--permission-mode acceptEdits");
+    assert_eq!(args(&opts(PtyTool::Claude, None, Plan, None)), "--permission-mode plan");
+    assert_eq!(args(&opts(PtyTool::Claude, Some("x"), Bypass, None)), "--resume x --dangerously-skip-permissions");
     // Blank values are ignored.
-    assert_eq!(args(&opts(Agent::Claude, Some("  "), Ask, Some(""))), "");
+    assert_eq!(args(&opts(PtyTool::Claude, Some("  "), Ask, Some(""))), "");
 }
 
 #[test]
 fn codex_args_per_mode() {
     use PermissionMode::*;
-    assert_eq!(args(&opts(Agent::Codex, None, Ask, None)), "-a on-request -s read-only");
+    assert_eq!(args(&opts(PtyTool::Codex, None, Ask, None)), "-a on-request -s read-only");
     assert_eq!(
-        args(&opts(Agent::Codex, Some("t-1"), AutoEdit, Some("gpt-5"))),
+        args(&opts(PtyTool::Codex, Some("t-1"), AutoEdit, Some("gpt-5"))),
         "resume -a on-request -s workspace-write -m gpt-5 t-1"
     );
-    assert_eq!(args(&opts(Agent::Codex, Some("t-1"), Plan, None)), "resume -a on-request -s read-only t-1");
-    assert_eq!(args(&opts(Agent::Codex, None, Bypass, None)), "--dangerously-bypass-approvals-and-sandbox");
+    assert_eq!(args(&opts(PtyTool::Codex, Some("t-1"), Plan, None)), "resume -a on-request -s read-only t-1");
+    assert_eq!(args(&opts(PtyTool::Codex, None, Bypass, None)), "--dangerously-bypass-approvals-and-sandbox");
+}
+
+#[test]
+fn effort_args_for_both_clis_and_none_for_shell() {
+    use PermissionMode::*;
+    let mut o = opts(PtyTool::Claude, Some("abc"), Ask, Some("opus"));
+    o.effort = Some("max".into());
+    assert_eq!(args(&o), "--resume abc --model opus --effort max");
+    let mut o = opts(PtyTool::Codex, Some("t-1"), Ask, Some("gpt-5"));
+    o.effort = Some("high".into());
+    assert_eq!(args(&o), "resume -a on-request -s read-only -m gpt-5 -c model_reasoning_effort=high t-1");
+    o.effort = Some("bad value".into());
+    assert!(!args(&o).contains("model_reasoning_effort"));
+    // A shell ignores every agent option.
+    let mut o = opts(PtyTool::Shell, Some("abc"), Bypass, Some("opus"));
+    o.effort = Some("max".into());
+    assert_eq!(args(&o), "");
+}
+
+#[test]
+fn shell_choice_per_platform() {
+    let none = |_: &str| None::<PathBuf>;
+    let pwsh = |n: &str| (n == "pwsh").then(|| PathBuf::from("C:/pw/pwsh.exe"));
+    let ps = |n: &str| (n == "powershell").then(|| PathBuf::from("C:/W/powershell.exe"));
+    let yes = |_: &Path| true;
+    let no = |_: &Path| false;
+    let c = shell_choice(true, pwsh, None, yes);
+    assert_eq!((c.program, c.args, c.label.as_str()), (PathBuf::from("C:/pw/pwsh.exe"), vec!["-NoLogo".to_string()], "PowerShell"));
+    assert_eq!(shell_choice(true, ps, None, yes).program, PathBuf::from("C:/W/powershell.exe"));
+    assert_eq!(shell_choice(true, none, None, yes).program, PathBuf::from("powershell.exe"));
+    let c = shell_choice(false, none, Some("/usr/bin/fish".into()), no);
+    assert_eq!((c.program, c.args, c.label.as_str()), (PathBuf::from("/usr/bin/fish"), vec!["-l".to_string()], "fish"));
+    assert_eq!(shell_choice(false, none, Some(" ".into()), yes).program, PathBuf::from("/bin/zsh"));
+    assert_eq!(shell_choice(false, none, None, no).label, "bash");
+}
+
+#[test]
+fn deserializes_shell_and_effort() {
+    let o: PtyOpenOptions = serde_json::from_value(serde_json::json!({
+        "tool": "shell", "cwd": "/p", "effort": "high", "cols": 100, "rows": 30
+    }))
+    .unwrap();
+    assert_eq!(o.tool, PtyTool::Shell);
+    assert_eq!(o.effort.as_deref(), Some("high"));
+    #[cfg(windows)]
+    assert_eq!(display_command(&o), "PowerShell");
+}
+
+/// Real: a `shell` terminal opens the local shell and runs `echo hi`.
+#[test]
+#[ignore]
+fn real_shell_echo() {
+    let (tx, rx) = mpsc::channel::<(String, serde_json::Value)>();
+    let tx = Mutex::new(tx);
+    let mgr = PtyManager::new(Arc::new(move |name: &str, v: serde_json::Value| {
+        let _ = tx.lock().unwrap().send((name.to_string(), v));
+    }));
+    let dir = tempfile::tempdir().unwrap();
+    let mut o = opts(PtyTool::Shell, None, PermissionMode::Ask, None);
+    o.cwd = dir.path().to_string_lossy().into_owned();
+    let opened = mgr.open(&o).expect("open shell");
+    eprintln!("command: {}", opened.command);
+    let id = opened.pty_id;
+    let mut out = String::new();
+    let mut sent = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !out.contains("memdock-hi-ok") && std::time::Instant::now() < deadline {
+        if let Ok((_, v)) = rx.recv_timeout(Duration::from_millis(200)) {
+            let d = v["data"].as_str().unwrap_or_default();
+            answer_cursor_query(&mgr, &id, d);
+            out.push_str(d);
+        }
+        if !sent && (out.contains('>') || out.contains('$') || out.contains('%')) {
+            // The typed line must not itself contain the expected output.
+            let line = if cfg!(windows) { "echo ('memdock-hi-' + 'ok')\r" } else { "echo memdock-hi-\"ok\"\r" };
+            mgr.write(&id, line).ok();
+            sent = true;
+        }
+    }
+    eprintln!("tail: {:?}", out.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>());
+    assert!(out.contains("memdock-hi-ok"), "{out:?}");
+    mgr.close(&id);
+    loop {
+        let (name, _) = rx.recv_timeout(Duration::from_secs(20)).expect("exit after close");
+        if name == "pty://exit" {
+            break;
+        }
+    }
 }
 
 #[test]
 fn display_command_shortens_the_id() {
-    let o = opts(Agent::Claude, Some("0123456789abcdef"), PermissionMode::Ask, None);
+    let o = opts(PtyTool::Claude, Some("0123456789abcdef"), PermissionMode::Ask, None);
     assert_eq!(display_command(&o), "claude --resume 01234567…");
-    let o = opts(Agent::Codex, Some("0123456789abcdef"), PermissionMode::Plan, None);
+    let o = opts(PtyTool::Codex, Some("0123456789abcdef"), PermissionMode::Plan, None);
     assert_eq!(display_command(&o), "codex resume -a on-request -s read-only 01234567…");
 }
 
@@ -64,7 +153,7 @@ fn deserializes_frontend_options() {
         "tool": "codex", "cwd": "/p", "resume_id": null, "permission": "auto_edit", "cols": 100, "rows": 30
     }))
     .unwrap();
-    assert_eq!(o.tool, Agent::Codex);
+    assert_eq!(o.tool, PtyTool::Codex);
     assert_eq!(o.permission, PermissionMode::AutoEdit);
     assert_eq!(o.model, None);
 }
@@ -103,7 +192,7 @@ fn run_real(program: &Path, args: &[String]) -> (String, Option<i64>) {
     let mgr = PtyManager::new(Arc::new(move |name: &str, v: serde_json::Value| {
         let _ = tx.lock().unwrap().send((name.to_string(), v));
     }));
-    let o = opts(Agent::Claude, None, PermissionMode::Ask, None);
+    let o = opts(PtyTool::Claude, None, PermissionMode::Ask, None);
     let id = mgr.open_program(program, args, &o, &path_dirs()).expect("open");
     let mut out = String::new();
     loop {
@@ -156,7 +245,7 @@ fn real_claude_tui_starts_and_closes() {
         let _ = tx.lock().unwrap().send((name.to_string(), v));
     }));
     let dir = tempfile::tempdir().unwrap();
-    let mut o = opts(Agent::Claude, None, PermissionMode::Ask, None);
+    let mut o = opts(PtyTool::Claude, None, PermissionMode::Ask, None);
     o.cwd = dir.path().to_string_lossy().into_owned();
     o.cols = 100;
     o.rows = 30;
@@ -191,7 +280,7 @@ fn real_write_and_close() {
     let mgr = PtyManager::new(Arc::new(move |name: &str, v: serde_json::Value| {
         let _ = tx.lock().unwrap().send((name.to_string(), v));
     }));
-    let o = opts(Agent::Claude, None, PermissionMode::Ask, None);
+    let o = opts(PtyTool::Claude, None, PermissionMode::Ask, None);
     #[cfg(windows)]
     let (prog, a) = (PathBuf::from("cmd.exe"), vec![]);
     #[cfg(not(windows))]
@@ -237,7 +326,8 @@ fn real_codex_resume_args_accepted() {
             let _ = tx.lock().unwrap().send((name.to_string(), v));
         }));
         let dir = tempfile::tempdir().unwrap();
-        let mut o = opts(Agent::Codex, Some("00000000-0000-4000-8000-000000000000"), mode, None);
+        let mut o = opts(PtyTool::Codex, Some("00000000-0000-4000-8000-000000000000"), mode, None);
+        o.effort = Some("high".into());
         o.cwd = dir.path().to_string_lossy().into_owned();
         let id = mgr.open_program(&p, &build_args(&o), &o, &path_dirs()).expect("open");
         let mut out = String::new();
@@ -270,7 +360,7 @@ fn real_codex_resume_screen() {
     let mgr = PtyManager::new(Arc::new(move |name: &str, v: serde_json::Value| {
         let _ = tx.lock().unwrap().send((name.to_string(), v));
     }));
-    let mut o = opts(Agent::Codex, Some(&sid), PermissionMode::Ask, None);
+    let mut o = opts(PtyTool::Codex, Some(&sid), PermissionMode::Ask, None);
     o.cwd = cwd;
     o.cols = 120;
     o.rows = 40;

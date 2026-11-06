@@ -59,6 +59,7 @@ fn opts(cwd: &str) -> StartOptions {
         agent: Agent::Claude,
         cwd: cwd.into(),
         model: None,
+        effort: None,
         permission: PermissionMode::Ask,
         resume_id: None,
         extra_args: vec![],

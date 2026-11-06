@@ -64,6 +64,9 @@ pub(crate) fn build_args(opts: &StartOptions, new_session_id: Option<&str>) -> V
     if let Some(m) = opts.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
         v.extend(["--model".into(), m.to_string()]);
     }
+    if let Some(e) = super::clean_effort(&opts.effort) {
+        v.extend(["--effort".into(), e.to_string()]);
+    }
     if let Some(r) = opts.resume_id.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         v.extend(["--resume".into(), r.to_string()]);
     } else if let Some(sid) = new_session_id {

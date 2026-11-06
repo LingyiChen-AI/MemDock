@@ -42,8 +42,8 @@ fn write_all(stdin: &Mutex<Option<ChildStdin>>, msgs: &[Value]) -> Result<(), St
     w.flush().map_err(|e| format!("写入 Codex 失败：{e}"))
 }
 
-/// Codex takes images as local files: writes a data URI to the temp folder.
-fn save_image(uri: &str) -> Result<String, String> {
+/// Codex takes images as local files: writes a data URI to `%TEMP%/memdock-images/`.
+pub fn save_image(uri: &str) -> Result<String, String> {
     use base64::Engine;
     let (media, data) = super::decode_data_uri(uri).ok_or("无法识别的图片数据")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| format!("图片解码失败：{e}"))?;
@@ -88,6 +88,23 @@ impl Driver for CodexDriver {
     }
 }
 
+/// Arguments of `codex app-server [-c model_reasoning_effort=x] [-c k=v ...]`.
+pub(crate) fn app_server_args(opts: &StartOptions, is_batch: bool) -> Result<Vec<String>, String> {
+    let mut args = vec!["app-server".to_string()];
+    if let Some(e) = super::clean_effort(&opts.effort) {
+        args.push("-c".into());
+        args.push(format!("model_reasoning_effort={e}"));
+    }
+    for kv in opts.extra_args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()) {
+        if is_batch && kv.contains('%') {
+            return Err(format!("配置项不能包含 %：{kv}"));
+        }
+        args.push("-c".into());
+        args.push(kv.to_string());
+    }
+    Ok(args)
+}
+
 /// Builds `codex app-server [-c k=v ...]`.
 fn command(opts: &StartOptions) -> Result<Command, String> {
     let dirs = path_dirs();
@@ -97,14 +114,7 @@ fn command(opts: &StartOptions) -> Result<Command, String> {
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
-    let mut args = vec!["app-server".to_string()];
-    for kv in opts.extra_args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()) {
-        if is_batch && kv.contains('%') {
-            return Err(format!("配置项不能包含 %：{kv}"));
-        }
-        args.push("-c".into());
-        args.push(kv.to_string());
-    }
+    let args = app_server_args(opts, is_batch)?;
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&opts.cwd)

@@ -156,6 +156,7 @@ fn opts(permission: PermissionMode) -> StartOptions {
         agent: Agent::Claude,
         cwd: ".".into(),
         model: Some("haiku".into()),
+        effort: None,
         permission,
         resume_id: Some("sid".into()),
         extra_args: vec!["--add-dir".into(), "x".into()],
@@ -173,6 +174,18 @@ fn args_per_permission_mode() {
     assert!(build_args(&opts(PermissionMode::Plan), None).join(" ").contains("--permission-mode plan"));
     let b = build_args(&opts(PermissionMode::Bypass), None).join(" ");
     assert!(b.contains("--dangerously-skip-permissions") && !b.contains("--permission-prompt-tool"));
+}
+
+#[test]
+fn args_pass_effort_and_ignore_bad_values() {
+    let mut o = opts(PermissionMode::Ask);
+    o.effort = Some(" high ".into());
+    let a = build_args(&o, None).join(" ");
+    assert!(a.contains("--model haiku --effort high --resume sid"), "{a}");
+    for bad in ["", "  ", "high; rm", "a&b"] {
+        o.effort = Some(bad.into());
+        assert!(!build_args(&o, None).contains(&"--effort".to_string()), "{bad}");
+    }
 }
 
 #[test]

@@ -3,11 +3,26 @@ use crate::convert::timeline::ToolKind;
 use crate::live::{Agent, Decision, LiveEvent, PermissionMode, StartOptions, TurnUsage};
 use serde_json::{json, Value};
 
+#[test]
+fn app_server_args_pass_effort_first() {
+    let mut o = opts(PermissionMode::Ask, None);
+    assert_eq!(super::app_server_args(&o, false).unwrap(), vec!["app-server"]);
+    o.effort = Some("xhigh".into());
+    o.extra_args = vec!["model_verbosity=low".into()];
+    assert_eq!(
+        super::app_server_args(&o, true).unwrap().join(" "),
+        "app-server -c model_reasoning_effort=xhigh -c model_verbosity=low"
+    );
+    o.extra_args = vec!["x=%PATH%".into()];
+    assert!(super::app_server_args(&o, true).is_err());
+}
+
 fn opts(permission: PermissionMode, resume: Option<&str>) -> StartOptions {
     StartOptions {
         agent: Agent::Codex,
         cwd: "C:/proj".into(),
         model: None,
+        effort: None,
         permission,
         resume_id: resume.map(str::to_string),
         extra_args: vec![],

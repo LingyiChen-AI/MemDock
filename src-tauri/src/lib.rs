@@ -17,6 +17,7 @@ pub mod memory;
 pub mod model;
 pub mod paths;
 pub mod proc;
+pub mod project_files;
 pub mod pty;
 pub mod projects;
 pub mod secrets;
@@ -216,7 +217,10 @@ pub fn run() {
             live::live_list,
             live::live_transcript,
             live::live_models,
+            live::live_commands,
+            live::save_temp_image,
             live::read_image_data_uri,
+            project_files::project_files,
             pty::pty_open,
             pty::pty_write,
             pty::pty_resize,

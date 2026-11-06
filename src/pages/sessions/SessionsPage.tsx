@@ -958,6 +958,12 @@ function ChatPane({
 
   // With a live process, the file's messages from its start on are shown by the live view.
   const before = live && preview ? historyBefore(preview, live.created_at) : preview;
+  // Opening a session: wait for its history (and the live part) and show everything at once, so
+  // the live messages don't appear first and then jump down under the history. Once shown, the
+  // conversation never goes back to the placeholder (a new chat getting its history row).
+  const shownConv = React.useRef(false);
+  const openingLoad = !shownConv.current && !!session && !error && (!preview || (!!live && !lc?.loaded));
+  if (!openingLoad && (session || (live && lc?.loaded))) shownConv.current = true;
   const history = session ? (
     error ? (
       <p role="alert" className="mb-4 text-sm text-destructive">
@@ -1101,7 +1107,7 @@ function ChatPane({
         <TerminalView termKey={termKey} opts={termOpts} c={c} onClose={() => void switchMode("gui")} />
       ) : (
         <>
-          {session && !error && !preview && !live ? (
+          {openingLoad ? (
             <ChatSkeleton label={s.previewLoading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
           ) : session || (live && lc?.loaded) ? (
             // History and the live chat share one scroll area: the first live event only appends

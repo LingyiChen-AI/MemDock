@@ -385,3 +385,49 @@ fn real_codex_resume_screen() {
     let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     eprintln!("SCREEN: {}", text.chars().take(1500).collect::<String>());
 }
+
+#[test]
+fn resuming_a_live_owned_session_is_busy_live_and_a_pty_owned_one_reattaches() {
+    let registry = Arc::new(NativeRegistry::new());
+    let mgr = PtyManager::with_registry(Arc::new(|_: &str, _: serde_json::Value| {}), registry.clone());
+    registry.claim(Agent::Claude, "abc", Owner::live("L1")).unwrap();
+    let o = opts(PtyTool::Claude, Some("abc"), PermissionMode::Ask, None);
+    assert_eq!(mgr.open(&o).unwrap_err(), "busy_live:L1");
+    // Owned by a terminal (here: still opening): the same terminal comes back.
+    registry.claim(Agent::Codex, "t-1", Owner::pty("p0")).unwrap();
+    let o = opts(PtyTool::Codex, Some("t-1"), PermissionMode::Ask, None);
+    let again = mgr.open(&o).unwrap();
+    assert_eq!(again.pty_id, "p0");
+    assert_eq!(again.command, display_command(&o));
+    assert_eq!(registry.owner(Agent::Codex, "t-1"), Some(Owner::pty("p0")));
+}
+
+/// A real terminal claims its id while open and releases it when it ends.
+#[cfg(windows)]
+#[test]
+fn terminal_releases_its_native_id_on_exit() {
+    let (tx, rx) = mpsc::channel::<(String, serde_json::Value)>();
+    let tx = Mutex::new(tx);
+    let registry = Arc::new(NativeRegistry::new());
+    let mgr = PtyManager::with_registry(
+        Arc::new(move |name: &str, v: serde_json::Value| {
+            let _ = tx.lock().unwrap().send((name.to_string(), v));
+        }),
+        registry.clone(),
+    );
+    let o = opts(PtyTool::Claude, Some("sess-x"), PermissionMode::Ask, None);
+    assert!(mgr.claim(Agent::Claude, "sess-x", "my-pty", "claude").unwrap().is_none());
+    let args: Vec<String> = ["/d", "/c", "ping", "-n", "2", "127.0.0.1"].iter().map(|s| s.to_string()).collect();
+    mgr.open_program_as("my-pty", Path::new("cmd.exe"), &args, &o, &path_dirs(), "claude").expect("open");
+    assert_eq!(mgr.open(&o).unwrap().pty_id, "my-pty", "re-attach while open");
+    loop {
+        let (name, v) = rx.recv_timeout(Duration::from_secs(30)).expect("pty event");
+        if name == "pty://data" {
+            answer_cursor_query(&mgr, "my-pty", v["data"].as_str().unwrap_or_default());
+        }
+        if name == "pty://exit" {
+            break;
+        }
+    }
+    assert_eq!(registry.owner(Agent::Claude, "sess-x"), None);
+}

@@ -10,6 +10,7 @@ pub mod commands_usage;
 pub mod convert;
 pub mod env;
 pub mod extract;
+pub mod live;
 pub mod fsutil;
 pub mod ghimport;
 pub mod memory;
@@ -105,6 +106,7 @@ pub fn run() {
             let env_state = Arc::new(commands_env::EnvState::new(state.clone()));
             let gh_import = Arc::new(commands_ghimport::GhImportState::production(state.clone()));
             app.manage(gh_import);
+            app.manage(Arc::new(live::LiveManager::production(app.handle().clone())));
             app.manage(usage);
             app.manage(env_state);
             app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
@@ -196,6 +198,14 @@ pub fn run() {
             commands_ghimport::gh_import_memories,
             commands_ghimport::gh_import_skill,
             tray::set_tray_labels,
+            live::live_start,
+            live::live_send,
+            live::live_respond,
+            live::live_interrupt,
+            live::live_stop,
+            live::live_close,
+            live::live_list,
+            live::live_transcript,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -208,6 +218,9 @@ pub fn run() {
                 // Stop the scheduler and cancel a running extraction (kills the CLI).
                 if let Some(es) = app.try_state::<Arc<commands_extract::ExtractState>>() {
                     es.shutdown();
+                }
+                if let Some(live) = app.try_state::<Arc<live::LiveManager>>() {
+                    live.stop_all();
                 }
             }
         });

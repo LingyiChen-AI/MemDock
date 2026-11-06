@@ -377,12 +377,12 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenM
                 {fmt(s.keptLocal, { n: extras.keptLocal.length })}
               </p>
             ) : null}
+            {extras ? <MissingSkills missing={extras.missing} removed={extras.removed} projects={projects} notify={push} /> : null}
             {extras && extras.absent.length > 0 ? <AbsentList items={extras.absent} /> : null}
             {extras && extras.skipped.length > 0 ? <SkippedList items={extras.skipped} /> : null}
             {records.length > 0 ? (
               <UnsyncedFiles records={records} formatTime={formatTime} onOpen={onOpenMemoryFile} />
             ) : null}
-            {extras ? <MissingSkills missing={extras.missing} removed={extras.removed} projects={projects} notify={push} /> : null}
 
             <ProjectMapping projects={projects} onChange={setProjects} notify={push} />
             <SyncHistory reloadKey={historyKey} notify={push} formatTime={formatTime} />
@@ -595,7 +595,7 @@ export function SecretsDialog({
                 <FileKey2 className="size-4 shrink-0 text-destructive/80" aria-hidden="true" />
                 <div className="min-w-0 flex-1" title={h.repo_path}>
                   <p className="truncate text-sm font-semibold">{name}</p>
-                  {dir ? <p className="truncate font-mono text-xs text-muted-foreground">{middleEllipsis(dir, 56)}</p> : null}
+                  {dir ? <p className="truncate font-mono text-xs text-muted-foreground">{middleEllipsis(dir, 48)}</p> : null}
                 </div>
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{fmt(s.hitLine, { line: h.line })}</span>
                 <span className="shrink-0 rounded-sm bg-destructive/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-destructive dark:bg-destructive/20">

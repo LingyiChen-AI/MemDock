@@ -345,18 +345,21 @@ const contextFor = (id: string) => {
   }));
 };
 
-// Sync fixtures: `?sync=out` starts logged out; `?sync=resolve` makes 同步记忆 return a plan with conflicts.
+// Sync fixtures: `?sync=out` starts logged out; `?sync=resolve` makes 上传到云端 return a plan with conflicts;
+// `?sync=fresh` is a new computer (cloud has memories); `?sync=secrets` opens the secrets dialog;
+// `?sync=down` runs 同步到本地 (absent projects, kept changes, missing skills; `&install=1` opens install-all).
 const syncMode = params.get("sync") ?? "in";
 const syncStatusNow = () =>
   syncMode === "out"
-    ? { logged_in: false, login: null, repo: null, last_sync_at: null, pending: 0, needs: null }
+    ? { logged_in: false, login: null, repo: null, last_sync_at: null, pending: 0, needs: null, remote_has_memory: false }
     : {
         logged_in: true,
         login: "chenhao",
         repo: { owner: "chenhao", name: "MemDockHub", url: "https://github.com/chenhao/MemDockHub", private: true },
-        last_sync_at: Date.now() - 3 * 3600_000,
-        pending: 3,
+        last_sync_at: syncMode === "fresh" ? null : Date.now() - 3 * 3600_000,
+        pending: syncMode === "fresh" ? 0 : 3,
         needs: null,
+        remote_has_memory: syncMode === "fresh",
       };
 const syncPlan = {
   id: "plan-1",
@@ -399,6 +402,52 @@ const syncCommits = [
   { id: "c2", message: "sync from LAPTOP-HOME", time: Date.now() - 26 * 3600_000, files: ["global/codex/AGENTS.md"] },
 ];
 const syncSummary = { commit: "c4", committed: true, pulled: 2, pushed: 1, merged: 1 };
+const previewSkill = (name: string, key: string | null) => ({
+  name,
+  url: "https://github.com/anthropics/skills",
+  git_ref: "main",
+  commit: "abc123",
+  skill_path: `skills/${name}`,
+  tool: "claude",
+  scope: key ? { type: "project", key } : { type: "global" },
+  installed_on: ["m1"],
+  removed_on: [],
+});
+const syncDownDone = {
+  kind: "done",
+  summary: { commit: "c4", committed: false, pulled: 12, pushed: 0, merged: 1 },
+  skipped: [],
+  missing_skills: [previewSkill("pdf", null), previewSkill("xlsx", "github.com/chenhao/jev-rpa"), previewSkill("docx", "github.com/freecall/old-crm")],
+  removed_elsewhere: [],
+  download: true,
+  kept_local: ["global/claude/CLAUDE.md"],
+  absent: [
+    { repo_path: "projects/github.com/freecall/old-crm/claude/CLAUDE.md", project_key: "github.com/freecall/old-crm", reason: "no_project" },
+    { repo_path: "projects/github.com/freecall/old-crm/codex/AGENTS.md", project_key: "github.com/freecall/old-crm", reason: "no_project" },
+    { repo_path: "projects/github.com/chenhao/jev-rpa/claude/memory/MEMORY.md", project_key: "github.com/chenhao/jev-rpa", reason: "no_place" },
+  ],
+};
+const syncSecretHits = [
+  { repo_path: "projects/github.com/freecall/synergy-backend-service/claude/memory/feedback_database_credentials.md", line: 12, rule: "aws_access_key" },
+  { repo_path: "global/claude/CLAUDE.md", line: 88, rule: "github_token" },
+  { repo_path: "projects/github.com/chenhao/jev-rpa/codex/AGENTS.md", line: 7, rule: "private_key" },
+];
+const syncSkippedRecords = [
+  {
+    repo_path: "global/claude/CLAUDE.md",
+    reason: "secret",
+    at: Date.now() - 26 * 3600_000,
+    local_path: "C:\\Users\\Admin\\.claude\\CLAUDE.md",
+    file_id: "c:/users/admin/.claude/claude.md",
+  },
+  {
+    repo_path: "projects/github.com/chenhao/jev-rpa/claude/memory/notes-gbk.md",
+    reason: "not_utf8_local",
+    at: Date.now() - 3 * 3600_000,
+    local_path: "C:\\Users\\Admin\\.claude\\projects\\C--work-jev-rpa\\memory\\notes-gbk.md",
+    file_id: null,
+  },
+];
 
 // Usage page fixtures: deterministic fake numbers for any range.
 const usageTotals = (input: number, output: number, read: number, write: number, cost: number, unpriced = 0, requests = Math.round((input + output) / 900)) => ({
@@ -598,13 +647,19 @@ mockIPC(
           setTimeout(
             () =>
               resolve(
-                syncMode === "resolve"
-                  ? { kind: "needs_resolution", plan: syncPlan }
-                  : { kind: "done", summary: syncSummary, skipped: syncPlan.skipped, missing_skills: [], removed_elsewhere: [] },
+                a.direction === "down"
+                  ? syncDownDone
+                  : syncMode === "secrets" && a.secrets === "block"
+                    ? { kind: "blocked", secret_hits: syncSecretHits }
+                    : syncMode === "resolve"
+                      ? { kind: "needs_resolution", plan: syncPlan }
+                      : { kind: "done", summary: syncSummary, skipped: syncPlan.skipped, missing_skills: [], removed_elsewhere: [], download: false, kept_local: [], absent: [] },
               ),
             600,
           ),
         );
+      case "sync_skipped_files":
+        return syncMode === "out" || syncMode === "fresh" ? [] : syncSkippedRecords;
       case "sync_finish":
         return syncSummary;
       case "sync_projects":
@@ -837,4 +892,5 @@ const clickWhen = (label: string, then?: () => void) => {
 };
 if (params.get("login") === "code") clickWhen("登录 GitHub", () => clickWhen("开始登录"));
 else if (params.get("login") === "intro") clickWhen("登录 GitHub");
-if (syncMode === "resolve") clickWhen("同步记忆");
+if (syncMode === "resolve" || syncMode === "secrets") clickWhen("上传到云端");
+if (syncMode === "down") clickWhen("同步到本地", () => params.get("install") && clickWhen("全部安装"));

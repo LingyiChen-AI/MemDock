@@ -67,7 +67,7 @@ const result: ConvertResult = {
   session_id: "new-id",
   path: "/home/u/.codex/sessions/2026/11/06/rollout-new-id.jsonl",
   cwd: "/work/demo",
-  resume_command: 'cd "/work/demo" && codex resume new-id',
+  resume_command: 'cd "/work/demo"; codex resume new-id',
   indexed: false,
   warnings: ["state_db_missing"],
   stats: preview.stats,
@@ -119,7 +119,7 @@ describe("SessionsPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "转换" }));
 
     await waitFor(() => expect(convertSession).toHaveBeenCalledWith("claude", claudeSession.path, false));
-    expect(await screen.findByText('cd "/work/demo" && codex resume new-id')).toBeInTheDocument();
+    expect(await screen.findByText('cd "/work/demo"; codex resume new-id')).toBeInTheDocument();
     expect(screen.getByText(/没有找到 Codex 状态库/)).toBeInTheDocument();
     expect(listSessions).toHaveBeenCalledTimes(2);
   });

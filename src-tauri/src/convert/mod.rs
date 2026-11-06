@@ -311,9 +311,12 @@ pub struct Written {
     pub stats: PlanStats,
 }
 
+/// Windows PowerShell 5 has no `&&`; `;` works in PowerShell 5 and 7.
+const SEP: &str = if cfg!(windows) { ";" } else { " &&" };
+
 /// Shell command to resume the written session.
 pub fn resume_command(tool: Tool, cwd: &str, session_id: &str) -> String {
-    let cd = if cwd.is_empty() { String::new() } else { format!("cd \"{cwd}\" && ") };
+    let cd = if cwd.is_empty() { String::new() } else { format!("cd \"{cwd}\"{SEP} ") };
     match tool {
         Tool::Claude => format!("{cd}claude --resume {session_id}"),
         Tool::Codex => format!("{cd}codex resume {session_id}"),

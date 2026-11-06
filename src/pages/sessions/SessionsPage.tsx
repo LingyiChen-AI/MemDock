@@ -113,7 +113,9 @@ function CopyButton({ text, s }: { text: string; s: S }) {
 
 /** Same format as `convert::resume_command` on the Rust side. */
 function resumeCommand(tool: Tool, cwd: string, id: string): string {
-  const cd = cwd ? `cd "${cwd}" && ` : "";
+  // Windows PowerShell 5 has no `&&`; `;` works in PowerShell 5 and 7.
+  const sep = /Windows/i.test(navigator.userAgent) ? ";" : " &&";
+  const cd = cwd ? `cd "${cwd}"${sep} ` : "";
   return tool === "claude" ? `${cd}claude --resume ${id}` : `${cd}codex resume ${id}`;
 }
 

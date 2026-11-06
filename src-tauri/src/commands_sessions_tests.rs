@@ -63,7 +63,7 @@ fn converts_claude_to_codex_and_records_it() {
     assert!(r.indexed, "{:?}", r.warnings);
     assert!(r.path.contains("rollout-") && r.path.ends_with(&format!("{}.jsonl", r.session_id)));
     assert!(Path::new(&r.path).starts_with(e.paths.codex_home.join("sessions")));
-    assert_eq!(r.resume_command, format!("cd \"/work/demo\" && codex resume {}", r.session_id));
+    assert_eq!(r.resume_command, format!("cd \"/work/demo\"{} codex resume {}", if cfg!(windows) { ";" } else { " &&" }, r.session_id));
     assert_valid_codex(&read_lines(&r.path), &r.session_id);
     assert_eq!(fs::read(&e.claude_src).unwrap(), before, "source untouched");
 
@@ -103,7 +103,7 @@ fn converts_codex_to_claude_into_project_dir() {
     assert_eq!(r.tool, Tool::Claude);
     assert!(!r.indexed);
     assert_eq!(Path::new(&r.path).parent().unwrap(), Path::new(&dir));
-    assert_eq!(r.resume_command, format!("cd \"C:\\work\\demo\" && claude --resume {}", r.session_id));
+    assert_eq!(r.resume_command, format!("cd \"C:\\work\\demo\"{} claude --resume {}", if cfg!(windows) { ";" } else { " &&" }, r.session_id));
     assert_valid_claude(&read_lines(&r.path), &r.session_id, r"C:\work\demo");
     // Missing state DB is a warning only (Codex -> Claude never touches it).
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);

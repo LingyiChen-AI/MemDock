@@ -1,4 +1,4 @@
-import { formatInsertPath, inRect, insertAtCursor, isImagePath } from "./composerUtils";
+import { baseName, findMenuToken, formatInsertPath, inRect, insertAtCursor, isImagePath, replaceToken } from "./composerUtils";
 
 describe("formatInsertPath", () => {
   it("makes paths inside the session folder relative with forward slashes", () => {
@@ -41,5 +41,23 @@ describe("isImagePath / inRect", () => {
     const rect = { left: 100, top: 100, right: 300, bottom: 200 };
     expect(inRect({ x: 400, y: 300 }, rect, 2)).toBe(true);
     expect(inRect({ x: 400, y: 300 }, rect, 1)).toBe(false);
+  });
+});
+
+describe("menu tokens", () => {
+  it("finds a / command only at the start and an @ word anywhere", () => {
+    expect(findMenuToken("/mo", 3)).toEqual({ kind: "slash", query: "mo", start: 0, end: 3 });
+    expect(findMenuToken("hi /mo", 6)).toBeNull();
+    expect(findMenuToken("see @src/a", 10)).toEqual({ kind: "at", query: "src/a", start: 4, end: 10 });
+    expect(findMenuToken("mail a@b", 8)).toBeNull();
+    expect(findMenuToken("/model x", 8)).toBeNull();
+  });
+
+  it("replaces the word, or removes it", () => {
+    const tok = findMenuToken("see @no more", 7)!;
+    expect(replaceToken("see @no more", tok, "docs/x.md")).toEqual({ text: "see docs/x.md more", caret: 13 });
+    expect(replaceToken("/eff", findMenuToken("/eff", 4)!, "")).toEqual({ text: "", caret: 0 });
+    expect(baseName(String.raw`C:\work\demo\ `.trim())).toBe("demo");
+    expect(baseName("/home/u/cc-memory/")).toBe("cc-memory");
   });
 });

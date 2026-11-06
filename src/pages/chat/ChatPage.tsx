@@ -15,7 +15,6 @@ import { formatTime, resumeCommand } from "@/pages/sessions/sessionsUtils";
 import { isActive, relativeTime } from "./chatPrefs";
 import { ChatComposer } from "./Composer";
 import { Conversation } from "./Conversation";
-import { NewChatDialog } from "./NewChatDialog";
 import { closeLive, selectLive, useLiveStore, type LiveConv } from "./liveStore";
 
 type C = Messages["chat"];
@@ -310,11 +309,11 @@ function EmptyState({ c, onNew }: { c: C; onNew: () => void }) {
 }
 
 export interface ChatPageProps {
-  newChatOpen: boolean;
-  onNewChatOpenChange: (open: boolean) => void;
+  /** Opens a new chat (the sessions page shows it as a draft). */
+  onNewChat: () => void;
 }
 
-export function ChatPage({ newChatOpen, onNewChatOpenChange }: ChatPageProps) {
+export function ChatPage({ onNewChat }: ChatPageProps) {
   const { t } = useI18n();
   const c = t.chat;
   const store = useLiveStore();
@@ -337,7 +336,7 @@ export function ChatPage({ newChatOpen, onNewChatOpenChange }: ChatPageProps) {
           </h1>
           <p className="text-xs text-muted-foreground">{c.subtitle}</p>
         </div>
-        <Button type="button" size="sm" className="cursor-pointer" onClick={() => onNewChatOpenChange(true)}>
+        <Button type="button" size="sm" className="cursor-pointer" onClick={onNewChat}>
           <SquarePen aria-hidden="true" />
           {c.newChat}
         </Button>
@@ -371,14 +370,13 @@ export function ChatPage({ newChatOpen, onNewChatOpenChange }: ChatPageProps) {
           {selected ? (
             <ConversationPane key={selected.live_id} info={selected} lc={store.convs[selected.live_id]} c={c} />
           ) : store.ready && sessions.length === 0 ? (
-            <EmptyState c={c} onNew={() => onNewChatOpenChange(true)} />
+            <EmptyState c={c} onNew={onNewChat} />
           ) : (
             <div className="grid flex-1 place-items-center p-6 text-sm text-muted-foreground">{store.ready ? c.selectHint : null}</div>
           )}
         </main>
       </div>
 
-      <NewChatDialog open={newChatOpen} onOpenChange={onNewChatOpenChange} />
     </div>
   );
 }

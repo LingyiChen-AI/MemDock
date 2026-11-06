@@ -9,7 +9,7 @@ import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
 import { UsagePage } from "@/pages/usage/UsagePage";
-import { SessionsPage } from "@/pages/sessions/SessionsPage";
+import { SessionsPage, type NewRequest } from "@/pages/sessions/SessionsPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
@@ -38,7 +38,9 @@ function Shell() {
   useEffect(() => initLiveStore(), []);
   const live = useLiveStore();
   const activeChats = live.sessions.filter((x) => isActive(x.state)).length;
-  const [newChatOpen, setNewChatOpen] = useState(false);
+  // "New chat" / "new terminal" from the sidebar, handed to the chat page once it is open.
+  const [newRequest, setNewRequest] = useState<NewRequest | null>(null);
+  const requestHandled = useCallback(() => setNewRequest(null), []);
 
   const navigate = (key: NavKey) => {
     if (key === current) return;
@@ -53,7 +55,11 @@ function Shell() {
         onNavigate={navigate}
         badges={{ review: pending?.total, chat: activeChats }}
         onNewChat={() => {
-          setNewChatOpen(true);
+          setNewRequest("chat");
+          navigate("chat");
+        }}
+        onNewTerminal={() => {
+          setNewRequest("terminal");
           navigate("chat");
         }}
         status={<AccountSlot status={syncStatus} onLogin={() => setLoginOpen(true)} onOpenSync={() => navigate("sync")} />}
@@ -82,7 +88,7 @@ function Shell() {
               }}
             />
           ),
-          chat: <SessionsPage newChatOpen={newChatOpen} onNewChatOpenChange={setNewChatOpen} />,
+          chat: <SessionsPage request={newRequest} onRequestHandled={requestHandled} />,
           usage: <UsagePage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}
@@ -105,7 +111,7 @@ function Shell() {
         }}
         onCancel={() => {
           setPendingNav(null);
-          setNewChatOpen(false);
+          setNewRequest(null);
         }}
       />
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} status={syncStatus} onStatus={setSyncStatus} notify={toasts.push} />

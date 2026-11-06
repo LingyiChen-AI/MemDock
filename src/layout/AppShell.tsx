@@ -114,7 +114,7 @@ function NewChatButton({ onClick }: { onClick: () => void }) {
           type="button"
           tooltip={label}
           onClick={onClick}
-          className="h-9 cursor-pointer justify-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/16 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:justify-center"
+          className="h-9 cursor-pointer justify-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/16 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
         >
           <SquarePen aria-hidden="true" />
           <span>{label}</span>
@@ -225,7 +225,8 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
           {NAV_GROUPS.map((group) => {
             const folded = collapsed.includes(group.key) && !group.items.some((i) => i.key === current);
             return (
-              <SidebarGroup key={group.key} className="px-0 py-1">
+              <SidebarGroup key={group.key} className="px-0 py-1 group-data-[collapsible=icon]:py-0">
+                <div aria-hidden="true" className="mx-auto my-1.5 hidden h-px w-6 bg-sidebar-border group-data-[collapsible=icon]:block" />
                 <SidebarGroupLabel asChild className="h-7 px-2.5 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
                   <button
                     type="button"
@@ -237,8 +238,8 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
                     <ChevronDown className={cn("size-3.5 transition-transform duration-150 motion-reduce:transition-none", folded && "-rotate-90")} aria-hidden="true" />
                   </button>
                 </SidebarGroupLabel>
-                {folded ? null : (
-                  <SidebarMenu>
+                {(
+                  <SidebarMenu className={cn("group-data-[collapsible=icon]:items-center", folded && "hidden group-data-[collapsible=icon]:flex")}>
                     {group.items.map(({ key, icon: Icon }) => {
                     const active = key === current;
                     const label = t.nav[key];
@@ -253,14 +254,14 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
                           onClick={() => onNavigate(key)}
                           className={cn(
                             "h-8 cursor-pointer gap-2.5 px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none",
-                            "data-active:bg-primary/12 data-active:font-semibold data-active:text-primary data-active:shadow-[inset_2px_0_0_var(--primary)] data-active:hover:bg-primary/16 data-active:hover:text-primary",
+                            "data-active:bg-primary/12 data-active:font-semibold data-active:text-primary data-active:shadow-[inset_3px_0_0_var(--primary)] data-active:hover:bg-primary/16 data-active:hover:text-primary",
                           )}
                         >
                           <Icon aria-hidden="true" />
                           <span>{label}</span>
                         </SidebarMenuButton>
                         {count ? (
-                          <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground">
+                          <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:flex! group-data-[collapsible=icon]:top-0! group-data-[collapsible=icon]:right-1! group-data-[collapsible=icon]:h-3.5 group-data-[collapsible=icon]:min-w-3.5 group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:text-[9px] group-data-[collapsible=icon]:ring-2 group-data-[collapsible=icon]:ring-sidebar">
                             {count}
                           </SidebarMenuBadge>
                         ) : null}
@@ -275,8 +276,8 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
         </SidebarContent>
         <SidebarFooter className="gap-1 border-t border-sidebar-border px-2 pt-2.5">
           {status ? <div data-slot="sidebar-status">{status}</div> : null}
-          <div className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col-reverse group-data-[collapsible=icon]:items-center">
-            <div className="min-w-0 flex-1 group-data-[collapsible=icon]:flex-none">
+          <div className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col-reverse group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:gap-0.5">
+            <div className="min-w-0 flex-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:w-full group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center">
               <CollapseToggle />
             </div>
             <GithubButton />

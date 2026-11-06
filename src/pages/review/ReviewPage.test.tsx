@@ -399,4 +399,20 @@ describe("ReviewPage", () => {
     await userEvent.click(within((await cards())[0]).getByRole("button", { name: "查看原对话" }));
     expect(await screen.findByText("未在上下文中找到原话")).toBeInTheDocument();
   });
+
+  it("shows the GitHub origin of imported suggestions and the import button", async () => {
+    const imported = sug({
+      id: "s-gh",
+      kind: "add",
+      old_text: null,
+      new_text: "导入的规则",
+      evidence: [],
+      origin: { type: "github", repo: "octo/mem", path: "CLAUDE.md", git_ref: "main", commit: "abcdef123", url: "https://github.com/octo/mem/blob/abcdef123/CLAUDE.md" },
+    });
+    setup([imported]);
+    const [card] = await cards();
+    expect(within(card).getByTestId("suggestion-origin")).toHaveTextContent("来源：GitHub 导入：octo/mem · CLAUDE.md@abcdef1");
+    expect(within(card).queryByRole("button", { name: "查看原对话" })).toBeNull();
+    expect(screen.getByRole("button", { name: "从 GitHub 导入" })).toBeInTheDocument();
+  });
 });

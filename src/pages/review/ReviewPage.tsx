@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CheckCheck, ListChecks, Sparkles } from "lucide-react";
+import { CheckCheck, FolderGit2, ListChecks, Sparkles } from "lucide-react";
 import {
   acceptSuggestions,
   applySuggestion,
@@ -21,6 +21,7 @@ import { formatSnapshotTime } from "@/pages/memory/HistoryDrawer";
 import { fmt } from "@/pages/memory/paths";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
+import { GithubImportDialog } from "@/pages/ghimport/GithubImportDialog";
 import { EvidenceDrawer } from "./EvidenceDrawer";
 import { SuggestionCard } from "./SuggestionCard";
 
@@ -74,6 +75,7 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
   const [evidenceOpen, setEvidenceOpen] = React.useState(false);
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all");
   const [projectFilter, setProjectFilter] = React.useState("all");
+  const [importOpen, setImportOpen] = React.useState(false);
 
   const seq = React.useRef(0);
   const load = React.useCallback(async () => {
@@ -277,17 +279,28 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
             </h1>
             {all ? <p className="mt-1 text-sm text-muted-foreground">{summary}</p> : null}
           </div>
-          {all && total > 0 ? (
+          <div className="flex items-center gap-2">
             <Button
               type="button"
-              disabled={bulkBusy || busy.size > 0 || acceptable.length === 0}
-              onClick={() => setBulkIds(acceptable.map(({ s }) => s.id))}
-              className="h-8 cursor-pointer px-3 text-sm font-semibold"
+              variant="outline"
+              onClick={() => setImportOpen(true)}
+              className="h-8 cursor-pointer bg-card px-3 text-sm hover:bg-muted"
             >
-              <CheckCheck className="size-4" aria-hidden="true" />
-              {r.acceptAll}
+              <FolderGit2 className="size-4" aria-hidden="true" />
+              {t.ghImport.button}
             </Button>
-          ) : null}
+            {all && total > 0 ? (
+              <Button
+                type="button"
+                disabled={bulkBusy || busy.size > 0 || acceptable.length === 0}
+                onClick={() => setBulkIds(acceptable.map(({ s }) => s.id))}
+                className="h-8 cursor-pointer px-3 text-sm font-semibold"
+              >
+                <CheckCheck className="size-4" aria-hidden="true" />
+                {r.acceptAll}
+              </Button>
+            ) : null}
+          </div>
         </header>
 
         {all && total > 0 ? (
@@ -388,6 +401,12 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
         onCancel={() => setBulkIds(null)}
       />
       <EvidenceDrawer open={evidenceOpen} onOpenChange={setEvidenceOpen} suggestion={evidenceFor} />
+      <GithubImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        projects={index?.projects.map((p) => p.project) ?? []}
+        onGoReview={() => void load()}
+      />
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </div>
   );

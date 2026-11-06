@@ -2,6 +2,7 @@ pub mod commands;
 pub mod commands_env;
 pub mod commands_extract;
 pub mod commands_sessions;
+pub mod commands_ghimport;
 pub mod commands_skills;
 pub mod commands_sync;
 pub mod commands_usage;
@@ -9,6 +10,7 @@ pub mod convert;
 pub mod env;
 pub mod extract;
 pub mod fsutil;
+pub mod ghimport;
 pub mod memory;
 pub mod model;
 pub mod paths;
@@ -97,6 +99,8 @@ pub fn run() {
                 let _ = usage_handle.emit(name, payload);
             }));
             let env_state = Arc::new(commands_env::EnvState::new(state.clone()));
+            let gh_import = Arc::new(commands_ghimport::GhImportState::production(state.clone()));
+            app.manage(gh_import);
             app.manage(usage);
             app.manage(env_state);
             app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
@@ -176,6 +180,10 @@ pub fn run() {
             commands_sessions::session_preview,
             commands_sessions::convert_target_dir,
             commands_sessions::convert_session,
+            commands_ghimport::gh_import_scan,
+            commands_ghimport::gh_import_preview,
+            commands_ghimport::gh_import_memories,
+            commands_ghimport::gh_import_skill,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

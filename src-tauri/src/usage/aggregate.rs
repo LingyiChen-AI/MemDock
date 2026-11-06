@@ -389,7 +389,7 @@ mod tests {
             // 2026-11-05 00:10 local -> Nov 5
             ev("2026-11-04T16:10:00Z", Tool::Claude, "claude-opus-5-5", 0, 1_000_000, Some("b")),
             ev("2026-11-04T16:10:00Z", Tool::Claude, "claude-opus-5-5", 0, 1_000_000, Some("b")),
-            ev("2026-11-05T03:00:00Z", Tool::Codex, "gpt-6.1-sol", 500, 500, None),
+            ev("2026-11-05T03:00:00Z", Tool::Codex, "gpt-9-unknown", 500, 500, None),
             ev("2026-11-05T04:00:00Z", Tool::Codex, "gpt-5-codex", 1_000_000, 0, None),
         ]
     }
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(d5.claude.cache_read, 1_000_000, "duplicate key counted once");
         assert_eq!(d5.codex.total_tokens, 1000 + 1000 + 1_000_000 + 1000);
         assert_eq!(d5.codex.unpriced_tokens, 2000);
-        assert_eq!(r.unknown_models, vec!["gpt-6.1-sol".to_string()]);
+        assert_eq!(r.unknown_models, vec!["gpt-9-unknown".to_string()]);
         assert_eq!(d5.breakdown.len(), 3);
         assert_eq!(r.summary.days, 3);
         let peak = r.summary.peak.as_ref().unwrap();
@@ -429,7 +429,7 @@ mod tests {
         qq.tools = vec![Tool::Codex];
         let r = build_report(evs.iter(), &qq, table(), cst).unwrap();
         assert_eq!(r.rows[0].claude.total_tokens, 0);
-        assert_eq!(r.models, vec!["gpt-5-codex".to_string(), "gpt-6.1-sol".to_string()]);
+        assert_eq!(r.models, vec!["gpt-5-codex".to_string(), "gpt-9-unknown".to_string()]);
         qq.models = vec!["gpt-5-codex".into()];
         let r = build_report(evs.iter(), &qq, table(), cst).unwrap();
         assert_eq!(r.rows[0].totals.input, 1_000_000);
@@ -472,7 +472,7 @@ mod tests {
         let csv = to_csv(&r);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 4);
-        assert!(lines.iter().any(|l| l.starts_with("2026-11-05,Codex,gpt-6.1-sol,") && l.ends_with(",,false")));
+        assert!(lines.iter().any(|l| l.starts_with("2026-11-05,Codex,gpt-9-unknown,") && l.ends_with(",,false")));
         assert!(lines.iter().any(|l| l.starts_with("2026-11-05,Claude Code,claude-opus-5-5,") && l.ends_with(",true")));
     }
 }

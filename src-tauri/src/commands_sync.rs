@@ -179,6 +179,12 @@ impl SyncRuntime {
         t
     }
 
+    /// The stored GitHub token, if any (reads the keychain). Used by the
+    /// GitHub import to raise rate limits and reach private repositories.
+    pub(crate) fn import_token(&self) -> Option<String> {
+        self.read_token()
+    }
+
     fn store_token(&self, t: &str) -> Result<(), String> {
         self.tokens.set(t)?;
         self.set_has_token(true);

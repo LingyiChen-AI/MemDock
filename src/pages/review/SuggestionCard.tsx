@@ -1,6 +1,6 @@
 import * as React from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { MessageSquareQuote, TriangleAlert } from "lucide-react";
+import { FolderGit2, MessageSquareQuote, TriangleAlert } from "lucide-react";
 import type { Suggestion, SuggestionKind } from "@/api/types";
 import { DiffView } from "@/components/diff/DiffView";
 import { Button } from "@/components/ui/button";
@@ -80,6 +80,20 @@ export function SuggestionCard({ suggestion: s, projectLabel, stale, busy, onAcc
       </div>
 
       {s.reason ? <p className="pt-2 pr-4 pl-[17px] text-sm">{s.reason}</p> : null}
+
+      {s.origin?.type === "github" ? (
+        <p
+          data-testid="suggestion-origin"
+          title={s.origin.url}
+          className="mt-2 mr-4 ml-[17px] flex items-center gap-2 rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground"
+        >
+          <FolderGit2 className="size-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 truncate">
+            {fmt(t.ghImport.origin, { repo: s.origin.repo })}
+            <span className="font-mono"> · {s.origin.path}@{s.origin.commit.slice(0, 7)}</span>
+          </span>
+        </p>
+      ) : null}
 
       {first ? (
         <div className="mt-2 mr-4 ml-[17px] flex items-start gap-2 rounded-md bg-muted px-2.5 py-2 text-xs text-muted-foreground">

@@ -147,7 +147,7 @@ export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawe
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[min(640px,92vw)] gap-0 data-[side=right]:w-[min(640px,92vw)] data-[side=right]:sm:max-w-none">
+      <SheetContent side="right" className="w-[min(960px,94vw)] gap-0 data-[side=right]:w-[min(960px,94vw)] data-[side=right]:sm:max-w-none">
         <SheetHeader className="border-b border-border px-5 py-4 pr-12">
           <SheetTitle className="text-base font-semibold">{r.drawerTitle}</SheetTitle>
           <SheetDescription className="text-xs">{r.drawerDesc}</SheetDescription>

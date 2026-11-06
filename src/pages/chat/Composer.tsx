@@ -350,7 +350,7 @@ export function ChatComposer({ c, agent, cwd, disabled = false, placeholder, hin
           aria-label={c.inputLabel}
           value={text}
           disabled={disabled}
-          rows={1}
+          rows={3}
           placeholder={placeholder ?? fmt(k.placeholder, { agent: c.agents[agent] })}
           onChange={(e) => setText(e.target.value)}
           onPaste={onPaste}
@@ -360,7 +360,7 @@ export function ChatComposer({ c, agent, cwd, disabled = false, placeholder, hin
             e.preventDefault();
             void send();
           }}
-          className="max-h-[232px] min-h-11 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3.5 pt-3 pb-1 leading-5 shadow-none focus-visible:ring-0 disabled:bg-transparent dark:bg-transparent dark:disabled:bg-transparent"
+          className="max-h-[280px] min-h-[84px] resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3.5 pt-3 pb-1 leading-5 shadow-none focus-visible:ring-0 disabled:bg-transparent dark:bg-transparent dark:disabled:bg-transparent"
         />
         <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pt-1 pb-2">
           <ToolbarTip tip={k.attachFile}>

@@ -32,7 +32,7 @@ use std::sync::Arc;
 use tauri::{LogicalSize, Manager, WebviewWindow};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-/// Sizes and centers the main window to 80% x 75% of its monitor's work area.
+/// Sizes and centers the main window to 80% x 90% of its monitor's work area.
 fn apply_initial_size(win: &WebviewWindow) -> tauri::Result<()> {
     let monitor = match win.current_monitor()? {
         Some(m) => m,
@@ -73,9 +73,15 @@ pub fn run() {
                 let restored = state_file
                     .map(|f| window::has_saved_state(&f, "main"))
                     .unwrap_or(false);
-                if !restored {
+                let marker = app.path().app_config_dir().ok().map(|d| d.join("window-size-version"));
+                let current = marker.as_deref().is_some_and(window::size_version_applied);
+                if !restored || !current {
                     if let Err(e) = apply_initial_size(&win) {
                         eprintln!("memdock: initial window sizing failed: {e}");
+                    }
+                    if let Some(m) = &marker {
+                        let _ = m.parent().map(std::fs::create_dir_all);
+                        let _ = std::fs::write(m, window::SIZE_VERSION.to_string());
                     }
                 }
                 // Always show, even if sizing failed.

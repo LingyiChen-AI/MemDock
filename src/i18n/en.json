@@ -1293,6 +1293,20 @@
       "modelPlaceholder": "Model name, empty for the default",
       "lockedHint": "The session is running with the settings shown here; changes apply the next time it reconnects",
       "nextHint": "Used when this message reconnects the session"
-    }
+    },
+    "modeLabel": "View",
+    "modeGui": "GUI",
+    "modeTerminal": "Terminal",
+    "modeGuiHint": "Bubble view: read and continue the conversation in MemDock",
+    "modeTerminalHint": "Terminal view: run the real CLI (claude / codex) here, just like in a system terminal",
+    "terminalStatus": "Terminal · {command}",
+    "terminalStarting": "Starting…",
+    "terminalExited": "Exited ({code})",
+    "terminalExitedNoCode": "Exited",
+    "terminalRestart": "Restart",
+    "terminalFailed": "Could not start the terminal: {error}",
+    "switchConfirmTitle": "Switch to the terminal?",
+    "switchConfirmBody": "This conversation is replying right now. Switching stops the current turn (what was generated so far stays in the session) and continues the conversation in the terminal.",
+    "switchConfirm": "Stop and switch"
   }
 }

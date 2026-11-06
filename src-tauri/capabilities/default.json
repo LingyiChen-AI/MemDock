@@ -10,7 +10,7 @@
     "dialog:allow-save",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/*" }, { "url": "https://nodejs.org/*" }]
+      "allow": [{ "url": "https://github.com/*" }, { "url": "https://nodejs.org/*" }, { "url": "https://*" }, { "url": "http://*" }]
     }
   ]
 }

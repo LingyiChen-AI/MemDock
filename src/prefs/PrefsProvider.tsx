@@ -1,6 +1,7 @@
 import * as React from "react";
 import { getSettings, updateUiPrefs } from "@/api/memory";
 import type { Settings } from "@/api/types";
+import { stableContext } from "@/lib/stableContext";
 
 interface Prefs {
   /** Raw stored value: null = follow system. */
@@ -37,7 +38,7 @@ function writeCache(language: string | null, theme: string | null, accent: strin
   }
 }
 
-const PrefsContext = React.createContext<Prefs | null>(null);
+const PrefsContext = stableContext<Prefs | null>("prefs", null);
 
 /**
  * Holds the persisted UI preferences. Renders immediately with defaults and

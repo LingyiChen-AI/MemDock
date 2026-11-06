@@ -8,9 +8,12 @@ import "@fontsource-variable/jetbrains-mono";
 import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "./styles/globals.css";
 import App from "./App";
+import { RootErrorBoundary } from "./components/RootErrorBoundary";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <RootErrorBoundary>
+      <App />
+    </RootErrorBoundary>
   </React.StrictMode>,
 );

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { usePrefs } from "@/prefs/PrefsProvider";
+import { stableContext } from "@/lib/stableContext";
 import { getMessages, htmlLang, resolveLanguage, type Language, type Messages } from "./index";
 
 interface I18n {
@@ -7,7 +8,7 @@ interface I18n {
   t: Messages;
 }
 
-const I18nContext = React.createContext<I18n | null>(null);
+const I18nContext = stableContext<I18n | null>("i18n", null);
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const { language: setting } = usePrefs();

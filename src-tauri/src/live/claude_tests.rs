@@ -271,3 +271,42 @@ fn user_message_with_images_uses_content_blocks() {
     assert_eq!(content[0]["source"]["data"], "QUJD");
     assert_eq!(content[1], serde_json::json!({"type": "text", "text": "look"}));
 }
+
+fn result_line(subtype: &str, is_error: bool, total: f64) -> String {
+    serde_json::json!({"type": "result", "subtype": subtype, "is_error": is_error, "total_cost_usd": total, "usage": {"output_tokens": 3}}).to_string()
+}
+
+fn turn_cost(ev: &[LiveEvent]) -> f64 {
+    match ev.last() {
+        Some(LiveEvent::TurnCompleted { usage, .. }) => usage.cost_usd.unwrap(),
+        other => panic!("no TurnCompleted: {other:?}"),
+    }
+}
+
+#[test]
+fn turn_cost_is_the_difference_of_running_totals() {
+    let mut p = Parser::default();
+    let a = turn_cost(&events(&mut p, &result_line("success", false, 0.004)));
+    let b = turn_cost(&events(&mut p, &result_line("success", false, 0.007)));
+    let c = turn_cost(&events(&mut p, &result_line("success", false, 0.007)));
+    assert!((a - 0.004).abs() < 1e-9 && (b - 0.003).abs() < 1e-9 && c.abs() < 1e-9, "{a} {b} {c}");
+}
+
+#[test]
+fn interrupted_turn_is_not_an_error() {
+    let mut p = Parser::default();
+    p.on_send();
+    p.on_interrupt();
+    let ev = events(&mut p, &result_line("error_during_execution", true, 0.0));
+    assert_eq!(ev.len(), 1, "{ev:?}");
+    assert!(matches!(ev[0], LiveEvent::TurnCompleted { is_error: false, .. }));
+    // The flag is per turn: a later real error is reported again.
+    let ev = events(&mut p, &result_line("error_during_execution", true, 0.0));
+    assert!(matches!(ev[0], LiveEvent::Error { .. }));
+    assert!(matches!(ev[1], LiveEvent::TurnCompleted { is_error: true, .. }));
+    // A stale interrupt (sent while idle) is cleared by the next message.
+    p.on_interrupt();
+    p.on_send();
+    let ev = events(&mut p, &result_line("error_during_execution", true, 0.0));
+    assert!(matches!(ev[1], LiveEvent::TurnCompleted { is_error: true, .. }));
+}

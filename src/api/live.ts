@@ -89,6 +89,11 @@ export function liveSend(liveId: string, text: string, images: string[] = []): P
   return invoke<void>("live_send", { liveId, text, images });
 }
 
+/** Reads a png/jpg/gif/webp file (max 5 MB) as a `data:image/...;base64,` URI. */
+export function readImageDataUri(path: string): Promise<string> {
+  return invoke<string>("read_image_data_uri", { path });
+}
+
 export function liveRespond(liveId: string, requestId: string, decision: Decision): Promise<void> {
   return invoke<void>("live_respond", { liveId, requestId, decision });
 }

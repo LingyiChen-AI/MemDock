@@ -201,7 +201,7 @@ function UserRow({ item, s }: { item: TextItem; s: S }) {
 }
 
 /** Pasted screenshots as thumbnails; click one to see it full size. */
-function Thumbs({ images, s }: { images: string[]; s: S }) {
+export function Thumbs({ images, s }: { images: string[]; s: S }) {
   const [open, setOpen] = React.useState<number | null>(null);
   return (
     <>

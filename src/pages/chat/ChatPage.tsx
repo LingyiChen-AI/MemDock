@@ -1,11 +1,10 @@
 import * as React from "react";
-import { Check, Copy, Cpu, Folder, Loader2, MessagesSquare, Power, SendHorizontal, Shield, Square, SquarePen, X } from "lucide-react";
+import { Check, Copy, Cpu, Folder, Loader2, MessagesSquare, Power, Shield, Square, SquarePen, X } from "lucide-react";
 import { liveInterrupt, liveRespond, liveSend, liveStop, type LiveAgent, type LiveSessionInfo, type LiveState, type PermissionMode } from "@/api/live";
 import { ToolLogo } from "@/components/brand/ToolLogo";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -14,6 +13,7 @@ import { fmt } from "@/pages/memory/paths";
 import { errorMessage } from "@/pages/skills/skillUtils";
 import { formatTime, resumeCommand } from "@/pages/sessions/sessionsUtils";
 import { isActive, relativeTime } from "./chatPrefs";
+import { ChatComposer } from "./Composer";
 import { Conversation } from "./Conversation";
 import { NewChatDialog } from "./NewChatDialog";
 import { closeLive, selectLive, useLiveStore, type LiveConv } from "./liveStore";
@@ -233,88 +233,26 @@ function ConvHeader({ info, c, onError }: { info: LiveSessionInfo; c: C; onError
   );
 }
 
-function Composer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: (e: string | null) => void }) {
+function LiveComposer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: (e: string | null) => void }) {
   const exited = info.state === "exited";
+  const running = isActive(info.state);
   return (
-    <MessageComposer
+    <ChatComposer
       c={c}
+      agent={info.agent}
+      cwd={info.cwd}
       disabled={exited}
-      placeholder={exited ? c.inputExited : c.inputPlaceholder}
-      hint={exited ? c.inputExited : isActive(info.state) ? c.inputQueued : null}
+      placeholder={exited ? c.inputExited : undefined}
+      hint={exited ? c.inputExited : running ? c.inputQueued : null}
+      running={running}
+      onStop={() => {
+        onError(null);
+        liveInterrupt(info.live_id).catch((e) => onError(fmt(c.actionFailed, { error: errorMessage(e) })));
+      }}
+      attached={{ permission: info.permission, model: info.model }}
       onError={onError}
-      onSend={(msg) => liveSend(info.live_id, msg)}
+      onSend={(msg) => liveSend(info.live_id, msg.text, msg.images)}
     />
-  );
-}
-
-/** Message box: Enter sends, Shift+Enter breaks the line, IME-safe. */
-export function MessageComposer({
-  c,
-  disabled = false,
-  placeholder,
-  hint,
-  onSend,
-  onError,
-  extra,
-}: {
-  c: C;
-  disabled?: boolean;
-  placeholder: string;
-  hint?: React.ReactNode;
-  onSend: (text: string) => Promise<unknown>;
-  onError: (e: string | null) => void;
-  /** Controls shown under the box (e.g. the permission mode used to continue). */
-  extra?: React.ReactNode;
-}) {
-  const [text, setText] = React.useState("");
-  const [sending, setSending] = React.useState(false);
-  const exited = disabled;
-  const ref = React.useRef<HTMLTextAreaElement>(null);
-  const send = async () => {
-    const msg = text.trim();
-    if (!msg || exited || sending) return;
-    setSending(true);
-    onError(null);
-    try {
-      await onSend(msg);
-      setText("");
-    } catch (e) {
-      onError(fmt(c.sendFailed, { error: errorMessage(e) }));
-    } finally {
-      setSending(false);
-      ref.current?.focus();
-    }
-  };
-  return (
-    <div className="flex flex-col gap-1.5 border-t border-border px-4 py-3">
-      <div className="flex items-end gap-2">
-        <Textarea
-          ref={ref}
-          aria-label={c.inputLabel}
-          value={text}
-          disabled={exited}
-          rows={1}
-          placeholder={placeholder}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            // IME composition (e.g. Chinese input) uses Enter to pick a candidate.
-            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-            e.preventDefault();
-            void send();
-          }}
-          className="max-h-48 min-h-10 resize-none"
-        />
-        <Button type="button" size="icon-lg" className="shrink-0 cursor-pointer" aria-label={c.send} disabled={exited || sending || !text.trim()} onClick={() => void send()}>
-          {sending ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <SendHorizontal aria-hidden="true" />}
-        </Button>
-      </div>
-      {hint || extra ? (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span>{hint}</span>
-          {extra}
-        </div>
-      ) : null}
-    </div>
   );
 }
 
@@ -348,7 +286,7 @@ export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: L
       ) : (
         <Conversation conv={lc.conv} agent={info.agent} running={isActive(info.state)} starting={info.state === "starting"} onRespond={respond} />
       )}
-      <Composer key={info.live_id} info={info} c={c} onError={setError} />
+      <LiveComposer key={info.live_id} info={info} c={c} onError={setError} />
     </div>
   );
 }

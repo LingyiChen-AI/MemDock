@@ -31,7 +31,7 @@ export interface LiveApproval {
 }
 
 export type ConvItem =
-  | { type: "user"; id: string; text: string }
+  | { type: "user"; id: string; text: string; images?: string[] }
   | { type: "assistant"; id: string; text: string; streaming: boolean }
   | { type: "thinking"; id: string; text: string }
   | { type: "tool"; call: LiveToolCall }
@@ -92,7 +92,7 @@ export function applyLiveEvent(state: ConvState, env: LiveEnvelope): ConvState {
         items: ev.state === "exited" ? expire(settle(items)) : ev.state === "running" || ev.state === "waiting_approval" ? items : settle(items),
       };
     case "user_message":
-      return { ...s, items: [...items, { type: "user", id: ev.id, text: ev.text }] };
+      return { ...s, items: [...items, { type: "user", id: ev.id, text: ev.text, images: ev.images?.length ? ev.images : undefined }] };
     case "assistant_delta": {
       const i = findIndex(items, (it) => it.type === "assistant" && it.id === ev.id);
       if (i < 0) return { ...s, items: [...items, { type: "assistant", id: ev.id, text: ev.text, streaming: true }] };
@@ -196,7 +196,7 @@ export type TurnSegment =
   | { kind: "error"; message: string };
 
 export type ConvBlock =
-  | { kind: "user"; key: string; text: string }
+  | { kind: "user"; key: string; text: string; images?: string[] }
   | { kind: "turn"; key: string; segments: TurnSegment[] }
   | { kind: "approval"; key: string; approval: LiveApproval }
   | { kind: "fatal"; key: string; message: string }
@@ -217,7 +217,7 @@ export function toConvBlocks(items: ConvItem[]): ConvBlock[] {
     switch (it.type) {
       case "user":
         turn = null;
-        out.push({ kind: "user", key: `u-${it.id}-${i}`, text: it.text });
+        out.push({ kind: "user", key: `u-${it.id}-${i}`, text: it.text, images: it.images });
         return;
       case "approval":
         turn = null;

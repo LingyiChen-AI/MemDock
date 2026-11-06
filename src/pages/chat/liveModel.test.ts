@@ -18,6 +18,14 @@ describe("applyLiveEvent", () => {
     expect(s.lastSeq).toBe(2);
   });
 
+  it("keeps the images of a user message for the conversation", () => {
+    const s = run({ type: "user_message", id: "u1", text: "", images: ["data:image/png;base64,AAAA"] }, { type: "user_message", id: "u2", text: "hi", images: [] });
+    expect(toConvBlocks(s.items)).toEqual([
+      { kind: "user", key: "u-u1-0", text: "", images: ["data:image/png;base64,AAAA"] },
+      { kind: "user", key: "u-u2-1", text: "hi", images: undefined },
+    ]);
+  });
+
   it("skips duplicate and stale seqs", () => {
     const [a, b] = envs({ type: "user_message", id: "u1", text: "hi" }, { type: "user_message", id: "u2", text: "again" });
     let s = applyLiveEvent(EMPTY_CONV, a);

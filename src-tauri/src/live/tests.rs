@@ -144,6 +144,21 @@ fn missing_dir_and_spawn_failure_are_errors() {
 }
 
 #[test]
+fn image_files_become_data_uris() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("Shot.PNG");
+    std::fs::write(&png, b"ABC").unwrap();
+    assert_eq!(image_data_uri(&png).unwrap(), "data:image/png;base64,QUJD");
+    let txt = dir.path().join("a.txt");
+    std::fs::write(&txt, b"x").unwrap();
+    assert!(image_data_uri(&txt).is_err());
+    assert_eq!(image_media_type(std::path::Path::new("a.jpeg")), Some("image/jpeg"));
+    let big = dir.path().join("big.webp");
+    std::fs::write(&big, vec![0u8; (MAX_IMAGE_BYTES + 1) as usize]).unwrap();
+    assert!(image_data_uri(&big).unwrap_err().contains("5 MB"));
+}
+
+#[test]
 fn data_uris_are_checked_before_sending() {
     assert_eq!(decode_data_uri("data:image/png;base64,AAAA"), Some(("image/png", "AAAA")));
     assert_eq!(decode_data_uri("data:text/plain;base64,AAAA"), None);

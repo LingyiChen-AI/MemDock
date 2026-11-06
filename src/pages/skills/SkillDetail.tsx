@@ -296,7 +296,7 @@ function Overview({
           <dt className="text-muted-foreground">{s.locations}</dt>
           <dd className="flex min-w-0 flex-col gap-2">
             {others.map((i) => (
-              <div key={i.dir} className="flex min-w-0 flex-col gap-0.5">
+              <div key={`${i.tool}:${i.dir}`} className="flex min-w-0 flex-col gap-0.5">
                 <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
                   <ToolTag tool={i.tool} />
                   <span className={tagClass}>{i.scope.type === "global" ? s.global : projectName(i.scope.project_id)}</span>

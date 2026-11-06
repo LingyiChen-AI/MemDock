@@ -185,7 +185,7 @@ export function UsagePage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 p-6">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-0.5">
             <h1 className="flex items-center gap-2 text-lg font-semibold">

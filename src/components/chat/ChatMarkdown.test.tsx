@@ -23,12 +23,12 @@ describe("chat links", () => {
     expect(externalHref("relative/path")).toBeNull();
   });
 
-  it("opens a bare URL in the browser on Ctrl+click only", async () => {
+  it("opens a bare URL in the system browser on click, without the webview menu", async () => {
     renderApp(<ChatMarkdown text="see https://freecallai.feishu.cn/docx/abc for details" />);
     const link = await screen.findByRole("link", { name: "https://freecallai.feishu.cn/docx/abc" });
-    fireEvent.click(link);
+    expect(fireEvent.contextMenu(link)).toBe(false);
     expect(openUrl).not.toHaveBeenCalled();
-    fireEvent.click(link, { ctrlKey: true });
+    expect(fireEvent.click(link)).toBe(false);
     expect(openUrl).toHaveBeenCalledWith("https://freecallai.feishu.cn/docx/abc");
   });
 });

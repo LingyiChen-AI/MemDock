@@ -7,8 +7,6 @@ import remarkGfm from "remark-gfm";
 import { ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-
 /** Only web and mail links are opened outside the app. */
 export function externalHref(href: string | undefined): string | null {
   if (!href) return null;
@@ -20,27 +18,25 @@ export function externalHref(href: string | undefined): string | null {
   }
 }
 
-/** A link that opens in the default browser on Ctrl+click (⌘+click on macOS); a plain click does nothing. */
+/** A link that opens in the system's default browser on click; never inside the app window. */
 export function ExternalLink({ href, children }: { href?: string; children: React.ReactNode }) {
   const { t } = useI18n();
   const url = externalHref(href);
   if (!url) return <span className="text-primary">{children}</span>;
-  const open = (e: React.MouseEvent | React.KeyboardEvent) => {
-    if (e.type === "click" && !(e as React.MouseEvent).ctrlKey && !(e as React.MouseEvent).metaKey) return;
+  const open = (e: React.SyntheticEvent) => {
     e.preventDefault();
-    void openUrl(url).catch(() => {});
+    void openUrl(url).catch((err) => console.error("memdock: open link failed", err));
   };
   return (
     <a
       href={url}
-      title={fmt(t.shell.openLinkHint, { key: IS_MAC ? "⌘" : "Ctrl", url })}
-      onClick={(e) => {
-        e.preventDefault();
-        open(e);
-      }}
+      title={fmt(t.shell.openLinkHint, { url })}
+      onClick={open}
       onKeyDown={(e) => {
         if (e.key === "Enter") open(e);
       }}
+      // No webview menu ("open in new window") and no middle-click navigation.
+      onContextMenu={(e) => e.preventDefault()}
       onAuxClick={(e) => e.preventDefault()}
       className="cursor-pointer text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
     >

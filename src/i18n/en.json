@@ -18,7 +18,7 @@
     "system": "System"
   },
   "shell": {
-    "openLinkHint": "{key}+click to open in the browser: {url}",
+    "openLinkHint": "Click to open in the browser: {url}",
     "github": "MemDock on GitHub",
     "mainNav": "Main navigation",
     "collapse": "Collapse sidebar",

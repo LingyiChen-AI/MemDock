@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CheckCheck, FolderGit2, ListChecks, Sparkles, XCircle } from "lucide-react";
+import { CheckCheck, FolderGit2, ListChecks, Sparkles, X, XCircle } from "lucide-react";
 import {
   acceptSuggestions,
   applySuggestion,
@@ -22,11 +22,15 @@ import { fmt } from "@/pages/memory/paths";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
 import { GithubImportDialog } from "@/pages/ghimport/GithubImportDialog";
+import { belongsToRun, type RunRef } from "@/pages/extract/runStats";
 import { EvidenceDrawer } from "./EvidenceDrawer";
 import { SuggestionCard } from "./SuggestionCard";
 
 export interface ReviewPageProps {
   onNavigate?: (key: NavKey) => void;
+  /** Show only the suggestions this extraction run produced. */
+  runFilter?: RunRef | null;
+  onClearRunFilter?: () => void;
 }
 
 const GLOBAL = "__global__";
@@ -55,7 +59,7 @@ function reasonText(reason: string, r: { reasonTargetChanged: string; reasonDisk
   return r.reasonUnknown;
 }
 
-export function ReviewPage({ onNavigate }: ReviewPageProps) {
+export function ReviewPage({ onNavigate, runFilter, onClearRunFilter }: ReviewPageProps) {
   const { t } = useI18n();
   const r = t.review;
   const rRef = React.useRef(r);
@@ -127,7 +131,10 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
     return [...fetched, ...extra].sort((a, b) => b.created_at - a.created_at);
   }, [fetched, staleMap]);
 
-  const withProject = React.useMemo(() => (all ?? []).map((s) => ({ s, p: projectOf(s, index) })), [all, index]);
+  const withProject = React.useMemo(
+    () => (all ?? []).filter((s) => !runFilter || belongsToRun(s, runFilter)).map((s) => ({ s, p: projectOf(s, index) })),
+    [all, index, runFilter],
+  );
 
   const projectOptions = React.useMemo(() => {
     const m = new Map<string, string>();
@@ -343,6 +350,19 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
             ) : null}
           </div>
         </header>
+        {runFilter ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/8 px-3 py-2 text-sm">
+            <span>{fmt(r.runOnly, { time: formatSnapshotTime(runFilter.started_at) })}</span>
+            <button
+              type="button"
+              onClick={onClearRunFilter}
+              className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="size-3.5" aria-hidden="true" />
+              {r.runShowAll}
+            </button>
+          </div>
+        ) : null}
 
         {all && total > 0 ? (
           <div className="flex flex-wrap items-center gap-3">

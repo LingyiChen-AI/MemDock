@@ -270,6 +270,16 @@ describe("ReviewPage", () => {
     await waitFor(() => expect(screen.queryAllByRole("article")).toHaveLength(0));
   });
 
+  it("a run filter shows only that run's suggestions until cleared", async () => {
+    const onClear = vi.fn();
+    (listSuggestions as Mock).mockResolvedValue([{ ...modify, run_id: "r1" }, { ...add, run_id: "r2" }, { ...obsolete, run_id: "r1" }]);
+    renderApp(<ReviewPage runFilter={{ id: "r1", started_at: 0, finished_at: 1 }} onClearRunFilter={onClear} />);
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    expect(screen.getByText(/这次提取的建议/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "显示全部" }));
+    expect(onClear).toHaveBeenCalled();
+  });
+
   it("accept all confirms count", async () => {
     setup();
     (acceptSuggestions as Mock).mockResolvedValue([

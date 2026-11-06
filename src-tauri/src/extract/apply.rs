@@ -338,6 +338,7 @@ mod tests {
             base_hash: base,
             status: SuggestionStatus::Pending,
             origin: None,
+            run_id: None,
         };
         e.ctx.store.lock().unwrap().add_suggestions(vec![s]);
     }

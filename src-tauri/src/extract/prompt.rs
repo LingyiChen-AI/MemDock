@@ -402,6 +402,9 @@ pub struct Suggestion {
     /// run (e.g. a GitHub import). Absent for extracted suggestions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SuggestionOrigin>,
+    /// The extraction run that produced it (absent for imports and older data).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// Source of a suggestion that did not come from session extraction.
@@ -660,6 +663,7 @@ pub fn parse_output_full(
             base_hash: target.hash.clone(),
             status: SuggestionStatus::Pending,
             origin: None,
+            run_id: None,
         });
     }
     ParsedOutput { suggestions: out, warnings, unusable: false }
@@ -1060,6 +1064,7 @@ mod tests {
             base_hash: String::new(),
             status: SuggestionStatus::Pending,
             origin: None,
+            run_id: None,
         }
     }
 

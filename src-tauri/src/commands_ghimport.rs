@@ -540,6 +540,7 @@ pub fn import_memories_impl(
                     crate::ghimport::fetch::encode_path(&item.path)
                 ),
             }),
+            run_id: None,
         });
     }
     let total = out.len() as u32;

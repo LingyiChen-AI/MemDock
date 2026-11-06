@@ -407,6 +407,11 @@
     "colTool": "Tool",
     "colSessions": "Sessions read",
     "colProjects": "Projects",
+    "colProgress": "Review",
+    "progressDone": "Done",
+    "progressNone": "Not started",
+    "progressPartial": "{done} of {total} handled",
+    "progressDetail": "Accepted {accepted} · Rejected {rejected} · Outdated {stale} · Pending {pending}",
     "colNew": "New suggestions",
     "colStatus": "Status",
     "triggerManual": "Manual",
@@ -453,6 +458,8 @@
     "resetFailed": "Reset failed: {message}"
   },
   "review": {
+    "runOnly": "Showing only suggestions from the {time} run",
+    "runShowAll": "Show all",
     "evidenceN": "Evidence {n} of {total}",
     "sessionLabel": "Session",
     "quoteLine": "Quote: “{quote}”",

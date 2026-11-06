@@ -4,6 +4,7 @@ import { AppShell, type NavKey } from "@/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { MemoryPage } from "@/pages/memory/MemoryPage";
+import type { RunRecord } from "@/api/types";
 import { ExtractPage } from "@/pages/extract/ExtractPage";
 import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
@@ -27,6 +28,8 @@ function Shell() {
   const onDirty = useCallback((d: boolean) => setDirty(d), []);
   const [syncStatus, setSyncStatus] = useSyncStatus();
   const [loginOpen, setLoginOpen] = useState(false);
+  // The extraction run whose suggestions the review page is limited to.
+  const [reviewRun, setReviewRun] = useState<RunRecord | null>(null);
   const [openRequest, setOpenRequest] = useState<{ fileId: string; nonce: number } | null>(null);
   const toasts = useToasts();
 
@@ -44,8 +47,17 @@ function Shell() {
         badges={{ review: pending?.total }}
         status={<AccountSlot status={syncStatus} onLogin={() => setLoginOpen(true)} onOpenSync={() => navigate("sync")} />}
         pages={{
-          review: <ReviewPage onNavigate={navigate} />,
-          extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
+          review: <ReviewPage onNavigate={navigate} runFilter={reviewRun} onClearRunFilter={() => setReviewRun(null)} />,
+          extract: (
+            <ExtractPage
+              onNavigate={navigate}
+              onDirtyChange={onDirty}
+              onOpenRunReview={(run) => {
+                setReviewRun(run);
+                navigate("review");
+              }}
+            />
+          ),
           skills: <SkillsPage onDirtyChange={onDirty} />,
           sync: (
             <SyncPage

@@ -407,6 +407,11 @@
     "colTool": "工具",
     "colSessions": "读取会话数",
     "colProjects": "项目数",
+    "colProgress": "处理状态",
+    "progressDone": "已处理",
+    "progressNone": "未处理",
+    "progressPartial": "部分处理 {done}/{total}",
+    "progressDetail": "通过 {accepted} · 驳回 {rejected} · 失效 {stale} · 待处理 {pending}",
     "colNew": "新建议数",
     "colStatus": "状态",
     "triggerManual": "手动",
@@ -453,6 +458,8 @@
     "resetFailed": "重置失败：{message}"
   },
   "review": {
+    "runOnly": "仅显示 {time} 这次提取的建议",
+    "runShowAll": "显示全部",
     "evidenceN": "证据 {n} / {total}",
     "sessionLabel": "会话",
     "quoteLine": "引用：“{quote}”",

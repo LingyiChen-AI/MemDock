@@ -1,10 +1,12 @@
 import * as React from "react";
-import { Ban, ChevronDown, ChevronRight, CircleCheck, CircleX, Loader2, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Ban, CheckCircle2, ChevronDown, ChevronRight, CircleCheck, CircleDot, CircleX, Loader2, TriangleAlert, type LucideIcon } from "lucide-react";
 import type { RunRecord, RunStatus } from "@/api/types";
 import { cn } from "@/lib/utils";
+import type { RunProgress } from "./runStats";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
 import { ToolTag } from "@/pages/memory/ToolTag";
+import { fmt } from "@/pages/memory/paths";
 
 /** Localized text for a failed run: its `error_code` when known, else the raw detail. */
 export function runErrorText(x: Messages["extract"], r: Pick<RunRecord, "error" | "error_code">): string | null {
@@ -49,7 +51,42 @@ function StatusCell({ status }: { status: RunStatus }) {
 
 const TH = "px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-muted-foreground";
 
-export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenReview?: () => void }) {
+function ProgressCell({ p, x }: { p: RunProgress | undefined; x: Messages["extract"] }) {
+  if (!p || p.total === 0) return <span className="text-muted-foreground">—</span>;
+  const handled = p.total - p.pending;
+  const detail = fmt(x.progressDetail, { accepted: p.accepted, rejected: p.rejected, stale: p.stale, pending: p.pending });
+  if (p.pending === 0)
+    return (
+      <span title={detail} className="inline-flex items-center gap-1.5 text-muted-foreground">
+        <CheckCircle2 className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+        {x.progressDone}
+      </span>
+    );
+  if (handled === 0)
+    return (
+      <span title={detail} className="inline-flex items-center gap-1.5">
+        <CircleDot className="size-3.5 text-warning" aria-hidden="true" />
+        {x.progressNone}
+      </span>
+    );
+  return (
+    <span title={detail} className="inline-flex items-center gap-1.5">
+      <CircleDot className="size-3.5 text-primary" aria-hidden="true" />
+      {fmt(x.progressPartial, { done: handled, total: p.total })}
+    </span>
+  );
+}
+
+export function RunsTable({
+  runs,
+  progress,
+  onOpenReview,
+}: {
+  runs: RunRecord[];
+  /** Review progress of each run's suggestions, by run id. */
+  progress?: Map<string, RunProgress>;
+  onOpenReview?: (run: RunRecord) => void;
+}) {
   const { t } = useI18n();
   const x = t.extract;
   const [open, setOpen] = React.useState<Set<string>>(new Set());
@@ -74,6 +111,7 @@ export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenRev
             <th scope="col" className={cn(TH, "text-right")}>{x.colSessions}</th>
             <th scope="col" className={cn(TH, "text-right")}>{x.colProjects}</th>
             <th scope="col" className={cn(TH, "text-right")}>{x.colNew}</th>
+            <th scope="col" className={TH}>{x.colProgress}</th>
             <th scope="col" className={TH}>{x.colStatus}</th>
           </tr>
         </thead>
@@ -103,11 +141,11 @@ export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenRev
                   <td className="px-3 py-2 text-right tabular-nums">{r.sessions_read}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{r.projects}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {r.suggestions_new > 0 && onOpenReview ? (
+                    {r.suggestions_new > 0 && onOpenReview && (progress?.get(r.id)?.pending ?? 0) > 0 ? (
                       <button
                         type="button"
                         title={x.openReview}
-                        onClick={onOpenReview}
+                        onClick={() => onOpenReview(r)}
                         className="cursor-pointer rounded-sm px-1 font-medium text-accent-text underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {r.suggestions_new}
@@ -116,12 +154,15 @@ export function RunsTable({ runs, onOpenReview }: { runs: RunRecord[]; onOpenRev
                       r.suggestions_new
                     )}
                   </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <ProgressCell p={progress?.get(r.id)} x={x} />
+                  </td>
                   <td className="px-3 py-2 whitespace-nowrap"><StatusCell status={r.status} /></td>
                 </tr>
                 {expanded ? (
                   <tr className="border-b border-border bg-muted/30 last:border-b-0">
                     <td />
-                    <td colSpan={7} className="px-3 py-3">
+                    <td colSpan={8} className="px-3 py-3">
                       {r.error ? (
                         <div className="mb-2">
                           <p className="mb-1 text-xs font-medium text-muted-foreground">{x.errorLabel}</p>

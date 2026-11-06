@@ -5,14 +5,16 @@ import {
   extractRunners,
   getExtractConfig,
   listExtractRuns,
+  listSuggestions,
   onExtractFinished,
   onExtractProgress,
   resetExtractData,
   setExtractConfig,
+  onSuggestionsChanged,
   startExtraction,
 } from "@/api/extract";
 import { listMemories } from "@/api/memory";
-import type { ExtractConfig, ExtractProgress, Project, RunRecord, RunnerInfo } from "@/api/types";
+import type { ExtractConfig, ExtractProgress, Project, RunRecord, RunnerInfo, Suggestion } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { NavKey } from "@/layout/AppShell";
@@ -24,20 +26,42 @@ import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { PromptSettings } from "./PromptSettings";
 import { ExtractConfigForm, type DraftState } from "./ExtractConfigForm";
 import { RunsTable, runErrorText } from "./RunsTable";
+import { runProgress } from "./runStats";
 
 export interface ExtractPageProps {
   onNavigate?: (key: NavKey) => void;
   /** Reports unsaved config edits so the app can confirm before leaving the page. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Opens the review page showing only this run's suggestions. */
+  onOpenRunReview?: (run: RunRecord) => void;
 }
 
-export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
+export function ExtractPage({ onNavigate, onDirtyChange, onOpenRunReview }: ExtractPageProps) {
   const { t } = useI18n();
   const x = t.extract;
   const [config, setConfig] = React.useState<ExtractConfig | null>(null);
   const [runners, setRunners] = React.useState<RunnerInfo[]>([]);
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [runs, setRuns] = React.useState<RunRecord[] | null>(null);
+  const [suggestions, setSuggestions] = React.useState<Suggestion[]>([]);
+  React.useEffect(() => {
+    let alive = true;
+    const load = () =>
+      listSuggestions()
+        .then((v) => alive && setSuggestions(v))
+        .catch(() => {});
+    void load();
+    let unlisten: (() => void) | undefined;
+    onSuggestionsChanged(() => void load())
+      .then((u) => (alive ? (unlisten = u) : u()))
+      .catch(() => {});
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [runs]);
+  const onOpenRun = onOpenRunReview ?? (onNavigate ? () => onNavigate("review") : undefined);
+  const reviewProgress = React.useMemo(() => new Map((runs ?? []).map((r) => [r.id, runProgress(r, suggestions)])), [runs, suggestions]);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   /** The data files could not be loaded: offer a reset. */
   const [storeBroken, setStoreBroken] = React.useState(false);
@@ -304,7 +328,7 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
                   <p className="text-xs text-muted-foreground">{x.emptyRunsHint}</p>
                 </div>
               ) : (
-                <RunsTable runs={runs} onOpenReview={onNavigate ? () => onNavigate("review") : undefined} />
+                <RunsTable runs={runs} progress={reviewProgress} onOpenReview={onOpenRun} />
               )}
             </section>
           </>

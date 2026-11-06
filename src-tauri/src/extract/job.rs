@@ -626,7 +626,15 @@ fn execute(
 
             // ---- store + watermark (only after this chunk succeeded)
             let total_parsed = parsed.suggestions.len();
-            let kept: Vec<_> = parsed.suggestions.into_iter().filter(meets_recurrence).collect();
+            let kept: Vec<_> = parsed
+                .suggestions
+                .into_iter()
+                .filter(meets_recurrence)
+                .map(|mut s| {
+                    s.run_id = Some(rec.id.clone());
+                    s
+                })
+                .collect();
             if kept.len() < total_parsed {
                 rec.warnings.push(format!("{}: {} suggestion(s) dropped: backed by a single mention", b.name, total_parsed - kept.len()));
             }

@@ -497,6 +497,7 @@ mod tests {
             base_hash: "h".into(),
             status: SuggestionStatus::Pending,
             origin: None,
+            run_id: None,
         }
     }
 

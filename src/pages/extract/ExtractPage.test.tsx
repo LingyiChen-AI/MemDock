@@ -19,6 +19,7 @@ vi.mock("@/api/extract", () => ({
   onExtractProgress: vi.fn(),
   onExtractFinished: vi.fn(),
   onSuggestionsChanged: vi.fn().mockResolvedValue(() => {}),
+  listSuggestions: vi.fn().mockResolvedValue([]),
   extractPromptDefaults: vi.fn().mockResolvedValue({ rules: "内置规则 {project_name}", fixed: "- 固定条款", placeholder: "{project_name}", max_chars: 20000 }),
 }));
 
@@ -27,6 +28,7 @@ import {
   extractRunners,
   getExtractConfig,
   listExtractRuns,
+  listSuggestions,
   onExtractFinished,
   onExtractProgress,
   resetExtractData,
@@ -68,6 +70,7 @@ let finishedCb: (r: RunRecord) => void = () => {};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (listSuggestions as Mock).mockResolvedValue([]);
   (getExtractConfig as Mock).mockResolvedValue(config);
   (setExtractConfig as Mock).mockImplementation((c: ExtractConfig) => Promise.resolve(c));
   (extractRunners as Mock).mockResolvedValue([
@@ -189,13 +192,30 @@ describe("ExtractPage", () => {
     expect(screen.getByText("alpha: 超时")).toBeInTheDocument();
   });
 
-  it("new-suggestion count navigates to review and times are local", async () => {
+  it("new-suggestion count opens this run's review while some are pending", async () => {
     (listExtractRuns as Mock).mockResolvedValue([run()]);
-    const onNavigate = vi.fn();
-    renderApp(<ExtractPage onNavigate={onNavigate} />);
+    (listSuggestions as Mock).mockResolvedValue([
+      { id: "a", run_id: "r1", status: "pending", created_at: 0 },
+      { id: "b", run_id: "r1", status: "accepted", created_at: 0 },
+      { id: "c", run_id: "other", status: "pending", created_at: 0 },
+    ]);
+    const onOpenRunReview = vi.fn();
+    renderApp(<ExtractPage onOpenRunReview={onOpenRunReview} />);
     expect(await screen.findByText("11-05 09:30")).toBeInTheDocument();
+    expect(await screen.findByText("部分处理 1/2")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "4" }));
-    expect(onNavigate).toHaveBeenCalledWith("review");
+    expect(onOpenRunReview).toHaveBeenCalledWith(expect.objectContaining({ id: "r1" }));
+  });
+
+  it("a fully handled run shows done and its count is not a link", async () => {
+    (listExtractRuns as Mock).mockResolvedValue([run()]);
+    (listSuggestions as Mock).mockResolvedValue([
+      { id: "a", run_id: "r1", status: "accepted", created_at: 0 },
+      { id: "b", run_id: "r1", status: "rejected", created_at: 0 },
+    ]);
+    renderApp(<ExtractPage onOpenRunReview={vi.fn()} />);
+    expect(await screen.findByText("已处理")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "4" })).not.toBeInTheDocument();
   });
 
   it("empty runs state", async () => {

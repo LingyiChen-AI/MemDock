@@ -401,6 +401,8 @@ export interface Suggestion {
   status: SuggestionStatus;
   /** Set for suggestions that did not come from an extraction run. */
   origin?: SuggestionOrigin | null;
+  /** The extraction run that produced it; absent for imports and older data. */
+  run_id?: string | null;
 }
 
 export type SuggestionOrigin = {

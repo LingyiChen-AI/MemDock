@@ -723,7 +723,15 @@ fn local_skills(
 ) -> Option<Vec<ManifestSkill>> {
     let registry =
         crate::skills::registry::load_registry(&state.data_dir.join("skills-registry.json")).ok()?;
-    let lock_entries = lock_entries_for_sync(&state.home).ok()?;
+    // An unreadable lock would make its skills look local-only: skip the merge.
+    lock_entries_for_sync(&state.home).ok()?;
+    let lock = crate::skills::source::read_skill_lock(&state.home);
+    let all: Vec<crate::model::Project> =
+        index.projects.iter().map(|pm| pm.project.clone()).collect();
+    let mut entries = crate::skills::scan::scan_skills(&state.paths, &state.home, &all);
+    for e in entries.iter_mut().filter(|e| !e.readonly) {
+        e.source = crate::skills::source::infer_source(e, &registry, &lock, state.git.as_ref());
+    }
     let keyed: Vec<(String, Option<String>)> = index
         .projects
         .iter()
@@ -735,7 +743,76 @@ fn local_skills(
             (pm.project.id.clone(), key)
         })
         .collect();
-    Some(local_entries(&registry, &lock_entries, &keyed))
+    Some(local_entries(&entries, &keyed))
+}
+
+/// What the skill-manifest commands need from the sync side (local only: no
+/// network, no keychain).
+pub(crate) struct ManifestContext {
+    /// `None` when the registry or skill lock cannot be read.
+    pub local: Option<Vec<ManifestSkill>>,
+    pub machine: Machine,
+    /// `(project_id, sync key, dir key)` of every known project.
+    pub projects: Vec<(String, Option<String>, String)>,
+    pub logged_in: bool,
+    pub last_sync_at: Option<i64>,
+}
+
+pub(crate) fn manifest_context(state: &AppState) -> Result<ManifestContext, CommandError> {
+    let st = load(state)?;
+    let index = state.snapshot_index();
+    let machine = load_or_create_machine(&sync_dir(state).join("machine.json"))?;
+    let projects = engine::sync_projects(&index, &st.included_local);
+    let local = local_skills(state, &index, &projects);
+    let keyed = index
+        .projects
+        .iter()
+        .map(|pm| {
+            let dir = Path::new(&pm.project.path);
+            let key = projects
+                .iter()
+                .find(|(_, d)| normalize_path(&d.to_string_lossy()) == pm.project.id)
+                .map(|(k, _)| k.clone());
+            (pm.project.id.clone(), key, dir_key(dir))
+        })
+        .collect();
+    Ok(ManifestContext {
+        local,
+        machine,
+        projects: keyed,
+        logged_in: st.login.is_some() && has_token_cached(state),
+        last_sync_at: st.last_sync_at,
+    })
+}
+
+/// `skills.json` in the local clone of the sync repository: the fetched remote
+/// branch, else the last synced commit. `Ok(None)` when there is no clone or
+/// the file is absent.
+pub(crate) fn cached_remote_manifest(
+    state: &AppState,
+) -> Result<Option<crate::sync::manifest::Manifest>, CommandError> {
+    let st = load(state)?;
+    let dir = repo_dir(state);
+    if !dir.join(".git").exists() {
+        return Ok(None);
+    }
+    let branch = st.branch.clone().unwrap_or_else(|| "main".into());
+    let mut refs = vec![format!("origin/{branch}")];
+    refs.extend(st.last_sync_commit.clone());
+    for r in refs {
+        match state.sync.git.read_at(&dir, &r, "skills.json") {
+            Ok(Some(bytes)) => {
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| err("manifest", "skills.json: not UTF-8 text"))?;
+                return crate::sync::manifest::Manifest::from_json(&text)
+                    .map(Some)
+                    .map_err(|m| err("manifest", format!("skills.json: {m}")));
+            }
+            Ok(None) => return Ok(None),
+            Err(_) => continue,
+        }
+    }
+    Ok(None)
 }
 
 fn make_ctx<'a>(state: &'a AppState, p: &'a Parts, auth: Auth) -> SyncCtx<'a> {

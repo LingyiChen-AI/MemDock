@@ -3,6 +3,7 @@ pub mod commands_env;
 pub mod commands_extract;
 pub mod commands_sessions;
 pub mod commands_ghimport;
+pub mod commands_skill_manifest;
 pub mod commands_skills;
 pub mod commands_sync;
 pub mod commands_usage;
@@ -157,6 +158,10 @@ pub fn run() {
             commands_skills::read_skill_file,
             commands_skills::read_skill_backup_file,
             commands_skills::write_skill_file,
+            commands_skill_manifest::skill_manifest_local,
+            commands_skill_manifest::skill_manifest_compare,
+            commands_skill_manifest::skill_manifest_export,
+            commands_skill_manifest::skill_manifest_import,
             commands_sync::sync_status,
             commands_sync::login_start,
             commands_sync::login_cancel,

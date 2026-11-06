@@ -1,0 +1,17 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "MemDock",
+        "minWidth": 1024,
+        "minHeight": 640,
+        "width": 1180,
+        "height": 740,
+        "center": true,
+        "visible": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ]
+  }
+}

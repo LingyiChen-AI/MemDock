@@ -18,6 +18,10 @@
     "system": "System"
   },
   "shell": {
+    "winMinimize": "Minimize",
+    "winMaximize": "Maximize",
+    "winRestore": "Restore",
+    "winClose": "Close (to tray)",
     "openLinkHint": "Click to open in the browser: {url}",
     "github": "MemDock on GitHub",
     "mainNav": "Main navigation",

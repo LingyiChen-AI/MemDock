@@ -37,6 +37,7 @@ import { AppearanceControls } from "@/components/appearance/AppearanceControls";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GithubMark } from "@/components/brand/GithubMark";
 import { cn } from "@/lib/utils";
+import { IS_MAC as IS_MAC_WINDOW, WindowTitleBar } from "./WindowControls";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Placeholder } from "@/pages/Placeholder";
 import logoUrl from "@/assets/memdock-logo.svg";
@@ -260,8 +261,8 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
   return (
     <SidebarProvider className="h-screen min-h-0">
       <Sidebar collapsible="icon" aria-label={t.shell.mainNav}>
-        <SidebarHeader className="px-2 pt-3 pb-3.5">
-          <div className="flex items-center gap-2 px-2 py-1 text-[15px] font-semibold group-data-[collapsible=icon]:px-0">
+        <SidebarHeader data-tauri-drag-region className={cn("px-2 pb-3.5", IS_MAC_WINDOW ? "pt-9" : "pt-3")}>
+          <div data-tauri-drag-region className="flex items-center gap-2 px-2 py-1 text-[15px] font-semibold group-data-[collapsible=icon]:px-0">
             <img src={logoUrl} alt="MemDock" width={24} height={24} className="size-6 shrink-0 group-data-[collapsible=icon]:mx-auto" />
             <span aria-hidden="true" className="group-data-[collapsible=icon]:hidden">MemDock</span>
           </div>
@@ -337,7 +338,10 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-        {current === "memory" ? children : (pages?.[current] ?? <Placeholder icon={page.icon} />)}
+        <WindowTitleBar />
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {current === "memory" ? children : (pages?.[current] ?? <Placeholder icon={page.icon} />)}
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );

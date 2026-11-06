@@ -64,7 +64,7 @@ pub fn run() {
         // VISIBLE is excluded: the window starts hidden and setup shows it once it is sized.
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE & !StateFlags::DECORATIONS)
                 .build(),
         )
         .on_window_event(|win, event| tray::handle_window_event(win, event))
@@ -90,6 +90,9 @@ pub fn run() {
                     }
                 }
                 // Always show, even if sizing failed.
+                // MemDock draws its own title strip (src/layout/WindowControls.tsx); macOS keeps the native one.
+                #[cfg(not(target_os = "macos"))]
+                let _ = win.set_decorations(false);
                 let _ = win.show();
             }
             let data_dir = app.path().app_data_dir()?;

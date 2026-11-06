@@ -18,6 +18,10 @@
     "system": "系统"
   },
   "shell": {
+    "winMinimize": "最小化",
+    "winMaximize": "最大化",
+    "winRestore": "还原",
+    "winClose": "关闭（缩到托盘）",
     "openLinkHint": "点击在浏览器中打开：{url}",
     "github": "在 GitHub 上查看 MemDock",
     "mainNav": "主导航",

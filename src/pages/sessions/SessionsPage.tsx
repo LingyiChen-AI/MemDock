@@ -185,10 +185,16 @@ function PreviewPane({
             </p>
             <p className="font-mono text-[11px] text-muted-foreground select-all">{session.id}</p>
           </div>
-          <Button type="button" size="sm" className="shrink-0 cursor-pointer" disabled={converting || !preview} onClick={onConvert}>
-            {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
-            {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[target] })}
-          </Button>
+          {session.converted_from?.tool === target ? (
+            <p className="max-w-64 shrink-0 text-right text-xs text-muted-foreground">
+              {fmt(s.noConvertBack, { tool: s.tools[target] })}
+            </p>
+          ) : (
+            <Button type="button" size="sm" className="shrink-0 cursor-pointer" disabled={converting || !preview} onClick={onConvert}>
+              {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
+              {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[target] })}
+            </Button>
+          )}
         </div>
         {stats ? (
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">

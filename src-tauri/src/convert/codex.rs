@@ -208,7 +208,7 @@ pub fn render(out: &[Out], meta: &MetaInfo, note: Option<&str>) -> Vec<String> {
             "originator": "memdock",
             "cli_version": "0.0.0",
             "instructions": null,
-            "source": "cli",
+            "source": "vscode", // Codex Desktop writes "vscode"; a "cli" thread did not show in its list
             "model_provider": meta.model_provider,
         }),
     )];
@@ -371,7 +371,7 @@ pub fn register_thread(db: &Path, row: &ThreadRow) -> Result<bool, String> {
         ("updated_at_ms", Sql::Integer(row.updated_ms)),
         ("recency_at", Sql::Integer(secs(row.updated_ms))),
         ("recency_at_ms", Sql::Integer(row.updated_ms)),
-        ("source", Sql::Text("cli".into())),
+        ("source", Sql::Text("vscode".into())),
         ("model_provider", Sql::Text(row.model_provider.into())),
         ("cwd", Sql::Text(row.cwd.into())),
         ("title", Sql::Text(row.title.into())),

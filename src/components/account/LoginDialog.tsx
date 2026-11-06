@@ -10,6 +10,7 @@ import {
   syncStatus,
 } from "@/api/sync";
 import type { DeviceCodeInfo, LoginEvent, SyncStatus } from "@/api/types";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -153,6 +154,29 @@ export function LoginDialog({ open, onOpenChange, status, onStatus, notify }: Lo
     }
   };
 
+  /** Backend opener first, then the JS plugin; if both fail, copy the link and say so. */
+  const openGithub = async (uri: string) => {
+    setError(null);
+    try {
+      await openVerificationUrl();
+      return;
+    } catch (e) {
+      console.error("open_verification_url failed", e);
+    }
+    try {
+      await openUrl(uri);
+      return;
+    } catch (e) {
+      console.error("opener openUrl failed", e);
+    }
+    try {
+      await navigator.clipboard.writeText(uri);
+    } catch {
+      // ignore: the link is shown in the message anyway
+    }
+    setError(fmt(a.openFailed, { url: uri }));
+  };
+
   const submitName = async () => {
     const n = name.trim();
     if (!REPO_NAME.test(n)) {
@@ -228,6 +252,10 @@ export function LoginDialog({ open, onOpenChange, status, onStatus, notify }: Lo
               {copied ? <Check className="size-4 text-accent-text" aria-hidden="true" /> : <Copy className="size-4" aria-hidden="true" />}
             </button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {a.openManually} <span className="font-mono select-all">{step.info.verification_uri}</span>
+          </p>
+          {error ? <InlineError message={error} /> : null}
           <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin text-accent-text motion-reduce:animate-none" aria-hidden="true" />
             {a.waiting}
@@ -236,7 +264,7 @@ export function LoginDialog({ open, onOpenChange, status, onStatus, notify }: Lo
             <Button type="button" variant="outline" onClick={close} className={SMALL}>
               {a.cancel}
             </Button>
-            <Button type="button" onClick={() => void openVerificationUrl().catch(() => {})} className={`${SMALL} font-semibold`}>
+            <Button type="button" onClick={() => void openGithub(step.info.verification_uri)} className={`${SMALL} font-semibold`}>
               <ExternalLink className="size-4" aria-hidden="true" />
               {a.openGithub}
             </Button>

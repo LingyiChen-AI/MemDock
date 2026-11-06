@@ -1336,7 +1336,10 @@ pub fn open_verification_url(app: AppHandle) -> Result<(), CommandError> {
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_url(VERIFICATION_URL, None::<&str>)
-        .map_err(|e| err("io", e.to_string()))
+        .map_err(|e| {
+            eprintln!("open_verification_url failed: {e}");
+            err("io", e.to_string())
+        })
 }
 
 #[tauri::command(async)]

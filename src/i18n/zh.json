@@ -508,6 +508,8 @@
     "copy": "复制验证码",
     "copied": "已复制",
     "openGithub": "打开 GitHub",
+    "openFailed": "打开失败，链接已复制，请粘贴到浏览器打开：{url}",
+    "openManually": "打不开可手动访问：",
     "waiting": "等待你在 GitHub 上授权…",
     "cancel": "取消",
     "close": "关闭",

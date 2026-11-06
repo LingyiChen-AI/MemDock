@@ -508,6 +508,8 @@
     "copy": "Copy code",
     "copied": "Copied",
     "openGithub": "Open GitHub",
+    "openFailed": "Couldn't open the browser. The link is copied, paste it into your browser: {url}",
+    "openManually": "Or open manually:",
     "waiting": "Waiting for you to authorize on GitHub…",
     "cancel": "Cancel",
     "close": "Close",

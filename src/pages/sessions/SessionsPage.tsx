@@ -78,9 +78,6 @@ function SessionRow({ session, selected, onSelect, s }: { session: SessionSummar
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{heading}</span>
         <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(session.updated_at)}</span>
       </div>
-      {session.title && session.first_prompt ? (
-        <p className="line-clamp-2 text-xs text-muted-foreground">{session.first_prompt}</p>
-      ) : null}
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
         {session.continued ? (
           <span className="rounded bg-muted px-1.5 text-foreground/70" title={s.continuedHint}>

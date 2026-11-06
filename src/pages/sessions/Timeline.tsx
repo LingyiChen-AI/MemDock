@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { formatIso } from "./sessionsUtils";
 
 type S = Messages["sessions"];
@@ -164,12 +165,15 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
   );
 }
 
+/** Markdown body; long ones are capped in height behind a fade until expanded. */
 function LongText({ text, s }: { text: string; s: S }) {
   const [open, setOpen] = React.useState(false);
-  const long = text.length > LONG_TEXT;
+  const long = text.length > LONG_TEXT || text.split("\n").length > 18;
   return (
     <div className="min-w-0">
-      <p className={cn("whitespace-pre-wrap [overflow-wrap:anywhere]", long && !open && "line-clamp-[12]")}>{text}</p>
+      <div className={cn(long && !open && "max-h-72 overflow-hidden [mask-image:linear-gradient(to_bottom,black_80%,transparent)]")}>
+        <ChatMarkdown text={text} />
+      </div>
       {long ? (
         <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1.5 cursor-pointer text-xs font-medium text-primary hover:underline">
           {open ? s.collapse : s.expand}

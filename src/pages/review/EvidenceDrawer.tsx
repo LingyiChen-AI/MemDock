@@ -87,19 +87,26 @@ function Turn({ turn, quote, hit }: { turn: ContextTurn; quote: string; hit: boo
   );
 }
 
-function Group({ ctx }: { ctx: SuggestionContext }) {
+function Group({ ctx, index, total }: { ctx: SuggestionContext; index: number; total: number }) {
   const { t } = useI18n();
   const r = t.review;
   const { evidence, turns } = ctx;
   // The turn that contains the quote; if no turn does, nothing is highlighted.
   const hitIndex = findHit(turns, evidence.quote);
   return (
-    <section className="space-y-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <ToolTag tool={evidence.tool} />
-        <CopyId id={evidence.session_id} />
-        <span>{formatSnapshotTime(evidence.ts)}</span>
-      </div>
+    <section className="space-y-3">
+      <header className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {total > 1 ? <span className="font-semibold text-foreground">{fmt(r.evidenceN, { n: index + 1, total })}</span> : null}
+          <ToolTag tool={evidence.tool} />
+          <span className="inline-flex items-center gap-1">
+            {r.sessionLabel}
+            <CopyId id={evidence.session_id} />
+          </span>
+          <span className="tabular-nums">{formatSnapshotTime(evidence.ts)}</span>
+        </div>
+        {evidence.quote ? <p className="line-clamp-2 text-xs text-foreground/80">{fmt(r.quoteLine, { quote: evidence.quote })}</p> : null}
+      </header>
       {turns.length > 0 && hitIndex < 0 ? <p className="text-xs text-warning">{r.quoteNotFound}</p> : null}
       {turns.length === 0 ? (
         <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
@@ -152,7 +159,7 @@ export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawe
           <SheetTitle className="text-base font-semibold">{r.drawerTitle}</SheetTitle>
           <SheetDescription className="text-xs">{r.drawerDesc}</SheetDescription>
         </SheetHeader>
-        <div ref={bodyRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+        <div ref={bodyRef} className="min-h-0 flex-1 space-y-8 overflow-y-auto p-5">
           {error ? (
             <p role="alert" className="text-sm text-destructive">
               {fmt(r.drawerFailed, { message: error })}
@@ -166,7 +173,7 @@ export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawe
           ) : data.length === 0 ? (
             <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
           ) : (
-            data.map((ctx, i) => <Group key={`${ctx.evidence.session_id}-${ctx.evidence.ts}-${i}`} ctx={ctx} />)
+            data.map((ctx, i) => <Group key={`${ctx.evidence.session_id}-${ctx.evidence.ts}-${i}`} ctx={ctx} index={i} total={data.length} />)
           )}
         </div>
       </SheetContent>

@@ -453,6 +453,9 @@
     "resetFailed": "重置失败：{message}"
   },
   "review": {
+    "evidenceN": "证据 {n} / {total}",
+    "sessionLabel": "会话",
+    "quoteLine": "引用：“{quote}”",
     "hitBadge": "命中",
     "expand": "展开全文",
     "collapse": "收起",

@@ -453,6 +453,9 @@
     "resetFailed": "Reset failed: {message}"
   },
   "review": {
+    "evidenceN": "Evidence {n} of {total}",
+    "sessionLabel": "Session",
+    "quoteLine": "Quote: “{quote}”",
     "hitBadge": "Quoted",
     "expand": "Show all",
     "collapse": "Show less",

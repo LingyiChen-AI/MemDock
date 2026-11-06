@@ -16,6 +16,7 @@ vi.mock("@/api/skills", () => ({
 vi.mock("@/api/sync", () => ({
   syncStatus: vi.fn(),
   syncStart: vi.fn(),
+  syncSkippedFiles: vi.fn(),
   syncFinish: vi.fn(),
   syncDiscard: vi.fn().mockResolvedValue(undefined),
   syncProjects: vi.fn(),
@@ -27,7 +28,7 @@ vi.mock("@/api/sync", () => ({
 }));
 
 import { installSkill } from "@/api/skills";
-import { restoreFromHistory, syncFinish, syncHistory, syncProjects, syncStart, syncStatus } from "@/api/sync";
+import { restoreFromHistory, syncFinish, syncHistory, syncProjects, syncSkippedFiles, syncStart, syncStatus } from "@/api/sync";
 import { renderApp } from "@/test/fixtures";
 import { SyncPage } from "./SyncPage";
 
@@ -38,6 +39,7 @@ const status: SyncStatus = {
   last_sync_at: null,
   pending: 2,
   needs: null,
+  remote_has_memory: false,
 };
 
 const textConflict: SyncConflict = {
@@ -69,6 +71,9 @@ const plan = (over: Partial<SyncPlan> = {}): SyncPlan => ({
   secret_hits: [],
   missing_skills: [],
   removed_elsewhere: [],
+  download: false,
+  kept_local: [],
+  absent: [],
   ...over,
 });
 
@@ -81,6 +86,7 @@ beforeEach(() => {
     { project_id: "/work/jev", name: "jev", key: "github.com/x/jev", dir_key: "jev", included: true },
   ]);
   (syncHistory as Mock).mockResolvedValue([]);
+  (syncSkippedFiles as Mock).mockResolvedValue([]);
 });
 
 function setup(s: SyncStatus | null = status) {
@@ -92,7 +98,7 @@ function setup(s: SyncStatus | null = status) {
 async function startWith(p: SyncPlan) {
   (syncStart as Mock).mockResolvedValue({ kind: "needs_resolution", plan: p });
   setup();
-  await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
+  await userEvent.click(await screen.findByRole("button", { name: "上传到云端" }));
   await screen.findByText("处理同步冲突");
 }
 
@@ -113,7 +119,7 @@ describe("SyncPage", () => {
     });
     setup();
     expect(await screen.findByText("octo/MemDockHub")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "同步记忆" }));
+    await userEvent.click(screen.getByRole("button", { name: "上传到云端" }));
     expect(await screen.findByText("已同步：拉取 1、推送 2、自动合并 3")).toBeInTheDocument();
     expect(screen.getByText("本机文件不是 UTF-8 文本")).toBeInTheDocument();
   });
@@ -122,15 +128,15 @@ describe("SyncPage", () => {
     let resolve: (v: unknown) => void = () => {};
     (syncStart as Mock).mockReturnValue(new Promise((r) => (resolve = r)));
     setup();
-    await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
-    expect(screen.getByRole("button", { name: "同步中…" })).toBeDisabled();
+    await userEvent.click(await screen.findByRole("button", { name: "上传到云端" }));
+    expect(screen.getByRole("button", { name: "上传中…" })).toBeDisabled();
     await act(async () => resolve({ kind: "blocked", secret_hits: [] }));
   });
 
   it("maps error codes to messages", async () => {
     (syncStart as Mock).mockRejectedValue({ code: "sync_busy", message: "busy" });
     setup();
-    await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
+    await userEvent.click(await screen.findByRole("button", { name: "上传到云端" }));
     expect(await screen.findByText("已有一次同步正在进行，请稍后再试。")).toBeInTheDocument();
   });
 
@@ -140,13 +146,17 @@ describe("SyncPage", () => {
       secret_hits: [{ repo_path: "global/claude/CLAUDE.md", line: 12, rule: "github_token" }],
     });
     setup();
-    await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
+    await userEvent.click(await screen.findByRole("button", { name: "上传到云端" }));
     const box = await screen.findByRole("dialog", { name: "发现疑似密钥" });
-    expect(within(box).getByText("global/claude/CLAUDE.md")).toBeInTheDocument();
+    expect(within(box).getByText("CLAUDE.md")).toBeInTheDocument();
+    expect(within(box).getByText("global/claude")).toBeInTheDocument();
+    expect(within(box).getByTitle("global/claude/CLAUDE.md")).toBeInTheDocument();
     expect(within(box).getByText("第 12 行")).toBeInTheDocument();
     expect(within(box).getByText("github_token")).toBeInTheDocument();
+    const allow = within(box).getByRole("button", { name: "坚持同步" });
+    expect(allow).toHaveAccessibleDescription(/密钥可能因此泄露/);
     await userEvent.click(within(box).getByRole("button", { name: "跳过这些文件，继续同步" }));
-    expect(syncStart).toHaveBeenLastCalledWith("skip");
+    expect(syncStart).toHaveBeenLastCalledWith("skip", "up");
   });
 
   it("finish_disabled_until_resolved", async () => {
@@ -219,7 +229,7 @@ describe("SyncPage", () => {
       removed_elsewhere: [],
     });
     setup();
-    await userEvent.click(await screen.findByRole("button", { name: "同步记忆" }));
+    await userEvent.click(await screen.findByRole("button", { name: "上传到云端" }));
     await userEvent.click(await screen.findByRole("button", { name: "安装 pdf" }));
     expect(installSkill).toHaveBeenCalledWith(
       { type: "git", url: "https://github.com/x/skills", clone_url: "https://github.com/x/skills", git_ref: "main", skill_path: "pdf", commit: "abc" },
@@ -238,5 +248,121 @@ describe("SyncPage", () => {
     expect(restoreFromHistory).not.toHaveBeenCalled();
     await userEvent.click(await screen.findByRole("button", { name: "恢复" }));
     await waitFor(() => expect(restoreFromHistory).toHaveBeenCalledWith("c9", "global/claude/CLAUDE.md"));
+  });
+});
+
+const pdfSkill = {
+  name: "pdf",
+  url: "https://github.com/x/skills",
+  git_ref: "main",
+  commit: "abc",
+  skill_path: "pdf",
+  tool: "claude" as const,
+  scope: { type: "project" as const, key: "github.com/x/jev" },
+  installed_on: ["m1"],
+  removed_on: [],
+};
+
+const doneDown = (over: Record<string, unknown> = {}) => ({
+  kind: "done",
+  summary: { commit: "c1", committed: false, pulled: 4, pushed: 0, merged: 1 },
+  skipped: [],
+  missing_skills: [],
+  removed_elsewhere: [],
+  download: true,
+  kept_local: [],
+  absent: [],
+  ...over,
+});
+
+describe("SyncPage directions", () => {
+  it("shows both actions with hints", async () => {
+    setup();
+    const up = await screen.findByRole("button", { name: "上传到云端" });
+    expect(up).toHaveAccessibleDescription("先合并云端的改动，再把本机的改动推上去");
+    const down = screen.getByRole("button", { name: "同步到本地" });
+    expect(down).toHaveAccessibleDescription("只把云端的记忆拉到本机，不上传任何内容");
+  });
+
+  it("download sends direction down and reports what stayed out", async () => {
+    (syncStart as Mock).mockResolvedValue(
+      doneDown({
+        kept_local: ["global/claude/CLAUDE.md"],
+        absent: [
+          { repo_path: "projects/github.com/x/other/claude/CLAUDE.md", project_key: "github.com/x/other", reason: "no_project" },
+          { repo_path: "projects/github.com/x/other/codex/AGENTS.md", project_key: "github.com/x/other", reason: "no_project" },
+        ],
+      }),
+    );
+    setup();
+    await userEvent.click(await screen.findByRole("button", { name: "同步到本地" }));
+    expect(syncStart).toHaveBeenLastCalledWith("block", "down");
+    expect(await screen.findByText("已同步到本地：写入 4、合并 1")).toBeInTheDocument();
+    expect(screen.getByText("本机还有 1 处改动没有上传，需要时点「上传到云端」。")).toBeInTheDocument();
+    const absent = screen.getByRole("region", { name: "这些云端文件没有写入本机（2）" });
+    expect(within(absent).getByText("github.com/x/other")).toBeInTheDocument();
+    expect(within(absent).getByText("本机没有这个项目")).toBeInTheDocument();
+    expect(within(absent).getByText("2 个文件")).toBeInTheDocument();
+  });
+
+  it("new computer is offered a one-click download", async () => {
+    (syncStart as Mock).mockResolvedValue(doneDown());
+    setup({ ...status, remote_has_memory: true });
+    const banner = await screen.findByRole("region", { name: "检测到云端已有记忆" });
+    await userEvent.click(within(banner).getByRole("button", { name: "一键同步到本机" }));
+    expect(syncStart).toHaveBeenLastCalledWith("block", "down");
+  });
+
+  it("no new-computer banner after a sync", async () => {
+    setup({ ...status, remote_has_memory: false, last_sync_at: 1 });
+    await screen.findByRole("button", { name: "上传到云端" });
+    expect(screen.queryByRole("region", { name: "检测到云端已有记忆" })).not.toBeInTheDocument();
+  });
+
+  it("download conflicts use local-only wording", async () => {
+    (syncStart as Mock).mockResolvedValue({ kind: "needs_resolution", plan: plan({ download: true }) });
+    setup();
+    await userEvent.click(await screen.findByRole("button", { name: "同步到本地" }));
+    expect(await screen.findByText("处理同步到本地的冲突")).toBeInTheDocument();
+    expect(screen.getByText(/处理结果只写入本机，不会上传/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "写入本机" })).toBeDisabled();
+  });
+
+  it("lists persisted unsynced files and opens them", async () => {
+    (syncSkippedFiles as Mock).mockResolvedValue([
+      {
+        repo_path: "global/claude/CLAUDE.md",
+        reason: "secret",
+        at: 1_700_000_000_000,
+        local_path: "/home/u/.claude/CLAUDE.md",
+        file_id: "/home/u/.claude/claude.md",
+      },
+    ]);
+    const onOpen = vi.fn();
+    renderApp(<SyncPage status={status} onStatus={vi.fn()} onOpenLogin={vi.fn()} onOpenMemoryFile={onOpen} />);
+    const box = await screen.findByRole("region", { name: "未同步的文件（1）" });
+    expect(within(box).getByText("CLAUDE.md")).toBeInTheDocument();
+    expect(within(box).getByText("/home/u/.claude")).toBeInTheDocument();
+    expect(within(box).getByText("疑似包含密钥")).toBeInTheDocument();
+    expect(within(box).getByText(/^跳过于 /)).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole("button", { name: "在记忆页打开 CLAUDE.md" }));
+    expect(onOpen).toHaveBeenCalledWith("/home/u/.claude/claude.md");
+  });
+
+  it("install all asks first, lists blocked skills, then installs one by one", async () => {
+    const other = { ...pdfSkill, name: "xlsx", skill_path: "xlsx", scope: { type: "project" as const, key: "github.com/x/absent" } };
+    const global = { ...pdfSkill, name: "docx", skill_path: "docx", scope: { type: "global" as const } };
+    (syncStart as Mock).mockResolvedValue(doneDown({ missing_skills: [pdfSkill, other, global] }));
+    setup();
+    await userEvent.click(await screen.findByRole("button", { name: "同步到本地" }));
+    await userEvent.click(await screen.findByRole("button", { name: "全部安装" }));
+    const dlg = await screen.findByRole("dialog", { name: "安装云端的 Skill" });
+    expect(installSkill).not.toHaveBeenCalled();
+    expect(within(dlg).getByText("以下 1 个无法自动安装（本机没有对应项目）：")).toBeInTheDocument();
+    expect(within(dlg).getByText("xlsx")).toBeInTheDocument();
+    await userEvent.click(within(dlg).getByRole("button", { name: "全部安装" }));
+    await waitFor(() => expect(installSkill).toHaveBeenCalledTimes(2));
+    expect((installSkill as Mock).mock.calls.map((c) => c[0].skill_path)).toEqual(["pdf", "docx"]);
+    expect(await screen.findByText("Skill 安装完成：成功 2，失败 0")).toBeInTheDocument();
   });
 });

@@ -27,6 +27,7 @@ function Shell() {
   const onDirty = useCallback((d: boolean) => setDirty(d), []);
   const [syncStatus, setSyncStatus] = useSyncStatus();
   const [loginOpen, setLoginOpen] = useState(false);
+  const [openRequest, setOpenRequest] = useState<{ fileId: string; nonce: number } | null>(null);
   const toasts = useToasts();
 
   const navigate = (key: NavKey) => {
@@ -47,14 +48,23 @@ function Shell() {
           extract: <ExtractPage onNavigate={navigate} onDirtyChange={onDirty} />,
           skills: <SkillsPage onDirtyChange={onDirty} />,
           sync: (
-            <SyncPage status={syncStatus} onStatus={setSyncStatus} onOpenLogin={() => setLoginOpen(true)} onDirtyChange={onDirty} />
+            <SyncPage
+              status={syncStatus}
+              onStatus={setSyncStatus}
+              onOpenLogin={() => setLoginOpen(true)}
+              onDirtyChange={onDirty}
+              onOpenMemoryFile={(fileId) => {
+                setOpenRequest((prev) => ({ fileId, nonce: (prev?.nonce ?? 0) + 1 }));
+                navigate("memory");
+              }}
+            />
           ),
           sessions: <SessionsPage />,
           usage: <UsagePage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}
       >
-        <MemoryPage onDirtyChange={onDirty} pendingByProject={pending?.by_project} />
+        <MemoryPage onDirtyChange={onDirty} pendingByProject={pending?.by_project} openRequest={openRequest} />
       </AppShell>
       <ConfirmDialog
         open={pendingNav !== null}

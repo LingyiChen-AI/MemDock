@@ -164,6 +164,7 @@ pub fn run() {
             commands_sync::ack_public_repo,
             commands_sync::open_verification_url,
             commands_sync::sync_start,
+            commands_sync::sync_skipped_files,
             commands_sync::sync_finish,
             commands_sync::sync_discard,
             commands_sync::set_included_local,

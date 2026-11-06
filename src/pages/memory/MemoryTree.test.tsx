@@ -158,3 +158,19 @@ describe("MemoryTree", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });
+
+describe("MemoryTree skipped files", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("marks files the last sync skipped", () => {
+    setup({ skipped: { [globalClaude.id]: "secret" } });
+    const mark = screen.getByRole("img", { name: /上次同步时因疑似密钥被跳过/ });
+    expect(mark).toHaveAttribute("title", expect.stringContaining("疑似密钥"));
+    expect(screen.getAllByRole("img", { name: /上次同步时/ })).toHaveLength(1);
+  });
+
+  it("explains other skip reasons", () => {
+    setup({ skipped: { [globalClaude.id]: "not_utf8_local" } });
+    expect(screen.getByRole("img", { name: "上次同步时被跳过：本机文件不是 UTF-8 文本" })).toBeInTheDocument();
+  });
+});

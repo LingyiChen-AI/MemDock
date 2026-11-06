@@ -1,9 +1,9 @@
 import * as React from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Globe, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Globe, Plus, Search, ShieldAlert } from "lucide-react";
 import { ContextMenu } from "radix-ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { addManualProject, removeManualProject } from "@/api/memory";
-import type { MemoryFile, MemoryIndex, Project, ProjectMemories } from "@/api/types";
+import type { MemoryFile, MemoryIndex, Project, ProjectMemories, SkippedReason } from "@/api/types";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -31,6 +31,8 @@ export interface MemoryTreeProps {
   hideHeader?: boolean;
   /** Pending review suggestions per project id (`__global__` for the global group). */
   pendingByProject?: Record<string, number>;
+  /** Files the last syncs left out: memory file id -> reason. */
+  skipped?: Record<string, SkippedReason>;
 }
 
 type Row =
@@ -95,7 +97,17 @@ function loadShowEmpty(): boolean {
   }
 }
 
-export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemoveRequest, onSearchOpen, pendingByProject, hideHeader }: MemoryTreeProps) {
+export function MemoryTree({
+  index,
+  selectedKey,
+  onSelect,
+  onIndexChange,
+  onRemoveRequest,
+  onSearchOpen,
+  pendingByProject,
+  hideHeader,
+  skipped,
+}: MemoryTreeProps) {
   const { t } = useI18n();
   const m = t.memory;
   const [query, setQuery] = React.useState("");
@@ -363,6 +375,7 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
               hidden={item.kind === "project" && hidden.has(item.entry.project.id)}
               onToggleHidden={toggleHidden}
               pending={item.kind === "project" ? (pendingByProject?.[item.entry.project.id] ?? 0) : 0}
+              skippedReason={item.kind === "file" ? skipped?.[item.file.id] : undefined}
             />
           );
         })}
@@ -419,8 +432,10 @@ function TreeRow({
   pending,
   hidden = false,
   onToggleHidden,
+  skippedReason,
 }: {
   pending: number;
+  skippedReason?: SkippedReason;
   hidden?: boolean;
   onToggleHidden?: (projectId: string) => void;
   row: Row;
@@ -543,7 +558,20 @@ function TreeRow({
       <span className={cn("min-w-0 truncate", !isDb && "font-mono text-[12.5px]")}>
         {isDb ? m.codexDb : basename(file.path)}
       </span>
+      {skippedReason ? <SkippedMark reason={skippedReason} /> : null}
       <span className="ml-auto shrink-0 text-xs text-muted-foreground">{meta}</span>
     </div>
+  );
+}
+
+/** Small warning mark on a file the last sync left out. */
+function SkippedMark({ reason }: { reason: SkippedReason }) {
+  const { t } = useI18n();
+  const text =
+    reason === "secret" ? t.memory.skippedSecret : fmt(t.memory.skippedOther, { reason: t.sync.reasons[reason] ?? reason });
+  return (
+    <span role="img" aria-label={text} title={text} className="grid shrink-0 place-items-center text-warning">
+      <ShieldAlert className="size-3.5" aria-hidden="true" />
+    </span>
   );
 }

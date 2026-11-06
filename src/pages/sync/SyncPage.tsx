@@ -1,14 +1,35 @@
 import * as React from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CircleDot, CircleCheck, ExternalLink, FileWarning, Loader2, LogIn, LogOut, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
-import { logout, syncDiscard, syncFinish, syncProjects, syncStart, syncStatus } from "@/api/sync";
+import {
+  CircleCheck,
+  CircleDot,
+  CloudDownload,
+  CloudUpload,
+  ExternalLink,
+  FileKey2,
+  FileWarning,
+  FolderX,
+  Loader2,
+  LogIn,
+  LogOut,
+  RefreshCw,
+  ShieldAlert,
+  SkipForward,
+  SquareArrowOutUpRight,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
+import { logout, syncDiscard, syncFinish, syncProjects, syncSkippedFiles, syncStart, syncStatus } from "@/api/sync";
 import type {
   FileSecretHit,
   ManifestSkill,
   SyncPlan,
+  SyncAbsentFile,
+  SyncDirection,
   SyncProject,
   SyncResolution,
   SyncSkipped,
+  SyncSkippedRecord,
   SyncStatus,
   SyncSummary,
 } from "@/api/types";
@@ -27,6 +48,7 @@ import { ChoiceButton, ConflictResolver, resolutionOf, type ConflictState } from
 import { MissingSkills } from "./MissingSkills";
 import { ProjectMapping } from "./ProjectMapping";
 import { SyncHistory } from "./SyncHistory";
+import { middleEllipsis, splitPath } from "./pathText";
 
 export interface SyncPageProps {
   status: SyncStatus | null;
@@ -34,27 +56,50 @@ export interface SyncPageProps {
   onOpenLogin: () => void;
   /** An open resolution counts as unsaved work. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Opens a memory file (index id) on the memory page. */
+  onOpenMemoryFile?: (fileId: string) => void;
 }
 
 interface Extras {
   skipped: SyncSkipped[];
   missing: ManifestSkill[];
   removed: ManifestSkill[];
+  download: boolean;
+  keptLocal: string[];
+  absent: SyncAbsentFile[];
 }
+
+const extrasOf = (x: {
+  skipped: SyncSkipped[];
+  missing_skills: ManifestSkill[];
+  removed_elsewhere: ManifestSkill[];
+  download: boolean;
+  kept_local: string[];
+  absent: SyncAbsentFile[];
+}): Extras => ({
+  skipped: x.skipped,
+  missing: x.missing_skills,
+  removed: x.removed_elsewhere,
+  download: !!x.download,
+  keptLocal: x.kept_local ?? [],
+  absent: x.absent ?? [],
+});
 
 /** Errors after which the plan can no longer be finished. */
 const PLAN_DEAD = new Set(["plan_not_found", "local_changed", "remote_moved", "unauthorized"]);
 
-export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncPageProps) {
+export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenMemoryFile }: SyncPageProps) {
   const { t, language } = useI18n();
   const s = t.sync;
   const { toasts, push, dismiss } = useToasts();
-  const [syncing, setSyncing] = React.useState(false);
+  const [running, setRunning] = React.useState<SyncDirection | null>(null);
+  const syncing = running !== null;
   const [error, setError] = React.useState<string | null>(null);
   const [hits, setHits] = React.useState<FileSecretHit[] | null>(null);
   const [extras, setExtras] = React.useState<Extras | null>(null);
   const [plan, setPlan] = React.useState<SyncPlan | null>(null);
   const [projects, setProjects] = React.useState<SyncProject[] | null>(null);
+  const [records, setRecords] = React.useState<SyncSkippedRecord[]>([]);
   const [historyKey, setHistoryKey] = React.useState(0);
   const [confirmLogout, setConfirmLogout] = React.useState(false);
   const loggedIn = !!status?.logged_in;
@@ -76,6 +121,19 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
       alive = false;
     };
   }, [loggedIn]);
+
+  // Persistent skip records: reloaded after every sync (historyKey changes).
+  React.useEffect(() => {
+    if (!loggedIn) return;
+    let alive = true;
+    Promise.resolve()
+      .then(() => syncSkippedFiles())
+      .then((r) => alive && setRecords(Array.isArray(r) ? r : []))
+      .catch(() => alive && setRecords([]));
+    return () => {
+      alive = false;
+    };
+  }, [loggedIn, historyKey]);
 
   const formatTime = React.useCallback(
     (ms: number) =>
@@ -106,16 +164,21 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
     return summary;
   };
 
-  const run = async (secrets: "block" | "allow" | "skip" = "block") => {
-    setSyncing(true);
+  const toastFor = (download: boolean, sm: SyncSummary, after: boolean) =>
+    download
+      ? fmt(s.downloadDoneToast, { pulled: sm.pulled, merged: sm.merged })
+      : fmt(after ? s.finishedToast : s.doneToast, { pulled: sm.pulled, pushed: sm.pushed, merged: sm.merged });
+
+  const run = async (secrets: "block" | "allow" | "skip" = "block", direction: SyncDirection = "up") => {
+    setRunning(direction);
     setError(null);
     setHits(null);
     setExtras(null);
     try {
-      const r = await syncStart(secrets);
+      const r = await syncStart(secrets, direction);
       if (r.kind === "done") {
-        const sm = finished(r.summary, { skipped: r.skipped, missing: r.missing_skills, removed: r.removed_elsewhere });
-        push("success", fmt(s.doneToast, { pulled: sm.pulled, pushed: sm.pushed, merged: sm.merged }));
+        const sm = finished(r.summary, extrasOf(r));
+        push("success", toastFor(!!r.download, sm, false));
       } else if (r.kind === "blocked") {
         setHits(r.secret_hits);
       } else {
@@ -124,7 +187,7 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
     } catch (e) {
       handleError(e);
     } finally {
-      setSyncing(false);
+      setRunning(null);
     }
   };
 
@@ -147,8 +210,8 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
           onFinished={(summary) => {
             const p = plan;
             setPlan(null);
-            finished(summary, { skipped: p.skipped, missing: p.missing_skills, removed: p.removed_elsewhere });
-            push("success", fmt(s.finishedToast, { pulled: summary.pulled, pushed: summary.pushed, merged: summary.merged }));
+            finished(summary, extrasOf(p));
+            push("success", toastFor(!!p.download, summary, true));
           }}
           onBlocked={(h) => {
             setPlan(null);
@@ -163,6 +226,9 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
       </>
     );
   }
+
+  const blocked = syncing || !!status?.needs;
+  const fresh = !!status?.remote_has_memory && !status.last_sync_at;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -193,6 +259,34 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
           <>
             {status.needs ? <NeedsBanner status={status} onAction={onOpenLogin} /> : null}
 
+            {fresh && !status.needs ? (
+              <section
+                aria-label={s.freshTitle}
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 p-4 dark:bg-primary/15"
+              >
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary dark:bg-primary/25">
+                  <CloudDownload className="size-5" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-sm font-semibold">{s.freshTitle}</h2>
+                  <p className="text-sm text-muted-foreground">{s.freshBody}</p>
+                </div>
+                <Button
+                  type="button"
+                  disabled={blocked}
+                  onClick={() => void run("block", "down")}
+                  className="h-8 shrink-0 cursor-pointer px-4 text-sm font-semibold"
+                >
+                  {running === "down" ? (
+                    <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  ) : (
+                    <CloudDownload className="size-4" aria-hidden="true" />
+                  )}
+                  {s.freshAction}
+                </Button>
+              </section>
+            ) : null}
+
             <section aria-label={s.title} className="rounded-lg border border-border bg-card p-4">
               <div className="flex flex-wrap items-start gap-4">
                 <div className="min-w-0 flex-1 space-y-1.5">
@@ -216,30 +310,56 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
                     {status.pending > 0 ? fmt(s.pending, { n: status.pending }) : s.upToDate}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={syncing}
+                  onClick={() => setConfirmLogout(true)}
+                  className="h-8 shrink-0 cursor-pointer px-3 text-sm text-muted-foreground"
+                >
+                  <LogOut className="size-4" aria-hidden="true" />
+                  {s.logout}
+                </Button>
+              </div>
+              <div className="mt-4 grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
                   <Button
                     type="button"
-                    variant="ghost"
-                    disabled={syncing}
-                    onClick={() => setConfirmLogout(true)}
-                    className="h-8 cursor-pointer px-3 text-sm text-muted-foreground"
+                    disabled={blocked}
+                    onClick={() => void run("block", "up")}
+                    aria-describedby="sync-up-hint"
+                    className="h-9 cursor-pointer justify-center px-4 text-sm font-semibold"
                   >
-                    <LogOut className="size-4" aria-hidden="true" />
-                    {s.logout}
-                  </Button>
-                  <Button
-                    type="button"
-                    disabled={syncing || !!status.needs}
-                    onClick={() => void run()}
-                    className="h-8 cursor-pointer px-4 text-sm font-semibold"
-                  >
-                    {syncing ? (
+                    {running === "up" ? (
                       <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                     ) : (
-                      <RefreshCw className="size-4" aria-hidden="true" />
+                      <CloudUpload className="size-4" aria-hidden="true" />
                     )}
-                    {syncing ? s.syncing : s.syncNow}
+                    {running === "up" ? s.uploading : s.uploadNow}
                   </Button>
+                  <p id="sync-up-hint" className="text-xs text-muted-foreground">
+                    {s.uploadHint}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={blocked}
+                    onClick={() => void run("block", "down")}
+                    aria-describedby="sync-down-hint"
+                    className="h-9 cursor-pointer justify-center px-4 text-sm font-semibold"
+                  >
+                    {running === "down" ? (
+                      <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                    ) : (
+                      <CloudDownload className="size-4" aria-hidden="true" />
+                    )}
+                    {running === "down" ? s.downloading : s.downloadNow}
+                  </Button>
+                  <p id="sync-down-hint" className="text-xs text-muted-foreground">
+                    {s.downloadHint}
+                  </p>
                 </div>
               </div>
             </section>
@@ -249,11 +369,20 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
               hits={hits}
               busy={syncing}
               onCancel={() => setHits(null)}
-              onSkip={() => void run("skip")}
-              onAllow={() => void run("allow")}
+              onSkip={() => void run("skip", "up")}
+              onAllow={() => void run("allow", "up")}
             />
-            {extras && extras.skipped.length > 0 ? <SkippedList items={extras.skipped} /> : null}
+            {extras && extras.download && extras.keptLocal.length > 0 ? (
+              <p role="status" className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                {fmt(s.keptLocal, { n: extras.keptLocal.length })}
+              </p>
+            ) : null}
             {extras ? <MissingSkills missing={extras.missing} removed={extras.removed} projects={projects} notify={push} /> : null}
+            {extras && extras.absent.length > 0 ? <AbsentList items={extras.absent} /> : null}
+            {extras && extras.skipped.length > 0 ? <SkippedList items={extras.skipped} /> : null}
+            {records.length > 0 ? (
+              <UnsyncedFiles records={records} formatTime={formatTime} onOpen={onOpenMemoryFile} />
+            ) : null}
 
             <ProjectMapping projects={projects} onChange={setProjects} notify={push} />
             <SyncHistory reloadKey={historyKey} notify={push} formatTime={formatTime} />
@@ -275,6 +404,92 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange }: SyncP
       />
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </div>
+  );
+}
+
+/** Cloud files a download could not write here, grouped by project. */
+export function AbsentList({ items }: { items: SyncAbsentFile[] }) {
+  const { t } = useI18n();
+  const s = t.sync;
+  const groups = new Map<string, SyncAbsentFile[]>();
+  for (const f of items) groups.set(f.project_key, [...(groups.get(f.project_key) ?? []), f]);
+  return (
+    <section aria-label={fmt(s.absentTitle, { n: items.length })} className="rounded-lg border border-border bg-card p-4">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <FolderX className="size-4 text-warning" aria-hidden="true" />
+        {fmt(s.absentTitle, { n: items.length })}
+      </h2>
+      <p className="mt-1 text-xs text-muted-foreground">{s.absentBody}</p>
+      <ul className="mt-2 space-y-1.5">
+        {[...groups.entries()].map(([key, files]) => (
+          <li key={key} className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 dark:bg-muted/20">
+            <div className="min-w-0 flex-1" title={files.map((f) => f.repo_path).join("\n")}>
+              <p className="truncate font-mono text-sm font-semibold">{key}</p>
+              <p className="text-xs text-muted-foreground">
+                {files[0].reason === "no_place" ? s.absentNoPlace : s.absentNoProject}
+              </p>
+            </div>
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{fmt(s.absentFiles, { n: files.length })}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Files skipped by an earlier sync and not synced since (persisted on the backend). */
+export function UnsyncedFiles({
+  records,
+  formatTime,
+  onOpen,
+}: {
+  records: SyncSkippedRecord[];
+  formatTime: (ms: number) => string;
+  onOpen?: (fileId: string) => void;
+}) {
+  const { t } = useI18n();
+  const s = t.sync;
+  return (
+    <section aria-label={fmt(s.unsyncedTitle, { n: records.length })} className="rounded-lg border border-warning/40 bg-card p-4">
+      <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <FileWarning className="size-4 text-warning" aria-hidden="true" />
+        {fmt(s.unsyncedTitle, { n: records.length })}
+      </h2>
+      <p className="mt-1 text-xs text-muted-foreground">{s.unsyncedBody}</p>
+      <ul className="mt-2 space-y-1.5">
+        {records.map((r) => {
+          const shown = r.local_path ?? r.repo_path;
+          const { name, dir } = splitPath(shown);
+          const reason = s.reasons[r.reason] ?? r.reason;
+          return (
+            <li key={r.repo_path} className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 dark:bg-muted/20">
+              <div className="min-w-0 flex-1" title={r.local_path ? `${r.local_path}\n${r.repo_path}` : r.repo_path}>
+                <p className="truncate text-sm font-semibold">{name}</p>
+                <p className="truncate font-mono text-xs text-muted-foreground">{middleEllipsis(dir, 60)}</p>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-0.5">
+                <span className="rounded-sm bg-warning/15 px-1.5 py-0.5 text-[11px] font-semibold text-warning">{reason}</span>
+                <span className="text-[11px] text-muted-foreground tabular-nums">{fmt(s.skippedAt, { time: formatTime(r.at) })}</span>
+              </div>
+              {r.file_id && onOpen ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpen(r.file_id!)}
+                  aria-label={`${s.openInMemory} ${name}`}
+                  className="h-7 shrink-0 cursor-pointer px-2.5 text-xs"
+                >
+                  <SquareArrowOutUpRight className="size-3.5" aria-hidden="true" />
+                  {s.openInMemory}
+                </Button>
+              ) : !r.local_path ? (
+                <span className="shrink-0 text-xs text-muted-foreground">{s.noLocalFile}</span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -355,36 +570,83 @@ export function SecretsDialog({
   const { t } = useI18n();
   const s = t.sync;
   const files = hits ? new Set(hits.map((h) => h.repo_path)).size : 0;
+  const skipHint = React.useId();
+  const allowHint = React.useId();
   return (
     <Dialog open={!!hits} onOpenChange={(o) => (!o && !busy ? onCancel() : undefined)}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="w-[600px] max-w-[calc(100vw-2rem)]">
+        <DialogHeader className="pr-8">
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="size-5 text-destructive" aria-hidden="true" />
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-destructive/10 dark:bg-destructive/20">
+              <ShieldAlert className="size-4 text-destructive" aria-hidden="true" />
+            </span>
             {s.secretsTitle}
           </DialogTitle>
-          <DialogDescription>{fmt(s.secretsBody, { n: files })}</DialogDescription>
+          <DialogDescription className="leading-relaxed">{fmt(s.secretsBody, { n: files })}</DialogDescription>
         </DialogHeader>
-        <ul className="max-h-64 space-y-1.5 overflow-y-auto rounded-md border border-border bg-muted/40 p-3">
-          {(hits ?? []).map((h, i) => (
-            <li key={i} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-              <span className="min-w-0 font-mono text-xs break-all">{h.repo_path}</span>
-              <span className="text-xs text-muted-foreground">{fmt(s.hitLine, { line: h.line })}</span>
-              <span className="rounded bg-destructive/10 px-1.5 text-xs font-semibold text-destructive">{h.rule}</span>
-            </li>
-          ))}
+        <ul aria-label={s.secretsListLabel} className="mt-4 max-h-[280px] space-y-1.5 overflow-y-auto pr-1">
+          {(hits ?? []).map((h, i) => {
+            const { name, dir } = splitPath(h.repo_path);
+            return (
+              <li
+                key={i}
+                className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 dark:bg-muted/20"
+              >
+                <FileKey2 className="size-4 shrink-0 text-destructive/80" aria-hidden="true" />
+                <div className="min-w-0 flex-1" title={h.repo_path}>
+                  <p className="truncate text-sm font-semibold">{name}</p>
+                  {dir ? <p className="truncate font-mono text-xs text-muted-foreground">{middleEllipsis(dir, 48)}</p> : null}
+                </div>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{fmt(s.hitLine, { line: h.line })}</span>
+                <span className="shrink-0 rounded-sm bg-destructive/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-destructive dark:bg-destructive/20">
+                  {h.rule}
+                </span>
+              </li>
+            );
+          })}
         </ul>
-        <p className="text-xs text-muted-foreground">{s.secretsNote}</p>
-        <DialogFooter className="gap-2">
-          <Button type="button" variant="outline" disabled={busy} onClick={onCancel} className="cursor-pointer">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onSkip}
+            autoFocus
+            aria-label={s.secretsSkip}
+            aria-describedby={skipHint}
+            className="flex cursor-pointer flex-col items-start gap-1 rounded-lg bg-primary px-3.5 py-3 text-left text-primary-foreground shadow-sm transition-colors duration-150 outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
+          >
+            <span className="flex items-center gap-1.5 text-sm font-semibold">
+              {busy ? (
+                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <SkipForward className="size-4" aria-hidden="true" />
+              )}
+              {s.secretsSkip}
+            </span>
+            <span id={skipHint} className="text-xs leading-snug opacity-85">
+              {s.secretsSkipHint}
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onAllow}
+            aria-label={s.secretsAllow}
+            aria-describedby={allowHint}
+            className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-destructive/60 bg-transparent px-3.5 py-3 text-left text-destructive transition-colors duration-150 outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-destructive/50 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-destructive/50 dark:hover:bg-destructive/15"
+          >
+            <span className="flex items-center gap-1.5 text-sm font-semibold">
+              <Upload className="size-4" aria-hidden="true" />
+              {s.secretsAllow}
+            </span>
+            <span id={allowHint} className="text-xs leading-snug text-destructive/80">
+              {s.secretsAllowHint}
+            </span>
+          </button>
+        </div>
+        <DialogFooter className="mt-3">
+          <Button type="button" variant="ghost" disabled={busy} onClick={onCancel} className="h-8 cursor-pointer px-3 text-sm text-muted-foreground">
             {s.secretsCancel}
-          </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={onAllow} className="cursor-pointer border-destructive/50 text-destructive hover:bg-destructive/10">
-            {s.secretsAllow}
-          </Button>
-          <Button type="button" disabled={busy} onClick={onSkip} autoFocus className="cursor-pointer font-semibold">
-            {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-            {s.secretsSkip}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -520,8 +782,8 @@ function ResolveView({ plan, notify, onFinished, onBlocked, onAbort }: ResolveVi
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="border-b border-border px-6 py-4">
-        <h1 className="text-xl font-semibold">{s.resolveTitle}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{s.resolveBody}</p>
+        <h1 className="text-xl font-semibold">{plan.download ? s.resolveTitleDown : s.resolveTitle}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{plan.download ? s.resolveBodyDown : s.resolveBody}</p>
       </header>
       <div className="flex min-h-0 flex-1">
         <nav aria-label={s.resolveTitle} className="w-64 shrink-0 overflow-y-auto border-r border-border p-3">
@@ -629,7 +891,7 @@ function ResolveView({ plan, notify, onFinished, onBlocked, onAbort }: ResolveVi
         </Button>
         <Button type="button" disabled={!ready || busy} onClick={() => void finish()} className="h-8 cursor-pointer px-4 text-sm font-semibold">
           {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-          {busy ? s.finishing : s.finish}
+          {busy ? s.finishing : plan.download ? s.finishDown : s.finish}
         </Button>
       </footer>
       <ConfirmDialog

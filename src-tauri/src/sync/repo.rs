@@ -496,6 +496,16 @@ impl SyncGit {
         }
     }
 
+    /// Points `refs/memdock/<name>` at `commit`, so a local-only commit stays
+    /// reachable (never pruned by `gc`). Never pushed.
+    pub fn keep_ref(&self, repo: &Path, name: &str, commit: &str) -> Result<(), SyncGitError> {
+        check_arg(name)?;
+        check_arg(commit)?;
+        let r = format!("refs/memdock/{name}");
+        self.run_bytes(Some(repo), &["update-ref", &r, commit], &None, &[], None)?;
+        Ok(())
+    }
+
     /// Every entry (files, symlinks, gitlinks) at `commit`, one `ls-tree`.
     pub fn tree_entries(
         &self,

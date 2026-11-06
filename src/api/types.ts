@@ -456,6 +456,8 @@ export interface SyncStatus {
   /** Local memory files that differ from the last sync. */
   pending: number;
   needs: SyncNeeds | null;
+  /** Never synced here while the cloud already holds memories (a new computer). */
+  remote_has_memory: boolean;
 }
 
 export interface DeviceCodeInfo {
@@ -508,12 +510,34 @@ export type SkippedReason =
   | "not_utf8_base"
   | "case_collision"
   | "duplicate_local"
-  | "not_regular_file";
+  | "not_regular_file"
+  | "secret";
 
 export interface SyncSkipped {
   repo_path: string;
   reason: SkippedReason;
 }
+
+/** A cloud file a download could not place on this computer. */
+export interface SyncAbsentFile {
+  repo_path: string;
+  project_key: string;
+  /** `no_project`: the project is not on this computer; `no_place`: no local location yet. */
+  reason: "no_project" | "no_place";
+}
+
+/** A file left out of a sync and not synced since (persisted). */
+export interface SyncSkippedRecord {
+  repo_path: string;
+  reason: SkippedReason;
+  /** Milliseconds since the epoch. */
+  at: number;
+  local_path: string | null;
+  /** Memory index id of the local file, when known. */
+  file_id: string | null;
+}
+
+export type SyncDirection = "up" | "down";
 
 export type ManifestScope = { type: "global" } | { type: "project"; key: string };
 
@@ -551,6 +575,12 @@ export interface SyncPlan {
   secret_hits: FileSecretHit[];
   missing_skills: ManifestSkill[];
   removed_elsewhere: ManifestSkill[];
+  /** A download: resolving writes local files only, nothing is pushed. */
+  download: boolean;
+  /** Download: local changes left as they are (not uploaded). */
+  kept_local: string[];
+  /** Download: cloud files with no place on this computer. */
+  absent: SyncAbsentFile[];
 }
 
 export interface SyncSummary {
@@ -571,6 +601,9 @@ export type SyncStartResult =
       missing_skills: ManifestSkill[];
       /** Skills installed here that every other machine removed. */
       removed_elsewhere: ManifestSkill[];
+      download: boolean;
+      kept_local: string[];
+      absent: SyncAbsentFile[];
     }
   | { kind: "needs_resolution"; plan: SyncPlan }
   | { kind: "blocked"; secret_hits: FileSecretHit[] };

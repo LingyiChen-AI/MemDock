@@ -187,7 +187,11 @@ pub(super) fn build_plan(
         missing_skills: Vec::new(),
         removed_elsewhere: Vec::new(),
         skipped: Vec::new(),
+        download: ctx.download,
+        kept_local: Vec::new(),
+        absent: Vec::new(),
         entries: Vec::new(),
+        base_keep: BTreeMap::new(),
         remote_tree: BTreeMap::new(),
         manifest_json: None,
         unsynced_after: BTreeSet::new(),
@@ -210,7 +214,7 @@ pub(super) fn build_plan(
     let mut pres: Vec<Pre> = Vec::new();
     let mut has_local: HashSet<String> = HashSet::new();
     for c in cands.list {
-        if ctx.secrets.exclude.contains(&c.repo_path) {
+        if !ctx.download && ctx.secrets.exclude.contains(&c.repo_path) {
             skip(&mut plan, &c.repo_path, "secret");
             continue;
         }
@@ -258,6 +262,13 @@ pub(super) fn build_plan(
         } else {
             Kind::Both
         };
+        // A download never touches local changes or files the remote no
+        // longer has: they stay as they are, and so does their base.
+        if ctx.download && (kind == Kind::Push || kind == Kind::Deleted || r_sha.is_none()) {
+            plan.kept_local.push(c.repo_path.clone());
+            plan.base_keep.insert(c.repo_path.clone(), b_sha);
+            continue;
+        }
         pres.push(Pre {
             c,
             local_hash,
@@ -277,9 +288,13 @@ pub(super) fn build_plan(
     let mut held: HashSet<String> = base
         .held_projects
         .iter()
-        .filter(|k| present.contains(k.as_str()))
+        .filter(|k| present.contains(k.as_str()) && !ctx.download)
         .cloned()
         .collect();
+    // (a download leaves held projects alone: they stay held for the next upload)
+    if ctx.download {
+        plan.held_after = base.held_projects.clone();
+    }
     held.extend(
         pres.iter()
             .filter(|p| p.kind == Kind::Push && p.local.is_none())
@@ -411,6 +426,24 @@ pub(super) fn build_plan(
         .cloned()
         .chain(skipped)
         .collect();
+    if ctx.download {
+        let rejected: HashSet<&str> = cands.rejected.iter().map(|(p, _)| p.as_str()).collect();
+        for p in remote_tree.keys() {
+            if considered.contains(p) || rejected.contains(p.as_str()) || p == SKILLS_JSON {
+                continue;
+            }
+            let Some(rest) = p.strip_prefix("projects/") else { continue };
+            let (project_key, reason) = match project_of(p, &ctx.projects) {
+                Some(k) => (k.to_string(), "no_place"),
+                None => (absent_key(rest), "no_project"),
+            };
+            plan.absent.push(AbsentFile {
+                repo_path: p.clone(),
+                project_key,
+                reason: reason.to_string(),
+            });
+        }
+    }
 
     if let Some(local) = &ctx.local_skills {
         let remote_m = match &manifest_sha {
@@ -433,11 +466,32 @@ pub(super) fn build_plan(
         if Some(blob_id(json.as_bytes())) != manifest_sha {
             scan_into(SKILLS_JSON, &json, &mut plan.secret_hits);
         }
-        plan.manifest_json = Some(json);
+        // a download never changes skills.json
+        plan.manifest_json = (!ctx.download).then_some(json);
     }
     plan.remote_tree = remote_full;
-    if ctx.secrets.allow {
+    // Nothing is pushed by a download: secrets do not matter.
+    if ctx.secrets.allow || ctx.download {
         plan.secret_hits.clear();
     }
     Ok(plan)
+}
+
+/// Project key of `projects/<rest>` for a project that is not on this
+/// machine: everything before the known `claude/...` / `codex/...` tail.
+fn absent_key(rest: &str) -> String {
+    for tail in [
+        "/claude/CLAUDE.md",
+        "/claude/dot-claude/CLAUDE.md",
+        "/claude/CLAUDE.local.md",
+        "/codex/AGENTS.md",
+    ] {
+        if let Some(k) = rest.strip_suffix(tail) {
+            return k.to_string();
+        }
+    }
+    match rest.find("/claude/memory/") {
+        Some(i) => rest[..i].to_string(),
+        None => rest.rsplit_once('/').map(|(k, _)| k).unwrap_or(rest).to_string(),
+    }
 }

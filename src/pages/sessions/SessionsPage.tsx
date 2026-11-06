@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowLeftRight, Check, Copy, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
+import { ArrowLeftRight, Check, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -92,7 +92,7 @@ function SessionRow({ session, selected, onSelect, s }: { session: SessionSummar
   );
 }
 
-function CopyButton({ text, s }: { text: string; s: S }) {
+function CopyButton({ text, s, iconOnly = false }: { text: string; s: S; iconOnly?: boolean }) {
   const [state, setState] = React.useState<"idle" | "copied" | "failed">("idle");
   const copy = async () => {
     try {
@@ -103,10 +103,19 @@ function CopyButton({ text, s }: { text: string; s: S }) {
     }
     window.setTimeout(() => setState("idle"), 2000);
   };
+  const label = state === "copied" ? s.copied : state === "failed" ? s.copyFailed : s.copy;
+  const icon = state === "copied" ? <Check className="text-primary" aria-hidden="true" /> : <Copy aria-hidden="true" />;
+  if (iconOnly) {
+    return (
+      <Button type="button" variant="ghost" size="icon-xs" className="shrink-0 cursor-pointer" aria-label={label} title={label} onClick={() => void copy()}>
+        {icon}
+      </Button>
+    );
+  }
   return (
     <Button type="button" variant="outline" size="sm" className="shrink-0 cursor-pointer" onClick={() => void copy()}>
-      {state === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-      {state === "copied" ? s.copied : state === "failed" ? s.copyFailed : s.copy}
+      {icon}
+      {label}
     </Button>
   );
 }
@@ -119,45 +128,51 @@ function resumeCommand(tool: Tool, cwd: string, id: string): string {
   return tool === "claude" ? `${cd}claude --resume ${id}` : `${cd}codex resume ${id}`;
 }
 
-function CommandLine({ label, command, s }: { label: string; command: string; s: S }) {
+/** Terminal-style card: label + copy in the header, the command on one scrollable line. */
+function CommandCard({ label, command, footer, s }: { label: string; command: string; footer?: React.ReactNode; s: S }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <div className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-xs break-all select-all">
+    <div className="overflow-hidden rounded-lg border border-border bg-muted/40">
+      <div className="flex items-center gap-2 border-b border-border/70 px-3 py-1.5">
+        <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{label}</span>
+        <CopyButton text={command} s={s} iconOnly />
+      </div>
+      <div className="overflow-x-auto px-3 py-2.5">
+        <code className="font-mono text-[13px] whitespace-nowrap select-all">
+          <span className="mr-2 text-primary select-none" aria-hidden="true">
+            $
+          </span>
           {command}
         </code>
-        <CopyButton text={command} s={s} />
       </div>
+      {footer ? <div className="border-t border-border/70 px-3 py-2">{footer}</div> : null}
     </div>
   );
 }
 
 /** Always-visible resume commands: this session itself, plus every copy converted from it. */
 function ResumeCommands({ session, s }: { session: SessionSummary; s: S }) {
-  const lines: { label: string; command: string }[] = [];
+  const lines: { tool: Tool; label: string; command: string }[] = [];
   if (session.converted_from) {
-    lines.push({ label: fmt(s.resumeHere, { tool: s.tools[session.tool] }), command: resumeCommand(session.tool, session.cwd, session.id) });
+    lines.push({ tool: session.tool, label: fmt(s.resumeHere, { tool: s.tools[session.tool] }), command: resumeCommand(session.tool, session.cwd, session.id) });
   }
   for (const r of session.converted_to) {
-    lines.push({ label: fmt(s.resumeConverted, { tool: s.tools[r.tool] }), command: resumeCommand(r.tool, session.cwd, r.id) });
+    lines.push({ tool: r.tool, label: fmt(s.resumeConverted, { tool: s.tools[r.tool] }), command: resumeCommand(r.tool, session.cwd, r.id) });
   }
   if (lines.length === 0) return null;
-  const hasCodex = (session.converted_from && session.tool === "codex") || session.converted_to.some((r) => r.tool === "codex");
   return (
     <div className="flex flex-col gap-2">
       {lines.map((l) => (
-        <CommandLine key={l.command} label={l.label} command={l.command} s={s} />
+        <CommandCard key={l.command} label={l.label} command={l.command} footer={l.tool === "codex" ? <CodexWriterHint s={s} /> : null} s={s} />
       ))}
-      {hasCodex ? <CodexWriterHint s={s} /> : null}
     </div>
   );
 }
 
 function CodexWriterHint({ s }: { s: S }) {
   return (
-    <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-      <Info className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+    <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+      <Info className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
       {s.codexWriterHint}
     </p>
   );
@@ -179,22 +194,18 @@ function ResultCard({ result, s }: { result: ConvertResult; s: S }) {
         <dt className="text-muted-foreground">{s.file}</dt>
         <dd className="font-mono break-all">{result.path}</dd>
       </dl>
-      <div className="flex flex-col gap-1.5">
-        <span className="text-xs text-muted-foreground">{s.resumeHint}</span>
-        <div className="flex items-center gap-2">
-          <code className="min-w-0 flex-1 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-xs break-all select-all">
-            {result.resume_command}
-          </code>
-          <CopyButton text={result.resume_command} s={s} />
-        </div>
-      </div>
+      <CommandCard
+        label={s.resumeHint}
+        command={result.resume_command}
+        footer={result.tool === "codex" ? <CodexWriterHint s={s} /> : null}
+        s={s}
+      />
       {result.tool === "codex" ? (
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="mt-px size-3.5 shrink-0" aria-hidden="true" />
           {result.indexed ? s.codexIndexed : fmt(s.codexNotIndexed, { reason: reason(indexWarning ?? "state_db_missing") })}
         </p>
       ) : null}
-      {result.tool === "codex" ? <CodexWriterHint s={s} /> : null}
       {otherWarnings.map((w) => (
         <p key={w} className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
           <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
@@ -202,6 +213,21 @@ function ResultCard({ result, s }: { result: ConvertResult; s: S }) {
         </p>
       ))}
     </section>
+  );
+}
+
+function MetaChip({ icon, title, mono, children }: { icon?: React.ReactNode; title?: string; mono?: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex h-6 max-w-full min-w-0 items-center gap-1 rounded-md bg-muted/70 px-2 text-xs text-muted-foreground [&_svg]:size-3 [&_svg]:shrink-0",
+        mono && "font-mono text-[11px]",
+      )}
+    >
+      {icon}
+      <span className="truncate">{children}</span>
+    </span>
   );
 }
 
@@ -228,15 +254,29 @@ function PreviewPane({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-col gap-3 border-b border-border p-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex min-w-0 flex-col gap-2">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
               <ToolBadge tool={session.tool} s={s} />
               <span className="truncate">{session.title?.trim() || session.first_prompt || s.untitled}</span>
             </h2>
-            <p className="truncate font-mono text-xs text-muted-foreground" title={session.cwd}>
-              {session.cwd}
-            </p>
-            <p className="font-mono text-[11px] text-muted-foreground select-all">{session.id}</p>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <MetaChip icon={<Folder aria-hidden="true" />} title={session.cwd} mono>
+                {session.cwd}
+              </MetaChip>
+              <MetaChip icon={<Hash aria-hidden="true" />} title={session.id} mono>
+                {session.id.slice(0, 8)}
+              </MetaChip>
+              {stats ? (
+                <>
+                  <MetaChip icon={<MessagesSquare aria-hidden="true" />}>{fmt(s.messages, { n: stats.user_messages + stats.assistant_messages })}</MetaChip>
+                  {stats.tool_calls === 0 ? <MetaChip>{s.stats.none}</MetaChip> : null}
+                  {stats.mapped_calls > 0 ? (
+                    <MetaChip icon={<TerminalSquare aria-hidden="true" />}>{fmt(s.stats.mapped, { n: stats.mapped_calls })}</MetaChip>
+                  ) : null}
+                  {stats.degraded_calls > 0 ? <MetaChip>{fmt(s.stats.degraded, { n: stats.degraded_calls })}</MetaChip> : null}
+                </>
+              ) : null}
+            </div>
           </div>
           {session.converted_from?.tool === target ? null : (
           <Button type="button" size="sm" className="shrink-0 cursor-pointer" disabled={converting || !preview} onClick={onConvert}>
@@ -245,14 +285,6 @@ function PreviewPane({
           </Button>
           )}
         </div>
-        {stats ? (
-          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>{fmt(s.messages, { n: stats.user_messages + stats.assistant_messages })}</span>
-            {stats.tool_calls === 0 ? <span>{s.stats.none}</span> : null}
-            {stats.mapped_calls > 0 ? <span>{fmt(s.stats.mapped, { n: stats.mapped_calls })}</span> : null}
-            {stats.degraded_calls > 0 ? <span>{fmt(s.stats.degraded, { n: stats.degraded_calls })}</span> : null}
-          </div>
-        ) : null}
         {result ? <ResultCard result={result} s={s} /> : <ResumeCommands session={session} s={s} />}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

@@ -19,7 +19,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use serde::{Deserialize, Serialize};
 
 use crate::extract::runner::{find_program, path_dirs};
-use crate::live::{clean_effort, PermissionMode};
+use crate::live::{clean_effort, Agent, NativeRegistry, Owner, OwnerKind, PermissionMode};
 
 #[cfg(test)]
 mod tests;
@@ -282,6 +282,8 @@ struct Session {
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: Option<u32>,
+    /// Status bar text returned when the terminal is re-attached.
+    command: Mutex<String>,
 }
 
 impl Session {
@@ -321,39 +323,108 @@ fn kill_pid_tree(pid: u32) {
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     publish: Publish,
+    registry: Arc<NativeRegistry>,
+}
+
+/// The agent whose native session a terminal resumes (`None` for a shell).
+fn agent_of(tool: PtyTool) -> Option<Agent> {
+    match tool {
+        PtyTool::Claude => Some(Agent::Claude),
+        PtyTool::Codex => Some(Agent::Codex),
+        PtyTool::Shell => None,
+    }
 }
 
 impl PtyManager {
     pub fn new(publish: Publish) -> Self {
-        Self { sessions: Arc::new(Mutex::new(HashMap::new())), publish }
+        Self::with_registry(publish, Arc::new(NativeRegistry::new()))
     }
 
-    pub fn production(app: tauri::AppHandle) -> Self {
-        Self::new(Arc::new(move |name: &str, payload: serde_json::Value| {
+    pub fn with_registry(publish: Publish, registry: Arc<NativeRegistry>) -> Self {
+        Self { sessions: Arc::new(Mutex::new(HashMap::new())), publish, registry }
+    }
+
+    pub fn production(app: tauri::AppHandle, registry: Arc<NativeRegistry>) -> Self {
+        let publish: Publish = Arc::new(move |name: &str, payload: serde_json::Value| {
             use tauri::Emitter;
             let _ = app.emit(name, payload);
-        }))
+        });
+        Self::with_registry(publish, registry)
     }
 
+    /// Opens a terminal. Resuming a native session owned by a live chat fails
+    /// with `busy_live:<live_id>`; one owned by an open terminal returns that
+    /// terminal (re-attach) instead of a second process.
     pub fn open(&self, opts: &PtyOpenOptions) -> Result<PtyOpened, String> {
         let dirs = path_dirs();
         if opts.tool == PtyTool::Shell {
             let sh = local_shell();
+            let pty_id = uuid::Uuid::new_v4().to_string();
             return self
-                .open_program(&sh.program, &sh.args, opts, &dirs)
-                .map(|pty_id| PtyOpened { pty_id, command: sh.label });
+                .open_program_as(&pty_id, &sh.program, &sh.args, opts, &dirs, &sh.label)
+                .map(|()| PtyOpened { pty_id, command: sh.label });
         }
-        let name = program_name(opts.tool);
-        let program = find_program(OsStr::new(name), &dirs).ok_or_else(|| match opts.tool {
-            PtyTool::Codex => "未找到 codex 命令，请先安装 Codex CLI（npm install -g @openai/codex）".to_string(),
-            _ => "未找到 Claude Code 命令行（claude），请先安装并确认它在 PATH 中。".to_string(),
-        })?;
-        self.open_program(&program, &build_args(opts), opts, &dirs)
-            .map(|pty_id| PtyOpened { pty_id, command: display_command(opts) })
+        let pty_id = uuid::Uuid::new_v4().to_string();
+        let command = display_command(opts);
+        let claimed = match (agent_of(opts.tool), clean(&opts.resume_id)) {
+            (Some(agent), Some(rid)) => {
+                if let Some(again) = self.claim(agent, rid, &pty_id, &command)? {
+                    return Ok(again);
+                }
+                Some(Owner::pty(&pty_id))
+            }
+            _ => None,
+        };
+        let res = (|| {
+            let name = program_name(opts.tool);
+            let program = find_program(OsStr::new(name), &dirs).ok_or_else(|| match opts.tool {
+                PtyTool::Codex => "未找到 codex 命令，请先安装 Codex CLI（npm install -g @openai/codex）".to_string(),
+                _ => "未找到 Claude Code 命令行（claude），请先安装并确认它在 PATH 中。".to_string(),
+            })?;
+            self.open_program_as(&pty_id, &program, &build_args(opts), opts, &dirs, &command)
+        })();
+        if res.is_err() {
+            if let Some(o) = &claimed {
+                self.registry.release_owner(o);
+            }
+        }
+        res.map(|()| PtyOpened { pty_id, command })
+    }
+
+    /// Claims `(agent, rid)` for `pty_id`. `Ok(Some(..))` = an open terminal
+    /// already resumes it (re-attach; also while that one is still starting,
+    /// then with `command`); `Err("busy_live:..")` = a live chat owns it.
+    pub fn claim(&self, agent: Agent, rid: &str, pty_id: &str, command: &str) -> Result<Option<PtyOpened>, String> {
+        let Err(cur) = self.registry.claim(agent, rid, Owner::pty(pty_id)) else { return Ok(None) };
+        match cur.kind {
+            OwnerKind::Live => Err(format!("busy_live:{}", cur.id)),
+            OwnerKind::Pty => {
+                let open = self.sessions.lock().unwrap().get(&cur.id).cloned();
+                // Not in the map yet = still being opened (the registry is
+                // released when a terminal ends or fails to open).
+                let command = open.map(|s| s.command.lock().unwrap().clone()).unwrap_or_else(|| command.to_string());
+                Ok(Some(PtyOpened { pty_id: cur.id, command }))
+            }
+        }
     }
 
     /// Spawns `program args` in a new pseudo terminal; returns the pty id.
     pub fn open_program(&self, program: &Path, args: &[String], opts: &PtyOpenOptions, dirs: &[PathBuf]) -> Result<String, String> {
+        let pty_id = uuid::Uuid::new_v4().to_string();
+        let label = program.display().to_string();
+        self.open_program_as(&pty_id, program, args, opts, dirs, &label).map(|()| pty_id)
+    }
+
+    /// Spawns `program args` in a new pseudo terminal with id `pty_id`.
+    pub fn open_program_as(
+        &self,
+        pty_id: &str,
+        program: &Path,
+        args: &[String],
+        opts: &PtyOpenOptions,
+        dirs: &[PathBuf],
+        command: &str,
+    ) -> Result<(), String> {
         if is_batch(program) && args.iter().any(|a| a.contains(['%', '"', '&', '|', '<', '>', '^'])) {
             return Err("参数包含命令行特殊字符，无法安全传给 .cmd 程序".into());
         }
@@ -382,8 +453,9 @@ impl PtyManager {
             writer: Mutex::new(Some(writer)),
             killer: Mutex::new(child.clone_killer()),
             pid,
+            command: Mutex::new(command.to_string()),
         });
-        let pty_id = uuid::Uuid::new_v4().to_string();
+        let pty_id = pty_id.to_string();
         self.sessions.lock().unwrap().insert(pty_id.clone(), session.clone());
 
         // Waiter: exit code, then close the pseudo console so the reader drains and ends.
@@ -404,6 +476,7 @@ impl PtyManager {
         {
             let publish = self.publish.clone();
             let sessions = self.sessions.clone();
+            let registry = self.registry.clone();
             let id = pty_id.clone();
             thread::spawn(move || {
                 let mut reader = reader;
@@ -424,11 +497,12 @@ impl PtyManager {
                 send(dec.finish());
                 let code = code_rx.recv_timeout(Duration::from_secs(3)).ok().flatten();
                 sessions.lock().unwrap().remove(&id);
+                registry.release_owner(&Owner::pty(&id));
                 let payload = PtyExit { pty_id: id.clone(), code };
                 publish("pty://exit", serde_json::to_value(payload).unwrap_or_default());
             });
         }
-        Ok(pty_id)
+        Ok(())
     }
 
     fn get(&self, pty_id: &str) -> Result<Arc<Session>, String> {

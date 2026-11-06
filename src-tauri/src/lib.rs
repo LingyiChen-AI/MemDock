@@ -115,8 +115,13 @@ pub fn run() {
             let env_state = Arc::new(commands_env::EnvState::new(state.clone()));
             let gh_import = Arc::new(commands_ghimport::GhImportState::production(state.clone()));
             app.manage(gh_import);
-            app.manage(Arc::new(live::LiveManager::production(app.handle().clone())));
-            app.manage(Arc::new(pty::PtyManager::production(app.handle().clone())));
+            // One registry: a native session is driven by one live chat or terminal.
+            let native = Arc::new(live::NativeRegistry::new());
+            let live_mgr = Arc::new(live::LiveManager::production(app.handle().clone(), native.clone()));
+            live_mgr.spawn_reaper();
+            app.manage(live_mgr);
+            app.manage(Arc::new(pty::PtyManager::production(app.handle().clone(), native.clone())));
+            app.manage(native);
             app.manage(usage);
             app.manage(env_state);
             app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
@@ -217,6 +222,8 @@ pub fn run() {
             live::live_close,
             live::live_list,
             live::live_transcript,
+            live::live_attach,
+            live::native_owner,
             live::live_models,
             live::live_commands,
             live::save_temp_image,

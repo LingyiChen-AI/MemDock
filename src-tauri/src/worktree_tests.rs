@@ -196,6 +196,8 @@ fn dirty_main_or_wrong_branch_is_refused() {
     write(&fx.repo.join("b.txt"), "dirty\n");
     let e = merge(&fx.data, &w.path, "squash", "m", false).unwrap_err();
     assert!(e.contains("未提交"), "{e}");
+    // A refused merge commits nothing in the worktree.
+    assert!(status(&fx.data, &w.path).unwrap().dirty, "worktree changes stay uncommitted");
     sh(&fx.repo, &["checkout", "-q", "--", "b.txt"]);
     sh(&fx.repo, &["checkout", "-q", "-b", "other"]);
     let e = merge(&fx.data, &w.path, "merge", "m", false).unwrap_err();

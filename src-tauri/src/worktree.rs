@@ -515,12 +515,17 @@ pub fn merge(
         auto_committed: false,
         commit: None,
     };
-    if is_dirty(wt)? {
-        git(wt, &["add", "-A"])?;
-        git(wt, &["commit", "-q", "--no-verify", "-m", &format!("MemDock: {message}")])?;
-        res.auto_committed = true;
-    }
+    // Commits what is still uncommitted in the worktree; done only once the merge can go ahead.
+    let auto_commit = |res: &mut MergeResult| -> Result<(), String> {
+        if is_dirty(wt)? {
+            git(wt, &["add", "-A"])?;
+            git(wt, &["commit", "-q", "--no-verify", "-m", &format!("MemDock: {message}")])?;
+            res.auto_committed = true;
+        }
+        Ok(())
+    };
     if mode == "keep" {
+        auto_commit(&mut res)?;
         res.merged = true;
         if delete_after {
             // "keep" keeps the branch; only the checkout goes away.
@@ -553,6 +558,7 @@ pub fn merge(
             ))
         }
     }
+    auto_commit(&mut res)?;
     let head_before = git(&root, &["rev-parse", "HEAD"])?;
     if mode == "squash" {
         let o = git_raw(&root, &["merge", "--squash", &info.branch])?;

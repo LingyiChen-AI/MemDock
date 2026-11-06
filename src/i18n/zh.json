@@ -453,6 +453,9 @@
     "resetFailed": "重置失败：{message}"
   },
   "review": {
+    "hitBadge": "命中",
+    "expand": "展开全文",
+    "collapse": "收起",
     "title": "待审核",
     "summary": "{n} 条建议",
     "summaryFrom": "{n} 条建议 · 来自 {time}",

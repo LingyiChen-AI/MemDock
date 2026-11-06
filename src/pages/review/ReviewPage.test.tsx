@@ -310,10 +310,15 @@ describe("ReviewPage", () => {
     await userEvent.click(within((await cards())[0]).getByRole("button", { name: "查看原对话" }));
     const drawer = await screen.findByRole("dialog");
     expect(suggestionContext).toHaveBeenCalledWith("s-mod");
-    const mark = await within(drawer).findByText("把从库延迟调小到 1 秒", { selector: "mark" });
-    expect(mark).toBeInTheDocument();
+    // The quoted message is marked (the passage itself is painted with the CSS Highlight API).
+    const hit = await waitFor(() => {
+      const li = drawer.querySelector('li[data-hit="true"]');
+      if (!li) throw new Error("no hit row");
+      return li as HTMLElement;
+    });
+    expect(hit).toHaveTextContent("请把从库延迟调小到 1 秒，缩短测试耗时");
     expect(within(drawer).getByText("好的，需要调整吗")).toBeInTheDocument();
-    expect(within(drawer).getByText("Claude Code")).toBeInTheDocument();
+    expect(within(drawer).getAllByText("Claude Code").length).toBeGreaterThan(0);
     expect(within(drawer).getByText(/sess-012/)).toBeInTheDocument();
     expect(within(drawer).queryByText(/sess-0123456789abcdef/)).not.toBeInTheDocument();
   });
@@ -389,9 +394,12 @@ describe("ReviewPage", () => {
     ]);
     await userEvent.click(within((await cards())[0]).getByRole("button", { name: "查看原对话" }));
     const drawer = await screen.findByRole("dialog");
-    const mark = await within(drawer).findByText(/调小到 1 秒/, { selector: "mark" });
-    expect(mark.closest("li")).toHaveAttribute("data-hit", "true");
-    expect(mark.closest("li")).toHaveTextContent("请把从库延迟");
+    const hit = await waitFor(() => {
+      const li = drawer.querySelector('li[data-hit="true"]');
+      if (!li) throw new Error("no hit row");
+      return li as HTMLElement;
+    });
+    expect(hit).toHaveTextContent("请把从库延迟");
     expect(within(drawer).queryByText("未在上下文中找到原话")).not.toBeInTheDocument();
 
     (suggestionContext as Mock).mockResolvedValue([{ evidence: ev("完全不存在的话"), turns: [turn("user", "别的内容", 2)] }]);

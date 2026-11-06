@@ -266,3 +266,8 @@ html.dark[data-accent="teal"] {
     }
   }
 }
+
+/* Quoted evidence inside chat bubbles (components/chat/ChatMessage.tsx). */
+::highlight(chat-quote) {
+  background-color: color-mix(in oklab, var(--warning) 38%, transparent);
+}

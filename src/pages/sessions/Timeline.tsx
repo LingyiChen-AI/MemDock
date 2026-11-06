@@ -9,19 +9,17 @@ import {
   ListTodo,
   Search,
   SquareTerminal,
-  User,
   Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
 import type { SessionPreview, TimelineItem, Tool, ToolKind } from "@/api/types";
-import { ToolLogo } from "@/components/brand/ToolLogo";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
-import { ChatMarkdown } from "./ChatMarkdown";
+import { ChatRow, ChatText } from "@/components/chat/ChatMessage";
 import { formatIso } from "./sessionsUtils";
 
 type S = Messages["sessions"];
@@ -53,7 +51,6 @@ const KIND_TONE: Record<ToolKind, string> = {
   other: "text-muted-foreground",
 };
 
-const LONG_TEXT = 700;
 /** Chips shown in one run before the rest fold into a "+N" chip. */
 const CHIP_FOLD = 8;
 
@@ -165,41 +162,16 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
   );
 }
 
-/** Markdown body; long ones are capped in height behind a fade until expanded. */
 function LongText({ text, s }: { text: string; s: S }) {
-  const [open, setOpen] = React.useState(false);
-  const long = text.length > LONG_TEXT || text.split("\n").length > 18;
-  return (
-    <div className="min-w-0">
-      <div className={cn(long && !open && "max-h-72 overflow-hidden [mask-image:linear-gradient(to_bottom,black_80%,transparent)]")}>
-        <ChatMarkdown text={text} />
-      </div>
-      {long ? (
-        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1.5 cursor-pointer text-xs font-medium text-primary hover:underline">
-          {open ? s.collapse : s.expand}
-        </button>
-      ) : null}
-    </div>
-  );
+  return <ChatText text={text} expandLabel={s.expand} collapseLabel={s.collapse} />;
 }
 
 function UserRow({ item, s }: { item: TextItem; s: S }) {
   return (
-    <li className="flex flex-row-reverse gap-2.5">
-      <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
-        <User className="size-3.5" />
-      </span>
-      <div className="flex max-w-[82%] min-w-0 flex-col items-end gap-1">
-        <div className="flex flex-row-reverse items-center gap-2 px-1 text-[11px] text-muted-foreground">
-          <span className="font-medium text-foreground/80">{s.roles.user}</span>
-          <span className="tabular-nums">{formatIso(item.ts)}</span>
-        </div>
-        <div className="flex max-w-full min-w-0 flex-col gap-2 overflow-hidden rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm leading-relaxed">
-          {item.text ? <LongText text={item.text} s={s} /> : null}
-          {item.type === "user" && item.images?.length ? <Thumbs images={item.images} s={s} /> : null}
-        </div>
-      </div>
-    </li>
+    <ChatRow role="user" name={s.roles.user} time={formatIso(item.ts)}>
+      {item.text ? <LongText text={item.text} s={s} /> : null}
+      {item.type === "user" && item.images?.length ? <Thumbs images={item.images} s={s} /> : null}
+    </ChatRow>
   );
 }
 
@@ -255,22 +227,11 @@ function Thumbs({ images, s }: { images: string[]; s: S }) {
 
 function TurnCard({ segments, ts, tool, onOpen, s }: { segments: Segment[]; ts: string; tool: Tool; onOpen: (it: ToolItem) => void; s: S }) {
   return (
-    <li className="flex gap-2.5">
-      <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full border border-border bg-card">
-        <ToolLogo tool={tool} className="size-4" aria-hidden="true" />
-      </span>
-      <div className="flex max-w-[86%] min-w-0 flex-1 flex-col gap-1">
-        <div className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
-          <span className="font-medium text-foreground/80">{s.tools[tool]}</span>
-          <span className="tabular-nums">{formatIso(ts)}</span>
-        </div>
-        <div className="flex max-w-full min-w-0 flex-col gap-2.5 self-start overflow-hidden rounded-2xl rounded-tl-md border border-border bg-card px-3.5 py-2.5 text-sm leading-relaxed">
-          {segments.map((seg, i) =>
-            seg.kind === "text" ? <LongText key={i} text={seg.item.text} s={s} /> : <ChipRun key={i} items={seg.items} onOpen={onOpen} s={s} />,
-          )}
-        </div>
-      </div>
-    </li>
+    <ChatRow role="assistant" tool={tool} name={s.tools[tool]} time={formatIso(ts)}>
+      {segments.map((seg, i) =>
+        seg.kind === "text" ? <LongText key={i} text={seg.item.text} s={s} /> : <ChipRun key={i} items={seg.items} onOpen={onOpen} s={s} />,
+      )}
+    </ChatRow>
   );
 }
 

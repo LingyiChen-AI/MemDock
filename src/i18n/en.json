@@ -453,6 +453,9 @@
     "resetFailed": "Reset failed: {message}"
   },
   "review": {
+    "hitBadge": "Quoted",
+    "expand": "Show all",
+    "collapse": "Show less",
     "title": "Review",
     "summary": "{n} suggestions",
     "summaryFrom": "{n} suggestions · from {time}",

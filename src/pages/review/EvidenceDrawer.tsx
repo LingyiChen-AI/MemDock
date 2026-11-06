@@ -2,9 +2,9 @@ import * as React from "react";
 import { Check, Copy } from "lucide-react";
 import { suggestionContext } from "@/api/extract";
 import type { ContextTurn, Suggestion, SuggestionContext } from "@/api/types";
+import { ChatRow, ChatText } from "@/components/chat/ChatMessage";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { formatSnapshotTime } from "@/pages/memory/HistoryDrawer";
 import { fmt } from "@/pages/memory/paths";
@@ -71,28 +71,19 @@ function CopyId({ id }: { id: string }) {
 function Turn({ turn, quote, hit }: { turn: ContextTurn; quote: string; hit: boolean }) {
   const { t } = useI18n();
   const r = t.review;
-  const span = hit ? locate(turn.text, quote) : null;
+  const user = turn.role === "user";
   return (
-    <li
+    <ChatRow
+      role={turn.role}
+      tool={turn.tool}
+      name={user ? r.roleUser : turn.tool === "claude" ? "Claude Code" : "Codex"}
+      time={formatSnapshotTime(turn.ts)}
+      highlighted={hit}
       data-hit={hit ? "true" : undefined}
-      className={cn("rounded-md border border-border px-3 py-2", hit ? "bg-muted shadow-[inset_2px_0_0_var(--warning)]" : "bg-card")}
+      badge={hit ? <span className="rounded bg-warning/15 px-1.5 text-[10px] font-medium text-warning">{r.hitBadge}</span> : null}
     >
-      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="font-semibold">{turn.role === "user" ? r.roleUser : r.roleAssistant}</span>
-        <span>{formatSnapshotTime(turn.ts)}</span>
-      </div>
-      <p className="font-content text-sm break-words whitespace-pre-wrap">
-        {span ? (
-          <>
-            {turn.text.slice(0, span[0])}
-            <mark className="rounded-xs bg-warning/35 px-px text-inherit">{turn.text.slice(span[0], span[1])}</mark>
-            {turn.text.slice(span[1])}
-          </>
-        ) : (
-          turn.text
-        )}
-      </p>
-    </li>
+      <ChatText text={turn.text} expandLabel={r.expand} collapseLabel={r.collapse} highlight={hit ? quote : undefined} />
+    </ChatRow>
   );
 }
 
@@ -113,7 +104,7 @@ function Group({ ctx }: { ctx: SuggestionContext }) {
       {turns.length === 0 ? (
         <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
       ) : (
-        <ol className="space-y-1.5" aria-label={fmt(r.sessionId, { id: shortId(evidence.session_id) })}>
+        <ol className="flex flex-col gap-4" aria-label={fmt(r.sessionId, { id: shortId(evidence.session_id) })}>
           {turns.map((turn, i) => (
             <Turn key={`${turn.ts}-${i}`} turn={turn} quote={evidence.quote} hit={i === hitIndex} />
           ))}

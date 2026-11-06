@@ -286,7 +286,7 @@ export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: L
       ) : null}
       {!lc || !lc.loaded ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ChatSkeleton label={c.loading} className="px-4 py-4" />
+          <ChatSkeleton label={c.loading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
         </div>
       ) : (
         <Conversation scrollKey={`live:${info.live_id}`} conv={lc.conv} agent={info.agent} running={isActive(info.state)} starting={info.state === "starting"} onRespond={respond} />

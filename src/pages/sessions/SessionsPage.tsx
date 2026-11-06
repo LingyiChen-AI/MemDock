@@ -1077,7 +1077,7 @@ function ChatPane({
                 {fmt(s.previewFailed, { error })}
               </p>
             ) : !preview ? (
-              <ChatSkeleton label={s.previewLoading} className="px-4 py-4" />
+              <ChatSkeleton label={s.previewLoading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
             ) : (
               <Timeline preview={preview} tool={session.tool} startAtBottom />
             )
@@ -1090,7 +1090,7 @@ function ChatPane({
               </div>
             </div>
           ) : (
-            <ChatSkeleton label={c.loading} className="px-4 py-4" />
+            <ChatSkeleton label={c.loading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
           )}
           <ChatComposer
             key={termKey}

@@ -1370,6 +1370,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   }, [sessions]);
   // Shell terminals sit at the top of their folder's group; the rest in a "terminals" group.
   const looseShells = shells.filter((x) => !groups.some((g) => samePath(g.cwd, x.cwd)));
+  // New chats not on the list yet also sit at the top of their folder's group.
+  const looseLive = liveOnly.filter((x) => !groups.some((g) => samePath(g.cwd, x.cwd)));
 
   const resetPane = () => {
     setResult(null);
@@ -1409,6 +1411,16 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     if (selectedKey === SHELL_PREFIX + key) setSelectedKey(null);
     void removeShell(key);
   };
+  const liveRow = (x: LiveSessionInfo) => (
+    <li key={x.live_id}>
+      <LiveRow info={x} selected={selectedKey === LIVE_PREFIX + x.live_id} onSelect={() => selectLiveRow(x)} c={c} now={now} />
+      {dupCount(x) > 1 ? (
+        <div className="px-2.5 pb-1">
+          <DupBadge n={dupCount(x)} c={c} />
+        </div>
+      ) : null}
+    </li>
+  );
   const shellRow = (x: ShellTerm) => (
     <li key={x.key}>
       <ShellRow
@@ -1563,7 +1575,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                 <ul className="flex flex-col gap-0.5">{looseShells.map(shellRow)}</ul>
               </section>
             ) : null}
-            {liveOnly.length > 0 || draftTerms.length > 0 ? (
+            {looseLive.length > 0 || draftTerms.length > 0 ? (
               <section aria-label={c.newChats} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.newChats}</h2>
                 <ul className="flex flex-col gap-0.5">
@@ -1581,16 +1593,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                       />
                     </li>
                   ))}
-                  {liveOnly.map((x) => (
-                    <li key={x.live_id}>
-                      <LiveRow info={x} selected={selectedKey === LIVE_PREFIX + x.live_id} onSelect={() => selectLiveRow(x)} c={c} now={now} />
-                      {dupCount(x) > 1 ? (
-                        <div className="px-2.5 pb-1">
-                          <DupBadge n={dupCount(x)} c={c} />
-                        </div>
-                      ) : null}
-                    </li>
-                  ))}
+                  {looseLive.map(liveRow)}
                 </ul>
               </section>
             ) : null}
@@ -1649,6 +1652,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                   </div>
                   <ul id={listId} hidden={!open} className="ml-[13px] flex flex-col gap-0.5 border-l border-border pl-1.5">
                     {shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
+                    {liveOnly.filter((x) => samePath(x.cwd, g.cwd)).map(liveRow)}
                     {g.sessions.map((x) => (
                       <li key={sessionKey(x)}>
                         <SessionRow

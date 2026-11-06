@@ -315,6 +315,41 @@ export function handleLiveEnvelope(env: LiveEnvelope) {
   checkGap(id);
 }
 
+/** Every few seconds while something runs, the backend's state is checked against ours. */
+export const RESYNC_MS = 5000;
+let resyncTimer: ReturnType<typeof setInterval> | null = null;
+
+const BUSY: ReadonlySet<string> = new Set(["starting", "running", "waiting_approval"]);
+
+/**
+ * Safety net for missed stream events (a dropped listener, a hot reload in development...):
+ * when the backend reports a different state for a session we show as busy, rebuild that
+ * conversation from its transcript.
+ */
+export async function resyncLive(): Promise<void> {
+  if (!state.sessions.some((x) => BUSY.has(x.state))) return;
+  let list: LiveSessionInfo[];
+  try {
+    list = await liveList();
+  } catch {
+    return;
+  }
+  const stale = list
+    .filter((info) => {
+      const mine = state.sessions.find((x) => x.live_id === info.live_id);
+      return mine && mine.state !== info.state;
+    })
+    .map((info) => info.live_id);
+  if (!stale.length) return;
+  mergeList(list);
+  // Overwrite the stale state with the backend's, then rebuild from the transcript.
+  update((s) => ({
+    ...s,
+    sessions: s.sessions.map((x) => list.find((i) => i.live_id === x.live_id) ?? x),
+  }));
+  for (const id of stale) void loadTranscript(id);
+}
+
 /** Starts listening (ref-counted); returns the matching stop. Safe without Tauri (errors are kept). */
 export function initLiveStore(): () => void {
   initCount++;
@@ -326,14 +361,29 @@ export function initLiveStore(): () => void {
         else un();
       })
       .catch(() => {});
+    resyncTimer = setInterval(() => void resyncLive(), RESYNC_MS);
   }
   return () => {
     initCount--;
     if (initCount === 0) {
       unlisten?.();
       unlisten = null;
+      if (resyncTimer) clearInterval(resyncTimer);
+      resyncTimer = null;
     }
   };
+}
+
+// Development hot reload replaces this module (and its state): listen again right away.
+if (import.meta.hot) {
+  import.meta.hot.dispose((data: { initCount?: number }) => {
+    data.initCount = initCount;
+    unlisten?.();
+    unlisten = null;
+    if (resyncTimer) clearInterval(resyncTimer);
+    resyncTimer = null;
+  });
+  if ((import.meta.hot.data as { initCount?: number }).initCount) initLiveStore();
 }
 
 export function selectLive(liveId: string | null) {

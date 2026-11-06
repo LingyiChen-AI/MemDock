@@ -1032,3 +1032,24 @@ fn e2e_14_claude_effort_levels() {
     }
     log!("summary: {rows:?}");
 }
+
+/// 15: exactly what the user did: ask mode, in the MemDock repo, "你好".
+#[test]
+#[ignore]
+fn e2e_15_ask_mode_in_repo() {
+    println!("[S15] ask mode in the repo");
+    let h = harness();
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let mut o = opts(Agent::Claude, &repo, "你好");
+    o.model = None;
+    o.permission = PermissionMode::Ask;
+    let t0 = Instant::now();
+    let id = h.mgr.start(o).unwrap().live_id;
+    let r = h.rec.turn(&id, 0);
+    let evs: Vec<String> = h.rec.of(&id).iter().map(|e| short(&e.event)).collect();
+    log!("events: {evs:?}");
+    log!("state: {:?} after {} ms", state_of(&h.mgr, &id), t0.elapsed().as_millis());
+    let (text, _, _) = r.expect("turn completes");
+    log!("reply: {}", text.trim());
+    assert_eq!(state_of(&h.mgr, &id), LiveState::Idle);
+}

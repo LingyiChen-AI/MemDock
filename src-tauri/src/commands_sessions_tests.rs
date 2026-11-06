@@ -1,6 +1,6 @@
 use std::fs;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::*;
 use crate::convert::tests::{
@@ -150,6 +150,55 @@ fn preview_reports_plan() {
     assert_eq!(p.messages[0].role, PreviewRole::User);
     assert!(p.messages.iter().any(|m| m.role == PreviewRole::Shell && m.text == "cargo build"));
     assert_eq!(p.total_messages, p.messages.len());
+}
+
+/// Long sessions keep the newest PREVIEW_LIMIT entries, for both tools.
+#[test]
+fn preview_of_long_session_keeps_the_newest_entries() {
+    use crate::convert::tests::{cl, codex_line};
+    use crate::convert::timeline::TimelineItem;
+    const N: usize = 300; // 300 prompts + 300 replies = 600 entries, over the 400 cap
+    let e = env();
+    let ts = |i: usize| format!("2026-11-03T{:02}:{:02}:{:02}.000Z", i / 3600, i / 60 % 60, i % 60);
+
+    let mut claude = Vec::new();
+    for i in 0..N {
+        let (u, a) = (format!("u{i}"), format!("a{i}"));
+        let parent = if i == 0 { None } else { Some(format!("a{}", i - 1)) };
+        claude.push(cl("user", &u, parent.as_deref(), &ts(2 * i), json!(format!("ask {i}"))));
+        claude.push(cl("assistant", &a, Some(&u), &ts(2 * i + 1), json!([{"type": "text", "text": format!("reply {i}")}])));
+    }
+    let claude_path = e.paths.claude_home.join("projects").join("-work-demo").join("long-claude.jsonl");
+    write_lines(&claude_path, &claude);
+
+    let mut codex = vec![codex_line(&ts(0), "session_meta", json!({
+        "id": "99999999-2222-3333-4444-555555555555", "timestamp": ts(0), "cwd": "C:\\work\\demo", "originator": "codex_cli_rs", "source": "cli"
+    }))];
+    for i in 0..N {
+        codex.push(codex_line(&ts(2 * i), "response_item", json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": format!("ask {i}")}]})));
+        codex.push(codex_line(&ts(2 * i + 1), "response_item", json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": format!("reply {i}")}]})));
+    }
+    let codex_path = e
+        .paths
+        .codex_home
+        .join("sessions/2026/11/03/rollout-2026-11-03T00-00-00-99999999-2222-3333-4444-555555555555.jsonl");
+    write_lines(&codex_path, &codex);
+
+    for (tool, path) in [(Tool::Claude, &claude_path), (Tool::Codex, &codex_path)] {
+        let p = session_preview_impl(&e.paths, &e.data, tool, &path.to_string_lossy()).unwrap();
+        let text = |t: &TimelineItem| match t {
+            TimelineItem::User { text, .. } | TimelineItem::Assistant { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(p.timeline_total, 2 * N, "{tool:?}");
+        assert_eq!(p.timeline.len(), PREVIEW_LIMIT, "{tool:?}");
+        assert_eq!(text(p.timeline.last().unwrap()), format!("reply {}", N - 1), "{tool:?} newest kept");
+        assert_eq!(text(&p.timeline[0]), format!("ask {}", N - PREVIEW_LIMIT / 2), "{tool:?} oldest dropped");
+        assert_eq!(p.total_messages, 2 * N, "{tool:?}");
+        assert_eq!(p.messages.len(), PREVIEW_LIMIT, "{tool:?}");
+        assert_eq!(p.messages.last().unwrap().text, format!("reply {}", N - 1), "{tool:?}");
+        assert_eq!(p.messages[0].text, format!("ask {}", N - PREVIEW_LIMIT / 2), "{tool:?}");
+    }
 }
 
 #[test]

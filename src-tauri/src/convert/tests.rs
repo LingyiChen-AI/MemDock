@@ -12,7 +12,7 @@ pub(crate) fn write_lines(path: &Path, lines: &[Value]) {
     fs::write(path, body.join("\n") + "\n").unwrap();
 }
 
-fn cl(kind: &str, uuid: &str, parent: Option<&str>, ts: &str, content: Value) -> Value {
+pub(crate) fn cl(kind: &str, uuid: &str, parent: Option<&str>, ts: &str, content: Value) -> Value {
     let mut msg = json!({"role": kind, "content": content});
     if kind == "assistant" {
         msg["model"] = json!("claude-opus-4");
@@ -59,7 +59,7 @@ pub(crate) fn claude_sample() -> Vec<Value> {
     ]
 }
 
-fn codex_line(ts: &str, kind: &str, payload: Value) -> Value {
+pub(crate) fn codex_line(ts: &str, kind: &str, payload: Value) -> Value {
     json!({"timestamp": ts, "type": kind, "payload": payload})
 }
 

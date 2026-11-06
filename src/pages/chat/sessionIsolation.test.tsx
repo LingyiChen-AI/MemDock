@@ -168,7 +168,7 @@ describe("draft terminals", () => {
     await screen.findByRole("region", { name: "demo" });
     const banner = screen.getByRole("banner");
     await userEvent.click(within(banner).getByRole("button", { name: "新对话" }));
-    await userEvent.click(await screen.findByRole("radio", { name: /终端/ }));
+    await userEvent.click(await screen.findByRole("radio", { name: /命令行/ }));
     await waitFor(() => expect(ptyOpen).toHaveBeenCalledTimes(1));
     act(() => pty.data?.({ pty_id: "P1", data: "draft A output" }));
     act(() => xterm.input?.("x"));
@@ -246,8 +246,8 @@ describe("GUI / terminal handoff", () => {
   it("pty_open refused with busy_live shows a clear message", async () => {
     (ptyOpen as Mock).mockRejectedValue("busy_live:L3");
     await openSession();
-    await userEvent.click(await screen.findByRole("radio", { name: /终端/ }));
-    expect(await screen.findByText("这个会话正在聊天视图里运行，先在聊天视图里停止它，再打开终端")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("radio", { name: /命令行/ }));
+    expect(await screen.findByText("这个会话正在聊天视图里运行，先在聊天视图里停止它，再切到命令行")).toBeInTheDocument();
     expect(getTerminal("claude:c1")?.busy).toEqual({ kind: "live", id: "L3" });
   });
 
@@ -257,9 +257,9 @@ describe("GUI / terminal handoff", () => {
     await openSession();
     await userEvent.type(await screen.findByRole("textbox", { name: "消息" }), "go on{Enter}");
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText("会话正在终端里运行")).toBeInTheDocument();
+    expect(within(dialog).getByText("会话正在命令行里运行")).toBeInTheDocument();
     expect(liveStart).not.toHaveBeenCalled();
-    await userEvent.click(within(dialog).getByRole("button", { name: "关闭终端并发送" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "关闭命令行并发送" }));
     await waitFor(() => expect(liveStart).toHaveBeenCalledWith(expect.objectContaining({ resume_id: "c1", prompt: "go on" })));
     expect(ptyClose).toHaveBeenCalledWith("P7");
   });
@@ -269,8 +269,8 @@ describe("GUI / terminal handoff", () => {
     (ptyOpen as Mock).mockResolvedValue({ pty_id: "P7", command: "claude --resume c1" });
     await openSession();
     await userEvent.type(await screen.findByRole("textbox", { name: "消息" }), "go on{Enter}");
-    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "切到终端查看" }));
-    expect(await screen.findByText("终端 · claude --resume c1")).toBeInTheDocument();
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "切到命令行查看" }));
+    expect(await screen.findByText("命令行 · claude --resume c1")).toBeInTheDocument();
     expect(liveStart).not.toHaveBeenCalled();
     expect(ptyClose).not.toHaveBeenCalled();
   });
@@ -279,7 +279,7 @@ describe("GUI / terminal handoff", () => {
     (liveStart as Mock).mockRejectedValueOnce({ code: "busy", message: "busy_pty:P8" }).mockResolvedValueOnce(liveInfo({ live_id: "L2", state: "starting" }));
     await openSession();
     await userEvent.type(await screen.findByRole("textbox", { name: "消息" }), "go on{Enter}");
-    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "关闭终端并发送" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "关闭命令行并发送" }));
     await waitFor(() => expect(liveStart).toHaveBeenCalledTimes(2));
     expect(ptyClose).toHaveBeenCalledWith("P8");
   });

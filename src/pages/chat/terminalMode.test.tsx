@@ -143,7 +143,7 @@ async function openSession() {
   renderApp(<SessionsPage />);
   const list = await screen.findByRole("region", { name: "demo" });
   await userEvent.click(within(list).getByRole("button", { name: /Build fix/ }));
-  await screen.findByRole("radio", { name: /终端/ });
+  await screen.findByRole("radio", { name: /命令行/ });
 }
 
 describe("terminal mode", () => {
@@ -168,7 +168,7 @@ describe("terminal mode", () => {
     await screen.findByText("Fixed.");
     expect(screen.getByRole("radio", { name: /聊天/ })).toHaveAttribute("aria-checked", "true");
 
-    await userEvent.click(screen.getByRole("radio", { name: /终端/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /命令行/ }));
     await waitFor(() =>
       expect(ptyOpen).toHaveBeenCalledWith({
         tool: "claude",
@@ -181,7 +181,7 @@ describe("terminal mode", () => {
         rows: 24,
       }),
     );
-    expect(await screen.findByText("终端 · claude --resume c1")).toBeInTheDocument();
+    expect(await screen.findByText("命令行 · claude --resume c1")).toBeInTheDocument();
     // The GUI composer is gone, the choice is remembered.
     expect(screen.queryByText("Fixed.")).toBeNull();
     expect(loadChatMode()).toBe("terminal");
@@ -204,14 +204,14 @@ describe("terminal mode", () => {
     (liveList as Mock).mockResolvedValue([liveInfo("running")]);
     await refreshLiveList();
     await openSession();
-    await userEvent.click(screen.getByRole("radio", { name: /终端/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /命令行/ }));
     const dialog = await screen.findByRole("alertdialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(liveStop).not.toHaveBeenCalled();
     expect(ptyOpen).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole("radio", { name: /终端/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /命令行/ }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "停止并切换" }));
     await waitFor(() => expect(liveStop).toHaveBeenCalledWith("L1"));
     await waitFor(() => expect(ptyOpen).toHaveBeenCalled());
@@ -221,7 +221,7 @@ describe("terminal mode", () => {
     (liveList as Mock).mockResolvedValue([liveInfo("idle")]);
     await refreshLiveList();
     await openSession();
-    await userEvent.click(screen.getByRole("radio", { name: /终端/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /命令行/ }));
     await waitFor(() => expect(liveStop).toHaveBeenCalledWith("L1"));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(ptyOpen).toHaveBeenCalled());
@@ -325,6 +325,33 @@ describe("new chats and terminals", () => {
     await userEvent.click(within(rows[0]).getByRole("button", { name: "关闭终端" }));
     await waitFor(() => expect(ptyClose).toHaveBeenCalledWith("S1"));
     expect(getShells()).toEqual([]);
+  });
+
+  it("a project group folds and unfolds, remembers it, and opens while searching", async () => {
+    localStorage.removeItem("memdock.sessions.collapsedProjects");
+    const first = renderApp(<SessionsPage />);
+    const group = await screen.findByRole("region", { name: "demo" });
+    const toggle = within(group).getByRole("button", { name: "收起 demo" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(group).getByRole("button", { name: /Build fix/ })).toBeVisible();
+
+    await userEvent.click(toggle);
+    expect(within(group).getByRole("button", { name: "展开 demo" })).toHaveAttribute("aria-expanded", "false");
+    expect(within(group).queryByRole("button", { name: /Build fix/ })).toBeNull();
+
+    // Remembered across a remount.
+    first.unmount();
+    renderApp(<SessionsPage />);
+    const again = await screen.findByRole("region", { name: "demo" });
+    expect(within(again).getByRole("button", { name: "展开 demo" })).toHaveAttribute("aria-expanded", "false");
+
+    // A search shows matches even inside a folded group.
+    await userEvent.type(screen.getByRole("searchbox"), "Build");
+    expect(await within(again).findByRole("button", { name: /Build fix/ })).toBeVisible();
+    await userEvent.clear(screen.getByRole("searchbox"));
+    await userEvent.click(within(again).getByRole("button", { name: "展开 demo" }));
+    expect(within(again).getByRole("button", { name: /Build fix/ })).toBeVisible();
+    localStorage.removeItem("memdock.sessions.collapsedProjects");
   });
 
   it("新建终端 in the header opens a shell in the home folder under a 终端 group", async () => {

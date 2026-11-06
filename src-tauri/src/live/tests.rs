@@ -480,3 +480,25 @@ fn idle_reaper_stops_only_idle_unattached_sessions() {
     h.mgr.attach(&attached.live_id, false).unwrap();
     assert_eq!(h.mgr.reap_idle(now_ms() + 2000), vec![attached.live_id.clone()]);
 }
+
+#[test]
+fn account_names_from_local_login_files() {
+    use base64::Engine;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    assert_eq!(claude_account_name(home), None);
+    std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"displayName":"  Ming ","fullName":"Li Ming"}}"#).unwrap();
+    assert_eq!(claude_account_name(home).as_deref(), Some("Ming"));
+    std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"displayName":"","fullName":"Li Ming"}}"#).unwrap();
+    assert_eq!(claude_account_name(home).as_deref(), Some("Li Ming"));
+
+    let codex = home.join(".codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    assert_eq!(codex_account_name(&codex), None);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"name":"Laura","email":"x@y.z"}"#);
+    let auth = format!(r#"{{"tokens":{{"id_token":"aaa.{payload}.sig","access_token":"t"}}}}"#);
+    std::fs::write(codex.join("auth.json"), auth).unwrap();
+    assert_eq!(codex_account_name(&codex).as_deref(), Some("Laura"));
+    std::fs::write(codex.join("auth.json"), r#"{"OPENAI_API_KEY":"sk-x","tokens":null}"#).unwrap();
+    assert_eq!(codex_account_name(&codex), None);
+}

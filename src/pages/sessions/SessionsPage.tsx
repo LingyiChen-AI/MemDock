@@ -1,6 +1,6 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { liveInterrupt, liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
 import { worktreeCreate } from "@/api/worktree";
@@ -283,6 +283,26 @@ function ShellPane({ shell, onClose, c }: { shell: ShellTerm; onClose: () => voi
       <TerminalView key={shell.key} termKey={shell.key} opts={opts} c={c} keepAlive />
     </div>
   );
+}
+
+const COLLAPSED_PROJECTS_KEY = "memdock.sessions.collapsedProjects";
+
+/** Project groups the user folded in the session list (by project id), remembered across restarts. */
+export function loadCollapsedProjects(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSED_PROJECTS_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsedProjects(ids: Set<string>) {
+  try {
+    localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Storage full / unavailable: folding just isn't remembered.
+  }
 }
 
 function sessionKey(s: { tool: Tool; path: string }): string {
@@ -658,11 +678,11 @@ function TitleEditor({ title, onSave, s }: { title: string; onSave?: (title: str
   );
 }
 
-/** GUI (bubbles) / terminal (the real CLI) switch. */
+/** GUI (bubbles) / CLI (the native claude / codex UI) switch; labelled "CLI" so it is not confused with plain shell terminals. */
 function ModeSwitch({ value, onChange, disabled, c }: { value: ChatMode; onChange: (m: ChatMode) => void; disabled?: boolean; c: C }) {
   const options: { value: ChatMode; label: string; hint: string; icon: React.ReactNode }[] = [
     { value: "gui", label: c.modeGui, hint: c.modeGuiHint, icon: <MessagesSquare aria-hidden="true" /> },
-    { value: "terminal", label: c.modeTerminal, hint: c.modeTerminalHint, icon: <SquareTerminal aria-hidden="true" /> },
+    { value: "terminal", label: c.modeTerminal, hint: c.modeTerminalHint, icon: <SquareChevronRight aria-hidden="true" /> },
   ];
   return (
     <div role="radiogroup" aria-label={c.modeLabel} className="inline-flex h-8 shrink-0 rounded-md border border-border bg-card p-0.5">
@@ -1155,6 +1175,16 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const [loading, setLoading] = React.useState(false);
   const [tool, setTool] = React.useState<ToolFilter>("all");
   const [query, setQuery] = React.useState("");
+  const [collapsed, setCollapsed] = React.useState<Set<string>>(loadCollapsedProjects);
+  const toggleProject = React.useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveCollapsedProjects(next);
+      return next;
+    });
+  }, []);
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
   const [preview, setPreview] = React.useState<SessionPreview | null>(null);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
@@ -1547,12 +1577,31 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
             ) : groups.length === 0 ? (
               <p className="p-2 text-sm text-muted-foreground">{s.noMatch}</p>
             ) : (
-              groups.map((g) => (
-                <section key={g.projectId} aria-label={g.name} className="group/project mb-2">
-                  <div className="flex min-h-7 items-center gap-1 pt-1 pr-1 pl-2.5">
-                    <h2 className="flex min-w-0 flex-1 items-baseline gap-2 text-xs font-semibold" title={g.cwd}>
-                      <span className="truncate">{g.name}</span>
-                      <span className="font-normal text-muted-foreground">{g.sessions.length}</span>
+              groups.map((g) => {
+                // While searching every group stays open so matches are never hidden.
+                const open = query.trim() !== "" || !collapsed.has(g.projectId);
+                const listId = `project-list-${g.projectId}`;
+                return (
+                <section key={g.projectId} aria-label={g.name} className="group/project mb-1">
+                  <div className="flex min-h-7 items-center gap-1 rounded-md pr-1 pl-1 hover:bg-accent/50">
+                    <h2 className="min-w-0 flex-1 text-xs font-semibold">
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        aria-controls={listId}
+                        aria-label={fmt(open ? c.projectCollapse : c.projectExpand, { name: g.name })}
+                        title={g.cwd}
+                        onClick={() => toggleProject(g.projectId)}
+                        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <ChevronRight
+                          aria-hidden="true"
+                          className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", open && "rotate-90")}
+                        />
+                        <Folder aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{g.name}</span>
+                        <span className="shrink-0 font-normal text-muted-foreground">{g.sessions.length}</span>
+                      </button>
                     </h2>
                     {g.cwd ? (
                       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 motion-reduce:transition-none">
@@ -1567,7 +1616,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                       </span>
                     ) : null}
                   </div>
-                  <ul className="flex flex-col gap-0.5">
+                  <ul id={listId} hidden={!open} className="ml-[13px] flex flex-col gap-0.5 border-l border-border pl-1.5">
                     {shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
                     {g.sessions.map((x) => (
                       <li key={sessionKey(x)}>
@@ -1586,7 +1635,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                     ))}
                   </ul>
                 </section>
-              ))
+                );
+              })
             )}
           </div>
         </aside>

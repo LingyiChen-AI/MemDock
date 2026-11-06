@@ -924,3 +924,38 @@ pub fn memdock_workspace_dir() -> Result<String, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建 {}：{e}", dir.display()))?;
     Ok(dir.to_string_lossy().into_owned())
 }
+
+/// Display names of the accounts the CLIs are logged in with (local files only, no network).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct AccountNames {
+    pub claude: Option<String>,
+    pub codex: Option<String>,
+}
+
+fn non_empty(v: Option<&serde_json::Value>) -> Option<String> {
+    v.and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
+/// Claude Code: `oauthAccount.displayName` (else `fullName`) in `<home>/.claude.json`.
+pub fn claude_account_name(home: &std::path::Path) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).ok()?).ok()?;
+    let a = v.get("oauthAccount")?;
+    non_empty(a.get("displayName")).or_else(|| non_empty(a.get("fullName")))
+}
+
+/// Codex: the `name` claim of the ChatGPT `id_token` in `<codex_home>/auth.json`.
+pub fn codex_account_name(codex_home: &std::path::Path) -> Option<String> {
+    use base64::Engine;
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(codex_home.join("auth.json")).ok()?).ok()?;
+    let token = v.get("tokens")?.get("id_token")?.as_str()?;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    non_empty(claims.get("name")).or_else(|| non_empty(claims.get("given_name")))
+}
+
+#[tauri::command]
+pub fn account_names(state: tauri::State<'_, Arc<crate::commands::AppState>>) -> AccountNames {
+    let home = dirs::home_dir().unwrap_or_default();
+    AccountNames { claude: claude_account_name(&home), codex: codex_account_name(&state.paths.codex_home) }
+}

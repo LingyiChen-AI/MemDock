@@ -302,7 +302,7 @@ describe("starting a worktree draft", () => {
 
   it("switching the draft to terminal mode creates the worktree first and opens the CLI there", async () => {
     await worktreeDraft();
-    await userEvent.click(await screen.findByRole("radio", { name: /终端/ }));
+    await userEvent.click(await screen.findByRole("radio", { name: /命令行/ }));
     await waitFor(() => expect(ptyOpen).toHaveBeenCalledWith(expect.objectContaining({ tool: "claude", cwd: WT })));
     expect(worktreeCreate).toHaveBeenCalledWith("/work/demo", "terminal");
   });

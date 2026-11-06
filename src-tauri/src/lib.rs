@@ -236,6 +236,7 @@ pub fn run() {
             live::native_owner,
             live::live_models,
             live::memdock_workspace_dir,
+            live::account_names,
             live::live_commands,
             live::save_temp_image,
             live::read_image_data_uri,

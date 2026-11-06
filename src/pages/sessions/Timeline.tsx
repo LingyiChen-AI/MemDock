@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useAccountName } from "@/pages/chat/accountNames";
 import {
   Bot,
   Check,
@@ -145,7 +146,7 @@ export function Timeline({
       <ol className="flex flex-col gap-5">
         {blocks.map((b) =>
           b.kind === "user" ? (
-            <UserRow key={b.key} item={b.item} s={s} />
+            <UserRow key={b.key} item={b.item} tool={tool} s={s} />
           ) : (
             <TurnCard key={b.key} segments={b.segments} ts={b.ts} tool={tool} onOpen={setDetail} s={s} />
           ),
@@ -191,9 +192,10 @@ function LongText({ text, s }: { text: string; s: S }) {
   return <ChatText text={text} expandLabel={s.expand} collapseLabel={s.collapse} />;
 }
 
-function UserRow({ item, s }: { item: TextItem; s: S }) {
+function UserRow({ item, tool, s }: { item: TextItem; tool: Tool; s: S }) {
+  const name = useAccountName(tool, s.roles.user);
   return (
-    <ChatRow role="user" name={s.roles.user} time={formatIso(item.ts)}>
+    <ChatRow role="user" name={name} time={formatIso(item.ts)}>
       {item.text ? <LongText text={item.text} s={s} /> : null}
       {item.type === "user" && item.images?.length ? <Thumbs images={item.images} s={s} /> : null}
     </ChatRow>

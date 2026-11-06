@@ -2,7 +2,7 @@
 // can be inspected and screenshotted in a normal browser. Never imported by the production entry.
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import "@fontsource-variable/inter";
 import "@fontsource/ibm-plex-sans/400.css";
@@ -12,7 +12,7 @@ import "@fontsource-variable/jetbrains-mono";
 import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "../styles/globals.css";
 import App from "../App";
-import type { MemoryFile, MemoryIndex, Project, SkillEntry, UpdateStatus } from "../api/types";
+import type { MemoryFile, MemoryIndex, Project, SessionSummary, SkillEntry, UpdateStatus } from "../api/types";
 import { mkSkill } from "../pages/skills/testUtils";
 
 const params = new URLSearchParams(location.search);
@@ -525,6 +525,39 @@ const envReport = () => ({
   installing: null,
 });
 
+/** Session list fixture for the 对话 page: three projects, both tools. */
+function previewSessions(): SessionSummary[] {
+  const mk = (i: number, tool: "claude" | "codex", project: string, title: string, msgs: number, tools: number): SessionSummary => ({
+    tool,
+    id: `s${i}`,
+    path: `C:\\Users\\me\\.${tool}\\sessions\\s${i}.jsonl`,
+    cwd: `C:\\codes\\${project}`,
+    project_id: project,
+    project_name: project,
+    title,
+    first_prompt: title,
+    continued: false,
+    message_count: msgs,
+    tool_calls: tools,
+    started_at: hoursAgo(i + 1),
+    updated_at: hoursAgo(i),
+    model: null,
+    converted_from: null,
+    converted_to: [],
+  });
+  return [
+    mk(0, "claude", "cc-memory", "跨平台记忆管理客户端调研", 272, 463),
+    mk(1, "claude", "cc-memory", "本地 bug 排查", 6, 10),
+    mk(2, "codex", "jev-rpa", "拼多多已发货退款配置表", 12, 30),
+    mk(3, "claude", "jev-rpa", "机器人 RPA 接口 R01～R04", 40, 88),
+    mk(4, "codex", "test", "[E2E] s5c Count from 1 to 5", 3, 0),
+    mk(5, "claude", "test", "[E2E] s7 Reply with OK", 2, 0),
+  ];
+}
+
+// The custom title bar reads the current window; without this the preview renders blank.
+mockWindows("main");
+
 let version = 0;
 mockIPC(
   (cmd, args) => {
@@ -698,6 +731,24 @@ mockIPC(
         return envReport().data_dir;
       case "plugin:dialog|open":
         return null;
+      case "list_sessions":
+        return previewSessions();
+      case "session_preview": {
+        const summary = previewSessions().find((x) => x.path === a.path) ?? previewSessions()[0];
+        const ts = new Date(summary.updated_at ?? Date.now()).toISOString();
+        return {
+          summary,
+          messages: [],
+          total_messages: 2,
+          stats: { user_messages: 1, assistant_messages: 1, tool_calls: 0, mapped_calls: 0, degraded_calls: 0 },
+          timeline: [
+            { type: "user", ts, text: summary.first_prompt },
+            { type: "assistant", ts, text: "好的，我先看一下相关代码。" },
+          ],
+          counts: { user: 1, assistant: 1, tools: 0, shell: 0, files: 0, errors: 0 },
+          timeline_total: 2,
+        };
+      }
       default:
         return undefined;
     }

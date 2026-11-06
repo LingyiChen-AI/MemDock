@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useAccountName } from "./accountNames";
 import { Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
 import { readImageDataUri, storedImagePath, type Decision, type LiveAgent } from "@/api/live";
 import { ChatAvatar, ChatRow, ChatText } from "@/components/chat/ChatMessage";
@@ -40,6 +41,7 @@ export function Conversation({
 }) {
   const { t } = useI18n();
   const c = t.chat;
+  const userName = useAccountName(agent, c.you);
   const [detail, setDetail] = React.useState<LiveToolCall | null>(null);
   const blocks = React.useMemo(() => toConvBlocks(conv.items), [conv.items]);
   const scroller = React.useRef<HTMLDivElement>(null);
@@ -86,7 +88,7 @@ export function Conversation({
           switch (b.kind) {
             case "user":
               return (
-                <ChatRow key={b.key} role="user" name={c.you}>
+                <ChatRow key={b.key} role="user" name={userName}>
                   {b.text ? <ChatText text={b.text} expandLabel={c.expand} collapseLabel={c.collapse} /> : null}
                   {b.images?.length ? <LiveThumbs images={b.images} label={c.imageLoading} /> : null}
                 </ChatRow>

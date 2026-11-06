@@ -14,7 +14,7 @@ use crate::extract::sessions::{claude_files, codex_files, mtime_ms};
 use crate::model::Tool;
 use crate::paths::AgentPaths;
 
-/// Max preview messages returned.
+/// Max preview messages / timeline items returned (the newest ones).
 const PREVIEW_LIMIT: usize = 400;
 /// Max characters per preview message.
 const PREVIEW_CHARS: usize = 1200;
@@ -230,9 +230,9 @@ pub struct PreviewMessage {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SessionPreview {
     pub summary: SessionSummary,
-    /// The planned (converted) messages, capped.
+    /// The planned (converted) messages, capped to the newest ones.
     pub messages: Vec<PreviewMessage>,
-    /// The original conversation, tool calls paired with results (capped).
+    /// The original conversation, tool calls paired with results (capped to the newest ones).
     pub timeline: Vec<convert::timeline::TimelineItem>,
     pub counts: convert::timeline::TimelineCounts,
     pub timeline_total: usize,
@@ -254,9 +254,9 @@ pub fn session_preview_impl(
     summary.converted_from = store.source_of(&me).cloned();
     summary.converted_to = store.targets_of(&me);
     let (out, stats) = convert::plan(&conv.items);
-    let messages = out
+    // Long sessions keep the newest PREVIEW_LIMIT entries: the latest turns are what people open a session for.
+    let messages = out[out.len().saturating_sub(PREVIEW_LIMIT)..]
         .iter()
-        .take(PREVIEW_LIMIT)
         .map(|o| match o {
             Out::User { ts, text } => PreviewMessage {
                 role: PreviewRole::User,
@@ -277,7 +277,7 @@ pub fn session_preview_impl(
         .collect();
     let (mut timeline, counts) = convert::timeline::build_with_images(&conv.items, &conv.images, PREVIEW_CHARS, TIMELINE_IO_CHARS);
     let timeline_total = timeline.len();
-    timeline.truncate(PREVIEW_LIMIT);
+    timeline.drain(..timeline_total.saturating_sub(PREVIEW_LIMIT));
     Ok(SessionPreview { summary, messages, total_messages: out.len(), stats, timeline, counts, timeline_total })
 }
 

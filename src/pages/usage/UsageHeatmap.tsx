@@ -7,7 +7,7 @@ import { htmlLang } from "@/i18n";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
 import { errorMessage } from "@/pages/skills/skillUtils";
-import { buildHeatGrid, cellStep, fmtCostFull, fmtInt, heatmapRange, MIN_STEP, type HeatCell, type HeatMetric, type HeatStat, type HeatTool } from "./heatmapUtils";
+import { buildHeatGrid, fmtCostFull, fmtInt, heatmapRange, wallStart, WALL_STEP, type HeatCell, type HeatMetric, type HeatStat, type HeatTool } from "./heatmapUtils";
 import { fmtTokens } from "./usageUtils";
 
 const LABEL_W = 28;
@@ -118,17 +118,24 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [span.from, span.to, toolsKey, modelsKey, version]);
 
+  // GitHub-style wall: fixed cell size, as many weeks as fit, ending at the range end.
+  const wallFrom = width > 0 ? wallStart(span.from, span.to, width - LABEL_W) : span.from;
   const grid = React.useMemo(
-    () => (report ? buildHeatGrid(report.rows, span.from, span.to, metric, heatTool) : null),
-    [report, span, metric, heatTool],
+    () => (report ? buildHeatGrid(report.rows, wallFrom, span.to, metric, heatTool, span.from) : null),
+    [report, wallFrom, span, metric, heatTool],
   );
   const weeks = grid?.weeks.length ?? 5;
-  const step = width > 0 ? cellStep(width - LABEL_W, weeks) : MIN_STEP;
+  // A range longer than the card scrolls; start at the newest week, like GitHub.
+  React.useEffect(() => {
+    const el = boxRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [grid]);
+  const step = WALL_STEP;
   const cell = step - GAP;
   const svgW = LABEL_W + weeks * step;
   const svgH = TOP_H + 7 * step;
   const statOf = (c: HeatCell): HeatStat => (heatTool === "claude" ? c.claude : heatTool === "codex" ? c.codex : c.total);
-  const activeDays = grid ? grid.weeks.flat().filter((c) => c && statOf(c).tokens > 0).length : 0;
+  const activeDays = grid ? grid.weeks.flat().filter((c) => c && !c.outside && statOf(c).tokens > 0).length : 0;
   const monthFmt = React.useMemo(() => new Intl.DateTimeFormat(htmlLang(language), { month: "short" }), [language]);
   const monthLabel = (m: string) => {
     const [y, mo] = m.split("-").map(Number);
@@ -216,10 +223,10 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
                     width={cell}
                     height={cell}
                     rx={cell > 16 ? 3 : 2}
-                    style={{ fill: LEVEL_FILL[c.level] }}
+                    style={{ fill: LEVEL_FILL[c.level], opacity: c.outside ? 0.45 : 1 }}
                     stroke={hover?.cell.date === c.date ? "var(--foreground)" : "none"}
                     strokeWidth={1}
-                    onMouseEnter={(e) => show(c, e.currentTarget)}
+                    onMouseEnter={(e) => (c.outside ? setHover(null) : show(c, e.currentTarget))}
                   />
                 ) : (
                   // Outside the selected range: an empty, faded cell keeps the grid whole.

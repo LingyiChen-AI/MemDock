@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageRow, UsageTotals } from "@/api/types";
-import { buildHeatGrid, cellStep, fmtCostFull, fmtInt, heatmapRange, levelOf, MAX_STEP, MIN_STEP } from "./heatmapUtils";
+import { buildHeatGrid, cellStep, fmtCostFull, fmtInt, heatmapRange, levelOf, MAX_STEP, MIN_STEP, wallStart } from "./heatmapUtils";
 
 const totals = (tokens: number, cost: number, requests: number): UsageTotals => ({
   input: tokens,
@@ -101,5 +101,24 @@ describe("heatmap", () => {
     const byCost = buildHeatGrid(rows, "2026-10-28", "2026-11-08", "cost");
     expect(byCost.weeks[0][2]?.level).toBe(4);
     expect(byCost.weeks[1][0]?.level).toBe(2);
+  });
+});
+
+describe("wallStart", () => {
+  it("fills the width with whole weeks ending at the range end", () => {
+    // 2026-11-06 is a Friday; its week starts Monday 2026-11-02. 5 weeks fit in 80px.
+    expect(wallStart("2026-11-01", "2026-11-06", 80)).toBe("2026-10-05");
+  });
+  it("never starts after the range start (long ranges scroll)", () => {
+    expect(wallStart("2026-01-01", "2026-11-06", 80)).toBe("2026-01-01");
+  });
+});
+
+describe("buildHeatGrid padding", () => {
+  it("marks days before the range as outside with level 0", () => {
+    const g = buildHeatGrid([], "2026-10-05", "2026-11-06", "tokens", "all", "2026-11-01");
+    const cells = g.weeks.flat().filter((c) => c !== null);
+    expect(cells.find((c) => c!.date === "2026-10-20")!.outside).toBe(true);
+    expect(cells.find((c) => c!.date === "2026-11-03")!.outside).toBeUndefined();
   });
 });

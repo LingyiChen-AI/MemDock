@@ -12,6 +12,21 @@ export type HeatTool = "all" | "claude" | "codex";
 export const MIN_STEP = 13;
 export const MAX_STEP = 30;
 
+/** Fixed cell pitch (cell + gap) of the GitHub-style wall. */
+export const WALL_STEP = 16;
+
+/**
+ * First day shown: enough whole weeks before `to` to fill `available` px at
+ * `WALL_STEP`, but never later than `rangeFrom` (a long range scrolls instead).
+ */
+export function wallStart(rangeFrom: string, to: string, available: number): string {
+  const end = parseLocal(to);
+  const weekStart = addDays(end, -((end.getDay() + 6) % 7));
+  const fit = Math.max(1, Math.floor(available / WALL_STEP));
+  const fitted = localDate(addDays(weekStart, -7 * (fit - 1)));
+  return fitted < rangeFrom ? fitted : rangeFrom;
+}
+
 /** Pitch that spreads `weeks` columns over `available` px, clamped to [MIN_STEP, MAX_STEP]. */
 export function cellStep(available: number, weeks: number): number {
   if (available <= 0 || weeks <= 0) return MIN_STEP;
@@ -66,6 +81,8 @@ export interface HeatCell {
   codex: HeatStat;
   /** 0 (no usage) to 4 (most), from the selected tool and metric. */
   level: 0 | 1 | 2 | 3 | 4;
+  /** Before the selected range: drawn as an empty cell, no tooltip. */
+  outside?: boolean;
 }
 
 const ZERO: HeatStat = { cost: 0, tokens: 0, requests: 0 };
@@ -98,7 +115,15 @@ export function levelOf(v: number, max: number): HeatCell["level"] {
  * are colored by `tool`'s usage (`all` = both tools); every cell still carries
  * the per-tool split for the tooltip.
  */
-export function buildHeatGrid(rows: UsageRow[], from: string, to: string, metric: HeatMetric, tool: HeatTool = "all"): HeatGrid {
+export function buildHeatGrid(
+  rows: UsageRow[],
+  from: string,
+  to: string,
+  metric: HeatMetric,
+  tool: HeatTool = "all",
+  /** Days before this are padding: empty cells, excluded from the color scale. */
+  rangeFrom: string = from,
+): HeatGrid {
   const byDay = new Map(rows.map((r) => [r.key, r]));
   const value = (k: string) => {
     const s = pick(byDay.get(k), tool);
@@ -107,7 +132,7 @@ export function buildHeatGrid(rows: UsageRow[], from: string, to: string, metric
   const start = parseLocal(from);
   const end = parseLocal(to);
   let max = 0;
-  for (let d = start; d <= end; d = addDays(d, 1)) max = Math.max(max, value(localDate(d)));
+  for (let d = parseLocal(rangeFrom); d <= end; d = addDays(d, 1)) max = Math.max(max, value(localDate(d)));
 
   const weeks: (HeatCell | null)[][] = [];
   const months: HeatGrid["months"] = [];
@@ -126,12 +151,14 @@ export function buildHeatGrid(rows: UsageRow[], from: string, to: string, metric
       if (d.getDate() === 1 || (weeks.length === 0 && months.length === 0)) {
         months.push({ week: weeks.length, month: key.slice(0, 7) });
       }
+      const outside = key < rangeFrom;
       col.push({
         date: key,
         total: pick(r, "all"),
         claude: pick(r, "claude"),
         codex: pick(r, "codex"),
-        level: levelOf(value(key), max),
+        level: outside ? 0 : levelOf(value(key), max),
+        ...(outside ? { outside: true } : {}),
       });
     }
     weeks.push(col);

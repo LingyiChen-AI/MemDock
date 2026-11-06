@@ -22,9 +22,18 @@ const WRITER_VERSION: &str = "2.1.0";
 /// Model name on converted assistant messages.
 pub const CONVERTED_MODEL: &str = "memdock-converted";
 
+/// A "user" line Claude Code wrote itself, such as a background task
+/// notification (`promptSource: "system"`, `origin.kind`).
+fn is_system_prompt(v: &Value) -> bool {
+    v.get("promptSource").and_then(Value::as_str) == Some("system")
+        || v.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification")
+}
+
 fn is_noise_user(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("[Request interrupted by user")
+        || t.starts_with("<task-notification>")
+        || t.starts_with("<local-command-caveat>")
         || t.starts_with("<command-")
         || t.starts_with("<local-command-")
         || t.starts_with("<system-reminder>")
@@ -132,6 +141,7 @@ pub fn parse(path: &Path) -> Conversation {
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true)
             || v.get("isMeta").and_then(Value::as_bool) == Some(true)
             || v.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+            || is_system_prompt(&v)
         {
             return;
         }

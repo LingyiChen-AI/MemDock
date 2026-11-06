@@ -148,6 +148,7 @@ fn is_noise(text: &str, role: Role) -> bool {
         || t.starts_with("<command-")
         || t.starts_with("<local-command-")
         || t.starts_with("<system-reminder>")
+        || t.starts_with("<task-notification>")
 }
 
 pub(crate) fn claude_files(paths: &AgentPaths) -> Vec<PathBuf> {
@@ -197,6 +198,8 @@ fn read_claude_file(path: &Path, since_ms: i64, out: &mut Vec<Turn>) {
         };
         if v.get("isMeta").and_then(Value::as_bool) == Some(true)
             || v.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+            // Lines Claude Code wrote itself (background task notifications).
+            || v.get("promptSource").and_then(Value::as_str) == Some("system")
         {
             return;
         }

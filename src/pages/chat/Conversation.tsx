@@ -69,6 +69,20 @@ export function Conversation({
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [conv.items, running]);
 
+  // The history arrives after the pane opens (and images load later): keep following the bottom
+  // while the content grows, unless the reader scrolled up.
+  const content = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = scroller.current;
+    const inner = content.current;
+    if (!el || !inner || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, []);
+
   // Keep the open tool dialog in sync with streamed output.
   const liveDetail = detail
     ? (conv.items.find((it) => it.type === "tool" && it.call.id === detail.id) as { call: LiveToolCall } | undefined)?.call ?? detail
@@ -76,6 +90,7 @@ export function Conversation({
 
   return (
     <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4" data-testid="chat-scroll">
+      <div ref={content}>
       {prefix}
       {starting ? (
         <div role="status" className="mb-4 flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
@@ -160,7 +175,8 @@ export function Conversation({
           }
         })}
         {running && !waiting && !starting && showTyping(blocks) ? <TypingRow agent={agent} c={c} /> : null}
-      </ol>
+        </ol>
+      </div>
       <ToolDialog call={liveDetail} onClose={() => setDetail(null)} c={c} />
     </div>
   );

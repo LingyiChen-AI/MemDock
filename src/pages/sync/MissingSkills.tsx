@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Download, Loader2, Trash2 } from "lucide-react";
-import { deleteSkill, installFromManifest, listSkills } from "@/api/skills";
+import { deleteSkill, listSkills } from "@/api/skills";
+import { installFromManifest } from "@/pages/skills/manifestInstall";
 import type { ManifestSkill, SkillEntry, SkillScope, SyncProject } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";

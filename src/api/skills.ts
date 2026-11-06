@@ -7,10 +7,8 @@ import type {
   InstallFrom,
   InstallTarget,
   ManifestCompare,
-  ManifestSkill,
   SkillManifest,
   SkillEntry,
-  SkillScope,
   SkillFileDto,
   SkillFileList,
   SkillsChangedPayload,
@@ -41,15 +39,6 @@ export function skillManifestExport(path: string): Promise<number> {
 /** Reads and validates a manifest file (installs nothing). */
 export function skillManifestImport(path: string): Promise<SkillManifest> {
   return invoke<SkillManifest>("skill_manifest_import", { path });
-}
-
-/** Installs one manifest entry from its git source into `scope`. */
-export function installFromManifest(m: ManifestSkill, scope: SkillScope): Promise<SkillEntry[]> {
-  return installSkill(
-    { type: "git", url: m.url, clone_url: m.url, git_ref: m.git_ref, skill_path: m.skill_path, commit: m.commit },
-    [{ tool: m.tool, scope }],
-    false,
-  );
 }
 
 export function gitAvailable(): Promise<boolean> {

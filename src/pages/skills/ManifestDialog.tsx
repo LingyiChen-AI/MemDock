@@ -1,7 +1,7 @@
 import * as React from "react";
 import { open as pickOpen, save as pickSave } from "@tauri-apps/plugin-dialog";
 import { ChevronRight, Download, FileDown, FileUp, Info, Loader2 } from "lucide-react";
-import { installFromManifest, skillManifestCompare, skillManifestExport, skillManifestImport } from "@/api/skills";
+import { skillManifestCompare, skillManifestExport, skillManifestImport } from "@/api/skills";
 import type { ManifestCompare, ManifestSkill, MissingManifestSkill, SkillManifest } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { basename, fmt } from "@/pages/memory/paths";
 import { FlowDialog, InlineError, describeError } from "./flowParts";
+import { installFromManifest } from "./manifestInstall";
 import { errorMessage } from "./skillUtils";
 import type { ToastKind } from "./Toasts";
 

@@ -66,7 +66,14 @@ export function UsageTable({ report, focusKey }: { report: UsageReport; focusKey
   }
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <table className="w-full min-w-[720px] text-sm">
+      {/* Fixed column widths: expanding a row (long model names) must not reflow the table. */}
+      <table className="w-full min-w-[720px] table-fixed text-sm">
+        <colgroup>
+          <col className="w-[34%]" />
+          {Array.from({ length: 6 }, (_, i) => (
+            <col key={i} className="w-[11%]" />
+          ))}
+        </colgroup>
         <thead>
           <tr className="h-9 border-b border-border text-xs text-muted-foreground">
             <th className="px-3 text-left font-medium">{head}</th>

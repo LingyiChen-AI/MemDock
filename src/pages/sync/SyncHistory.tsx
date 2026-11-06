@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { restoreFromHistory, syncFileAt, syncHistory } from "@/api/sync";
 import type { SyncCommit } from "@/api/types";
@@ -64,7 +65,7 @@ export function SyncHistory({ reloadKey, notify, formatTime }: SyncHistoryProps)
           {error}
         </p>
       ) : commits === null ? (
-        <p className="px-4 pb-4 text-sm text-muted-foreground">{s.loading}</p>
+        <LoadingState label={s.loading} />
       ) : commits.length === 0 ? (
         <p className="px-4 pb-4 text-sm text-muted-foreground">{s.historyEmpty}</p>
       ) : (

@@ -11,6 +11,7 @@ import type {
   Project,
   Tool,
 } from "@/api/types";
+import { LoadingState } from "@/components/ui/loading-state";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SimpleSelect, type SimpleSelectOption } from "@/components/ui/select";
@@ -408,10 +409,7 @@ export function GithubImportDialog({ open, onOpenChange, projects, onGoReview }:
                         {!pv ? (
                           <p className="text-sm text-muted-foreground">{g.previewHint}</p>
                         ) : pv.status === "loading" ? (
-                          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                            {g.previewLoading}
-                          </p>
+                          <LoadingState label={g.previewLoading} />
                         ) : pv.status === "error" ? (
                           <p className="text-sm text-destructive">{fmt(g.previewFailed, { msg: pv.message })}</p>
                         ) : pv.data.binary ? (

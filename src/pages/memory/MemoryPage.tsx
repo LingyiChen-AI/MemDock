@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import { FileText } from "lucide-react";
 import { listMemories, onMemoryChanged } from "@/api/memory";
 import type { MemoryFile, MemoryIndex, Project } from "@/api/types";
@@ -172,9 +173,7 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
 
   if (!index) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground" aria-busy="true">
-        {m.loading}
-      </div>
+      <LoadingState label={m.loading} />
     );
   }
 

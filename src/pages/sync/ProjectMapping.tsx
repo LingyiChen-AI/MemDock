@@ -1,4 +1,5 @@
 import { setIncludedLocal } from "@/api/sync";
+import { LoadingState } from "@/components/ui/loading-state";
 import type { SyncProject } from "@/api/types";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -35,7 +36,7 @@ export function ProjectMapping({ projects, onChange, notify }: ProjectMappingPro
         <p className="mt-0.5 text-xs text-muted-foreground">{s.projectsBody}</p>
       </div>
       {projects === null ? (
-        <p className="px-4 pb-4 text-sm text-muted-foreground">{s.loading}</p>
+        <LoadingState label={s.loading} />
       ) : projects.length === 0 ? (
         <p className="px-4 pb-4 text-sm text-muted-foreground">{s.noProjects}</p>
       ) : (

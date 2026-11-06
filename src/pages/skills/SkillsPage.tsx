@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import { Package, TriangleAlert } from "lucide-react";
 import { listMemories } from "@/api/memory";
 import {
@@ -281,9 +282,7 @@ export function SkillsPage({ onDirtyChange }: SkillsPageProps) {
 
   if (entries === null) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground" aria-busy="true">
-        {s.loading}
-      </div>
+      <LoadingState label={s.loading} />
     );
   }
 

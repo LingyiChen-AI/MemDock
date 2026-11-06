@@ -3,8 +3,8 @@ import { Check, Copy } from "lucide-react";
 import { suggestionContext } from "@/api/extract";
 import type { ContextTurn, Suggestion, SuggestionContext } from "@/api/types";
 import { ChatRow, ChatText } from "@/components/chat/ChatMessage";
+import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/i18n/I18nProvider";
 import { formatSnapshotTime } from "@/pages/memory/HistoryDrawer";
 import { fmt } from "@/pages/memory/paths";
@@ -165,11 +165,7 @@ export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawe
               {fmt(r.drawerFailed, { message: error })}
             </p>
           ) : data === null ? (
-            <div aria-label={r.drawerLoading} className="space-y-2">
-              <Skeleton className="h-14 w-full" />
-              <Skeleton className="h-14 w-full" />
-              <Skeleton className="h-14 w-full" />
-            </div>
+            <ChatSkeleton label={r.drawerLoading} rows={5} />
           ) : data.length === 0 ? (
             <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{r.drawerEmpty}</p>
           ) : (

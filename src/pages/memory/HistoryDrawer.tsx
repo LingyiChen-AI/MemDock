@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import { History, RotateCcw } from "lucide-react";
 import { listSnapshots, readSnapshot, writeMemoryFile } from "@/api/memory";
 import type { CommandError, FileContentDto, SnapshotInfo } from "@/api/types";
@@ -142,9 +143,7 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
               {fmt(m.historyFailed, { message: listError })}
             </p>
           ) : snaps === null ? (
-            <p className="px-5 py-6 text-sm text-muted-foreground" aria-busy="true">
-              {m.loading}
-            </p>
+            <LoadingState label={m.loading} />
           ) : snaps.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5">
               <History className="size-8 text-muted-foreground" aria-hidden="true" />
@@ -193,9 +192,7 @@ export function HistoryDrawer({ open, onOpenChange, path, currentText, currentHa
                     {fmt(m.historyFailed, { message: textErrors[selectedId] })}
                   </p>
                 ) : selectedText === undefined ? (
-                  <p className="text-sm text-muted-foreground" aria-busy="true">
-                    {m.loading}
-                  </p>
+                  <LoadingState label={m.loading} />
                 ) : (
                   <DiffView
                     oldText={currentText}

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import { History, Loader2, RotateCcw } from "lucide-react";
 import { listSkillBackups, readSkillBackupFile, readSkillFile, rollbackSkill } from "@/api/skills";
 import type { BackupInfo, SkillEntry } from "@/api/types";
@@ -135,9 +136,7 @@ export function BackupsDrawer({ entry, open, onOpenChange, onRestored }: Backups
               {fmt(s.backupsFailed, { message: listError })}
             </p>
           ) : backups === null ? (
-            <p className="px-5 py-6 text-sm text-muted-foreground" aria-busy="true">
-              {s.loading}
-            </p>
+            <LoadingState label={s.loading} />
           ) : backups.length === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5">
               <History className="size-8 text-muted-foreground" aria-hidden="true" />
@@ -189,9 +188,7 @@ export function BackupsDrawer({ entry, open, onOpenChange, onRestored }: Backups
                     newLabel={selected ? `${m.diffRestored} · ${formatSnapshotTime(selected.created_at)}` : m.diffRestored}
                   />
                 ) : (
-                  <p className="text-sm text-muted-foreground" aria-busy="true">
-                    {s.loading}
-                  </p>
+                  <LoadingState label={s.loading} />
                 )}
               </div>
 

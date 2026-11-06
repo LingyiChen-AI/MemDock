@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
@@ -300,9 +301,7 @@ export function SkillFiles({ skillId, readonly, onDirtyChange }: SkillFilesProps
       <div className="flex w-[220px] shrink-0 flex-col border-r border-border">
         <div role="tree" aria-label={s.filesTree} className="min-h-0 flex-1 overflow-y-auto p-2">
           {list === null && !listError ? (
-            <p className="px-2 py-2 text-sm text-muted-foreground" aria-busy="true">
-              {s.loading}
-            </p>
+            <LoadingState label={s.loading} />
           ) : null}
           {listError ? (
             <p role="alert" className="px-2 py-2 text-sm text-destructive">

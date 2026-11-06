@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LoadingState } from "@/components/ui/loading-state";
 import { TriangleAlert } from "lucide-react";
 import { readCodexDb } from "@/api/memory";
 import type { CodexDbResult } from "@/api/types";
@@ -42,7 +43,7 @@ export function CodexDbView() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {result === null ? (
-          <p className="text-xs text-muted-foreground">{m.loading}</p>
+          <LoadingState label={m.loading} />
         ) : result.status === "unavailable" ? (
           <div className="flex items-center gap-2.5 rounded-md bg-warning/15 px-3 py-2 text-warning">
             <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />

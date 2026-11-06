@@ -1,4 +1,6 @@
 import * as React from "react";
+import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
+import { LoadingState } from "@/components/ui/loading-state";
 import { ArrowLeftRight, Check, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
@@ -298,10 +300,7 @@ function PreviewPane({
             {fmt(s.previewFailed, { error })}
           </p>
         ) : !preview ? (
-          <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            {s.previewLoading}
-          </p>
+          <ChatSkeleton label={s.previewLoading} className="px-4 py-4" />
         ) : (
           <Timeline preview={preview} tool={session.tool} />
         )}
@@ -460,10 +459,7 @@ export function SessionsPage() {
                 {fmt(s.loadFailed, { error: loadError })}
               </p>
             ) : sessions === null ? (
-              <p className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                {s.loading}
-              </p>
+              <LoadingState label={s.loading} />
             ) : sessions.length === 0 ? (
               <div className="flex flex-col gap-1 p-2">
                 <p className="text-sm font-medium">{s.empty}</p>

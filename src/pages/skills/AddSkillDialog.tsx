@@ -4,6 +4,7 @@ import { FileArchive, FolderOpen, Loader2 } from "lucide-react";
 import { inspectGitSource, installSkill } from "@/api/skills";
 import type { InspectResult, InstallFrom, Project, SkillEntry } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -239,12 +240,11 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
                       {inspected.skills.map((x) => (
                         <li key={x.skill_path} className="border-b border-border last:border-b-0">
                           <label className="flex cursor-pointer items-start gap-2.5 px-3 py-2 hover:bg-muted/60">
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               checked={picked.includes(x.skill_path)}
-                              onChange={() => toggle(x.skill_path)}
+                              onCheckedChange={() => toggle(x.skill_path)}
                               disabled={busy}
-                              className="mt-1 size-3.5 shrink-0 cursor-pointer accent-primary"
+                              className="mt-0.5"
                             />
                             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                               <span className="font-mono text-[13px] font-medium">{x.name}</span>

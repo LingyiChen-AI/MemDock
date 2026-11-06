@@ -35,6 +35,7 @@ import {
 import { listMemories } from "@/api/memory";
 import { mkProject, renderApp } from "@/test/fixtures";
 import { ExtractPage } from "./ExtractPage";
+import { selectOption } from "@/test/selectOption";
 
 const config: ExtractConfig = {
   tool: "claude",
@@ -106,9 +107,10 @@ describe("ExtractPage", () => {
     renderApp(<ExtractPage />);
     const save = await screen.findByRole("button", { name: "保存配置" });
     expect(save).toBeDisabled();
-    await userEvent.selectOptions(screen.getByLabelText("定时"), "weekly");
-    await userEvent.selectOptions(screen.getByLabelText("星期"), "1");
-    fireEvent.change(screen.getByLabelText("时间"), { target: { value: "09:30" } });
+    await selectOption(screen.getByLabelText("定时"), "weekly");
+    await selectOption(screen.getByLabelText("星期"), "1");
+    await userEvent.click(screen.getByLabelText("时间"));
+    await userEvent.click(within(screen.getByRole("listbox", { name: "分" })).getByRole("option", { name: "30" }));
     expect(save).toBeEnabled();
     await userEvent.click(save);
     await waitFor(() =>
@@ -230,13 +232,13 @@ describe("ExtractPage fix round 1", () => {
   it("weekday labels map to 0 (Sunday) and 6 (Saturday)", async () => {
     renderApp(<ExtractPage />);
     await screen.findByRole("button", { name: "保存配置" });
-    await userEvent.selectOptions(screen.getByLabelText("定时"), "weekly");
-    await userEvent.selectOptions(screen.getByLabelText("星期"), "周日");
+    await selectOption(screen.getByLabelText("定时"), "weekly");
+    await selectOption(screen.getByLabelText("星期"), "周日");
     await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
     await waitFor(() =>
       expect(setExtractConfig).toHaveBeenLastCalledWith({ ...config, schedule: { kind: "weekly", weekday: 0, hh: 9, mm: 0 } }),
     );
-    await userEvent.selectOptions(screen.getByLabelText("星期"), "周六");
+    await selectOption(screen.getByLabelText("星期"), "周六");
     await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
     await waitFor(() =>
       expect(setExtractConfig).toHaveBeenLastCalledWith({ ...config, schedule: { kind: "weekly", weekday: 6, hh: 9, mm: 0 } }),

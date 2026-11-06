@@ -22,3 +22,11 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 };
+
+// Radix Select uses pointer capture and scrollIntoView, which jsdom does not implement.
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+}
+Element.prototype.scrollIntoView ??= function scrollIntoView() {};

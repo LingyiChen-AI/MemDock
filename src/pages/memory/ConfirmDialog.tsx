@@ -1,6 +1,14 @@
 import * as React from "react";
-import { AlertDialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -31,7 +39,7 @@ export function ConfirmDialog({
     if (open) confirmed.current = false;
   }, [open]);
   return (
-    <AlertDialog.Root
+    <AlertDialog
       open={open}
       onOpenChange={(o) => {
         if (o) return;
@@ -39,20 +47,16 @@ export function ConfirmDialog({
         else onCancel();
       }}
     >
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 motion-reduce:animate-none" />
-        <AlertDialog.Content className="fixed top-1/2 left-1/2 z-50 w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-popover p-5 text-popover-foreground shadow-xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none">
-          <AlertDialog.Title className="text-base font-semibold">{title}</AlertDialog.Title>
-          <AlertDialog.Description className="mt-2 text-sm whitespace-pre-line text-muted-foreground">
-            {body}
-          </AlertDialog.Description>
-          <div className="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel asChild>
+        <AlertDialogContent>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription className="mt-2 whitespace-pre-line">{body}</AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel asChild>
               <Button variant="outline" className="h-7 cursor-pointer px-3 text-xs">
                 {cancelLabel}
               </Button>
-            </AlertDialog.Cancel>
-            <AlertDialog.Action asChild>
+            </AlertDialogCancel>
+            <AlertDialogAction asChild>
               <Button
                 variant={destructive ? "destructive" : "default"}
                 className="h-7 cursor-pointer px-3 text-xs font-semibold"
@@ -63,10 +67,9 @@ export function ConfirmDialog({
               >
                 {confirmLabel}
               </Button>
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
   );
 }

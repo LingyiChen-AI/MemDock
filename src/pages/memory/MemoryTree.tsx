@@ -4,6 +4,7 @@ import { ContextMenu } from "radix-ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { addManualProject, removeManualProject } from "@/api/memory";
 import type { MemoryFile, MemoryIndex, Project, ProjectMemories } from "@/api/types";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ToolTag } from "./ToolTag";
@@ -258,14 +259,14 @@ export function MemoryTree({ index, selectedKey, onSelect, onIndexChange, onRemo
       <div className="flex gap-2 border-b border-border p-3">
         <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-muted-foreground focus-within:ring-2 focus-within:ring-ring">
           <Search className="size-4 shrink-0" aria-hidden="true" />
-          <input
+          <Input
             ref={searchRef}
             value={onSearchOpen ? "" : query}
             onClick={() => onSearchOpen?.("")}
             onChange={(e) => (onSearchOpen ? onSearchOpen(e.target.value) : setQuery(e.target.value))}
             placeholder={m.search}
             aria-label={m.search}
-            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-sm text-foreground shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent"
           />
           <kbd className="shrink-0 rounded-sm border border-border px-1 font-sans text-xs leading-4">Ctrl K</kbd>
         </label>

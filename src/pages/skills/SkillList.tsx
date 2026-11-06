@@ -2,6 +2,8 @@ import * as React from "react";
 import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { DeletedSkill, SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { SimpleSelect } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { formatSnapshotTime } from "@/pages/memory/HistoryDrawer";
@@ -37,8 +39,7 @@ export interface SkillListProps {
 export const tagClass =
   "inline-flex h-[18px] max-w-full shrink-0 items-center rounded-sm bg-muted px-[5px] text-xs leading-[18px] text-muted-foreground";
 
-const selectClass =
-  "h-[30px] min-w-0 flex-1 cursor-pointer appearance-none rounded-md border border-border bg-card pr-6 pl-2.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const selectClass = "h-[30px] w-full min-w-0 flex-1 bg-card px-2.5 text-xs dark:bg-card";
 
 export function SkillList({
   entries,
@@ -101,33 +102,43 @@ export function SkillList({
       <div className="flex flex-col gap-2 border-b border-border p-3">
         <label className="flex h-[30px] items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-muted-foreground focus-within:ring-2 focus-within:ring-ring">
           <Search className="size-4 shrink-0" aria-hidden="true" />
-          <input
+          <Input
             type="search"
             role="searchbox"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={s.searchPlaceholder}
             aria-label={s.searchLabel}
-            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+            className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-sm text-foreground shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent [&::-webkit-search-cancel-button]:hidden"
           />
         </label>
         <div className="flex gap-2">
           <div className="relative flex min-w-0 flex-1">
-            <select aria-label={s.toolFilter} value={tool} onChange={(e) => setTool(e.target.value as ToolFilter)} className={selectClass}>
-              <option value="all">{s.toolAll}</option>
-              <option value="claude">{t.memory.toolClaude}</option>
-              <option value="codex">{t.memory.toolCodex}</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <SimpleSelect
+              aria-label={s.toolFilter}
+              value={tool}
+              onValueChange={(v) => setTool(v as ToolFilter)}
+              className={selectClass}
+              options={[
+                { value: "all", label: s.toolAll },
+                { value: "claude", label: t.memory.toolClaude },
+                { value: "codex", label: t.memory.toolCodex },
+              ]}
+            />
           </div>
           <div className="relative flex min-w-0 flex-1">
-            <select aria-label={s.scopeFilter} value={scope} onChange={(e) => setScope(e.target.value as ScopeFilter)} className={selectClass}>
-              <option value="all">{s.scopeAll}</option>
-              <option value="global">{s.scopeGlobal}</option>
-              <option value="project">{s.scopeProject}</option>
-              <option value="readonly">{s.scopeReadonly}</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <SimpleSelect
+              aria-label={s.scopeFilter}
+              value={scope}
+              onValueChange={(v) => setScope(v as ScopeFilter)}
+              className={selectClass}
+              options={[
+                { value: "all", label: s.scopeAll },
+                { value: "global", label: s.scopeGlobal },
+                { value: "project", label: s.scopeProject },
+                { value: "readonly", label: s.scopeReadonly },
+              ]}
+            />
           </div>
         </div>
         <div className="flex gap-2">

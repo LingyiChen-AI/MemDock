@@ -11,6 +11,7 @@ import {
 import { listMemories } from "@/api/memory";
 import type { ApplyOutcome, MemoryIndex, RunRecord, Suggestion, SuggestionKind } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { SimpleSelect } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { NavKey } from "@/layout/AppShell";
@@ -308,19 +309,14 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
                 </button>
               ))}
             </div>
-            <select
+            <SimpleSelect
+              size="sm"
               aria-label={r.filterProject}
               value={effProject}
-              onChange={(e) => setProjectFilter(e.target.value)}
-              className="h-7 max-w-60 cursor-pointer rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="all">{r.projectAll}</option>
-              {projectOptions.map(([k, name]) => (
-                <option key={k} value={k}>
-                  {name}
-                </option>
-              ))}
-            </select>
+              onValueChange={setProjectFilter}
+              className="max-w-60 bg-card text-xs dark:bg-card"
+              options={[{ value: "all", label: r.projectAll }, ...projectOptions.map(([k, name]) => ({ value: k, label: name }))]}
+            />
           </div>
         ) : null}
 

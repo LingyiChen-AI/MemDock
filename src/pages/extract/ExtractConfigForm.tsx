@@ -1,13 +1,14 @@
 import * as React from "react";
 import type { ExtractConfig, ExtractSchedule, Project, RunnerInfo, Tool } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { NumberInput } from "@/components/ui/number-input";
+import { SimpleSelect } from "@/components/ui/select";
+import { TimePicker } from "@/components/ui/time-picker";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 
 const pad = (n: number) => String(n).padStart(2, "0");
-const SELECT =
-  "h-8 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring dark:bg-input/30";
 
 function Segmented<T extends string>({
   label,
@@ -89,7 +90,7 @@ export interface ExtractConfigFormProps {
 }
 
 export function ExtractConfigForm({ config, runners, projects, saving, onSave, onDraftChange }: ExtractConfigFormProps) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const x = t.extract;
   const [draft, setDraft] = React.useState(config);
   const [lookbackText, setLookbackText] = React.useState(String(config.lookback_days));
@@ -175,32 +176,31 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave, o
 
         <Row label={x.schedule} htmlFor="extract-schedule">
           <div className="flex flex-wrap items-center gap-2">
-            <select id="extract-schedule" value={sched.kind} onChange={(e) => setKind(e.target.value as ExtractSchedule["kind"])} className={SELECT}>
-              <option value="off">{x.scheduleOff}</option>
-              <option value="daily">{x.scheduleDaily}</option>
-              <option value="weekly">{x.scheduleWeekly}</option>
-            </select>
+            <SimpleSelect
+              id="extract-schedule"
+              value={sched.kind}
+              onValueChange={(v) => setKind(v as ExtractSchedule["kind"])}
+              options={[
+                { value: "off", label: x.scheduleOff },
+                { value: "daily", label: x.scheduleDaily },
+                { value: "weekly", label: x.scheduleWeekly },
+              ]}
+            />
             {sched.kind === "weekly" ? (
-              <select
+              <SimpleSelect
                 aria-label={x.weekday}
-                value={sched.weekday}
-                onChange={(e) => set({ schedule: { ...sched, weekday: Number(e.target.value) } })}
-                className={SELECT}
-              >
-                {x.weekdays.map((name, i) => (
-                  <option key={i} value={i}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                value={String(sched.weekday)}
+                onValueChange={(v) => set({ schedule: { ...sched, weekday: Number(v) } })}
+                options={x.weekdays.map((name, i) => ({ value: String(i), label: name }))}
+              />
             ) : null}
             {sched.kind !== "off" ? (
-              <Input
-                type="time"
+              <TimePicker
                 aria-label={x.time}
                 value={`${pad(sched.hh)}:${pad(sched.mm)}`}
-                onChange={(e) => setTime(e.target.value)}
-                className="w-28"
+                onChange={setTime}
+                hourLabel={language === "zh" ? "时" : "Hour"}
+                minuteLabel={language === "zh" ? "分" : "Minute"}
               />
             ) : null}
           </div>
@@ -224,12 +224,7 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave, o
                 {projects.map((p) => (
                   <li key={p.id} className="border-b border-border last:border-b-0">
                     <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-muted/50">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(p.id)}
-                        onChange={() => toggleProject(p.id)}
-                        className="size-4 shrink-0 cursor-pointer accent-primary"
-                      />
+                      <Checkbox checked={selectedIds.includes(p.id)} onCheckedChange={() => toggleProject(p.id)} />
                       <span className="shrink-0">{p.name}</span>
                       <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{p.path}</span>
                     </label>
@@ -238,7 +233,7 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave, o
                 {stale.map((id) => (
                   <li key={id} className="border-b border-border last:border-b-0">
                     <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-muted/50">
-                      <input type="checkbox" checked onChange={() => toggleProject(id)} className="size-4 shrink-0 cursor-pointer accent-primary" />
+                      <Checkbox checked onCheckedChange={() => toggleProject(id)} />
                       <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{id}</span>
                       <span className="shrink-0 text-xs text-warning">{x.projectGone}</span>
                     </label>
@@ -255,27 +250,24 @@ export function ExtractConfigForm({ config, runners, projects, saving, onSave, o
         </Row>
 
         <Row label={x.includeGlobal} htmlFor="extract-global">
-          <input
+          <Checkbox
             id="extract-global"
-            type="checkbox"
             checked={draft.include_global}
-            onChange={(e) => set({ include_global: e.target.checked })}
-            className="mt-1 size-4 cursor-pointer accent-primary"
+            onCheckedChange={(c) => set({ include_global: c === true })}
+            className="mt-1.5"
           />
         </Row>
 
         <Row label={x.lookback} htmlFor="extract-lookback">
           <div className="flex items-center gap-2">
-            <Input
+            <NumberInput
               id="extract-lookback"
-              type="number"
-              inputMode="numeric"
               min={1}
               max={90}
               value={lookbackText}
               aria-invalid={!lookbackOk}
-              onChange={(e) => setLookbackText(e.target.value)}
-              className="w-20"
+              onChange={setLookbackText}
+              className="w-28"
             />
             <span className="text-sm text-muted-foreground">{x.lookbackUnit}</span>
             {!lookbackOk ? (

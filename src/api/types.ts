@@ -760,6 +760,8 @@ export type QuotaReason =
   /** The endpoint answered with JSON MemDock cannot read. */
   | "unexpected_response"
   | "network"
+  /** chatgpt.com could not be reached (directly or through the proxy). */
+  | "codex_network"
   | `http_${number}`;
 
 export interface ToolQuota {

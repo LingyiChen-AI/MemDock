@@ -20,7 +20,7 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 pub const NOT_LOGGED_IN: &str = "codex_not_logged_in";
 pub const LOGIN_EXPIRED: &str = "codex_login_expired";
 pub const UNEXPECTED: &str = "unexpected_response";
-pub const NETWORK: &str = "network";
+pub const NETWORK: &str = "codex_network";
 
 /// Credentials taken from `auth.json`.
 #[derive(Debug, PartialEq)]

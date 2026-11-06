@@ -872,20 +872,21 @@
       "unavailableReason": "额度接口暂不可用（{reason}），token 统计不受影响",
       "noData": "暂无额度数据，使用 Codex 后会出现",
       "disabledTitle": "Claude Code 额度查询未开启",
-      "explain": "读取本机 Claude Code 的登录凭据，查询 5 小时和本周额度。凭据只用于查询，不保存。结果缓存 30 分钟，用量页点「立即刷新」可马上重查。关闭后不联网。",
+      "explain": "开启后，用量页会显示 Claude Code 5 小时和本周还剩多少额度。使用你在 Claude Code 里的登录状态查询，不需要另外登录，也不会保存你的账号信息。每 30 分钟自动更新一次，也可以在用量页手动刷新。",
       "enable": "开启查询",
       "updated": "数据时间 {time}",
       "plan": "{plan} 套餐",
-      "codexLogSnapshot": "这是 {date} 日志里的快照，开启实时查询可看当前额度。",
-      "codexLiveFailed": "实时查询失败：{reason}。以下是 {date} 日志里的快照。",
+      "codexLogSnapshot": "这是 {date} 使用 Codex 时记录的额度，开启实时查询可看到当前额度。",
+      "codexLiveFailed": "暂时查不到实时额度：{reason}。下面是 {date} 使用 Codex 时记录的额度。",
       "codexEnableLive": "开启实时查询",
-      "codexExplain": "读取本机 Codex 的登录凭据（~/.codex/auth.json），查询 5 小时和本周额度。只读不改，凭据不保存。结果缓存 30 分钟，用量页点「立即刷新」可马上重查。关闭后只显示本机日志里的额度快照。",
+      "codexExplain": "开启后，用量页会显示 Codex 5 小时和本周还剩多少额度。使用你在 Codex 里的 ChatGPT 登录状态查询，不需要另外登录，也不会保存你的账号信息。每 30 分钟自动更新一次，也可以在用量页手动刷新。不开启时，显示的是 Codex 上次使用时记录的额度。",
       "reasons": {
         "not_logged_in": "没有找到 Claude Code 的登录凭据，请先在 Claude Code 里登录",
         "codex_not_logged_in": "没有找到 Codex 的 ChatGPT 登录，请先在 Codex 里登录",
         "codex_login_expired": "Codex 登录已过期，请在 Codex 里重新登录",
         "unexpected_response": "额度接口返回了无法识别的数据",
-        "network": "网络请求失败"
+        "network": "连不上 Claude 的额度服务，请检查网络；如果用了代理，确认代理能访问 claude.ai",
+        "codex_network": "连不上 ChatGPT（chatgpt.com），请检查网络；如果用了代理，确认代理能访问 OpenAI"
       }
     },
     "views": {

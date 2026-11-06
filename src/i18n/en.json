@@ -872,20 +872,21 @@
       "unavailableReason": "Quota endpoint unavailable ({reason}); token statistics are not affected",
       "noData": "No quota data yet; it appears after you use Codex",
       "disabledTitle": "Claude Code quota lookup is off",
-      "explain": "Reads the local Claude Code sign-in to look up the 5-hour and weekly quota. Credentials are only used for the request and never stored. Results are cached for 30 minutes; use Refresh now on the usage page to check again. Off means no network requests.",
+      "explain": "Shows how much of your 5-hour and weekly Claude Code quota is left on the usage page. Uses your existing Claude Code sign-in; no extra login, and your account details are never stored. Updates every 30 minutes, or refresh it yourself on the usage page.",
       "enable": "Turn on",
       "updated": "Data from {time}",
       "plan": "{plan} plan",
-      "codexLogSnapshot": "This is the snapshot from the {date} logs. Turn on live lookup to see the current quota.",
-      "codexLiveFailed": "Live lookup failed: {reason}. Showing the snapshot from the {date} logs.",
+      "codexLogSnapshot": "This is the quota recorded when you used Codex on {date}. Turn on live lookup to see the current quota.",
+      "codexLiveFailed": "Could not get the live quota: {reason}. Showing the quota recorded when you used Codex on {date}.",
       "codexEnableLive": "Turn on live lookup",
-      "codexExplain": "Reads the local Codex sign-in (~/.codex/auth.json) to look up the 5-hour and weekly quota. Read-only, never stored. Results are cached for 30 minutes; use Refresh now on the usage page to check again. Off shows the quota snapshot from local logs.",
+      "codexExplain": "Shows how much of your 5-hour and weekly Codex quota is left on the usage page. Uses your existing ChatGPT sign-in in Codex; no extra login, and your account details are never stored. Updates every 30 minutes, or refresh it yourself on the usage page. When off, the quota recorded the last time you used Codex is shown.",
       "reasons": {
         "not_logged_in": "No Claude Code login found; sign in to Claude Code first",
         "codex_not_logged_in": "No ChatGPT login found for Codex; sign in to Codex first",
         "codex_login_expired": "Your Codex login has expired; sign in again in Codex",
         "unexpected_response": "The quota endpoint returned data MemDock cannot read",
-        "network": "Network request failed"
+        "network": "Cannot reach the Claude quota service. Check your network, and if you use a proxy, make sure it can reach claude.ai",
+        "codex_network": "Cannot reach ChatGPT (chatgpt.com). Check your network, and if you use a proxy, make sure it can reach OpenAI"
       }
     },
     "views": {

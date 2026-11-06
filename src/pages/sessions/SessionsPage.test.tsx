@@ -202,3 +202,17 @@ describe("historyBefore", () => {
     expect(historyBefore(preview, Date.parse("2026-12-01T00:00:00.000Z"))).toBe(preview);
   });
 });
+
+import { linkPaneIds } from "./SessionsPage";
+
+describe("pane identity", () => {
+  it("keeps one key while a conversation goes draft → live → listed, and separates others", () => {
+    const k1 = linkPaneIds(["d:draft-a"]);
+    // first send: the draft is linked to its live process and session id
+    expect(linkPaneIds(["d:draft-a", "l:L1", "n:claude:S1"])).toBe(k1);
+    // the session file shows up on the list: selection switches to it
+    expect(linkPaneIds(["s:claude:/p/S1.jsonl", "n:claude:S1", "l:L1"])).toBe(k1);
+    // a different conversation gets its own key
+    expect(linkPaneIds(["s:claude:/p/S2.jsonl", "n:claude:S2"])).not.toBe(k1);
+  });
+});

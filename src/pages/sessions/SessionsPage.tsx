@@ -719,6 +719,20 @@ export function historyBefore(preview: SessionPreview, startedAt: number): Sessi
   return { ...preview, timeline, timeline_total: preview.timeline_total - (preview.timeline.length - timeline.length) };
 }
 
+/**
+ * One stable React key per conversation while it moves between identities (draft → live
+ * process → session file on the list), so the pane is not remounted (no flash, scroll kept).
+ * Every identity seen for a pane maps to the pane's first key.
+ */
+const paneAliases = new Map<string, string>();
+
+export function linkPaneIds(ids: (string | null | undefined)[]): string {
+  const known = ids.filter((x): x is string => !!x);
+  const key = known.map((id) => paneAliases.get(id)).find(Boolean) ?? known[0] ?? "empty";
+  for (const id of known) paneAliases.set(id, key);
+  return key;
+}
+
 function ChatPane({
   target,
   preview,
@@ -886,6 +900,13 @@ function ChatPane({
     };
     // A draft's UI state follows it to the started conversation's key.
     const carry = (info: LiveSessionInfo) => {
+      linkPaneIds([
+        target.draftKey ? `d:${target.draftKey}` : null,
+        target.session ? `s:${target.session.tool}:${target.session.path}` : null,
+        target.nativeId ? `n:${target.tool}:${target.nativeId}` : null,
+        `l:${info.live_id}`,
+        info.native_id ? `n:${info.agent}:${info.native_id}` : null,
+      ]);
       if (!target.draft) return;
       const to = info.native_id ? `${info.agent}:${info.native_id}` : `${LIVE_PREFIX}${info.live_id}`;
       moveConvUi(termKey, to);
@@ -1666,7 +1687,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
             <ShellPane key={selectedShell.key} shell={selectedShell} onClose={() => closeShell(selectedShell.key)} c={c} />
           ) : target ? (
             <ChatPane
-              key={target.draftKey ?? (selectedLive ? LIVE_PREFIX + selectedLive.live_id : selected ? sessionKey(selected) : selectedKey)}
+              key={linkPaneIds([
+                target.draftKey ? `d:${target.draftKey}` : null,
+                selected ? `s:${selected.tool}:${selected.path}` : null,
+                target.nativeId ? `n:${target.tool}:${target.nativeId}` : null,
+                selectedLive ? `l:${selectedLive.live_id}` : null,
+                selectedKey ? `k:${selectedKey}` : null,
+              ])}
               target={target}
               preview={selected ? preview : null}
               error={selected ? previewError : null}

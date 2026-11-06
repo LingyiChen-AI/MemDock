@@ -385,6 +385,16 @@ function ModeSwitch({ value, onChange, disabled, c }: { value: ChatMode; onChang
   );
 }
 
+/** The session history up to `startedAt` (ms): what was on disk before a live process took over. */
+export function historyBefore(preview: SessionPreview, startedAt: number): SessionPreview {
+  const timeline = preview.timeline.filter((it) => {
+    const t = Date.parse(it.ts);
+    return Number.isNaN(t) || t < startedAt;
+  });
+  if (timeline.length === preview.timeline.length) return preview;
+  return { ...preview, timeline, timeline_total: preview.timeline_total - (preview.timeline.length - timeline.length) };
+}
+
 function ChatPane({
   target,
   preview,
@@ -473,15 +483,17 @@ function ChatPane({
     }
   };
 
+  // With a live process, the file's messages from its start on are shown by the live view.
+  const before = live && preview ? historyBefore(preview, live.created_at) : preview;
   const history = session ? (
     error ? (
       <p role="alert" className="mb-4 text-sm text-destructive">
         {fmt(s.previewFailed, { error })}
       </p>
-    ) : !preview ? (
+    ) : !before ? (
       <ChatSkeleton label={s.previewLoading} />
-    ) : (
-      <Timeline bare preview={preview} tool={session.tool} />
+    ) : before.timeline.length === 0 ? null : (
+      <Timeline bare preview={before} tool={session.tool} />
     )
   ) : null;
 

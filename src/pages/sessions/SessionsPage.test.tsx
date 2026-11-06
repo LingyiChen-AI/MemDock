@@ -18,7 +18,7 @@ vi.mock("@/api/sessions", () => ({
 
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { renderApp } from "@/test/fixtures";
-import { SessionsPage } from "./SessionsPage";
+import { SessionsPage, historyBefore } from "./SessionsPage";
 import { filterSessions, groupByProject } from "./sessionsUtils";
 
 function mk(over: Partial<SessionSummary> & { id: string }): SessionSummary {
@@ -189,5 +189,16 @@ describe("SessionsPage", () => {
     await userEvent.type(box, "登录页修复{Enter}");
     await waitFor(() => expect(renameSession).toHaveBeenCalledWith("claude", claudeSession.path, "登录页修复"));
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("historyBefore", () => {
+  it("keeps only what was on disk before the live process started", () => {
+    const start = Date.parse("2026-11-01T10:00:01.500Z");
+    const cut = historyBefore(preview, start);
+    expect(cut.timeline.map((t) => t.ts)).toEqual(["2026-11-01T10:00:00.000Z", "2026-11-01T10:00:01.000Z"]);
+    expect(cut.timeline_total).toBe(2);
+    expect(historyBefore(preview, Date.parse("2026-11-01T09:00:00.000Z")).timeline).toEqual([]);
+    expect(historyBefore(preview, Date.parse("2026-12-01T00:00:00.000Z"))).toBe(preview);
   });
 });

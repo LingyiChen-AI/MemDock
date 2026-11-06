@@ -1047,7 +1047,7 @@ function ChatPane({
       {mode === "terminal" && wtPending ? (
         <div className="grid flex-1 place-items-center p-6 text-sm text-muted-foreground">{w.creating}</div>
       ) : mode === "terminal" ? (
-        <TerminalView termKey={termKey} opts={termOpts} c={c} />
+        <TerminalView termKey={termKey} opts={termOpts} c={c} onClose={() => void switchMode("gui")} />
       ) : (
         <>
           {live && lc?.loaded ? (

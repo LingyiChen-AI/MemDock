@@ -112,6 +112,7 @@ impl World {
             lock: Mutex::new(()),
             git: g,
             download: false,
+            preferences: None,
         }
     }
 }
@@ -131,6 +132,8 @@ struct Pc {
     git: SyncGit,
     /// Next prepare builds a download plan.
     download: bool,
+    /// `memdock_settings.json` to write on upload.
+    preferences: Option<String>,
 }
 
 impl Pc {
@@ -187,6 +190,7 @@ impl Pc {
             write_lock: &self.lock,
             secrets: Default::default(),
             download: self.download,
+            preferences: self.preferences.clone(),
         }
     }
 
@@ -1588,4 +1592,63 @@ fn skip_records_persist_until_synced() {
     let plan = a.prepare();
     assert_eq!(plan.push_local, vec![CODEX.to_string()]);
     assert!(update_skip_records(&plan, &recs, 9).is_empty());
+}
+
+// ------------------------------------------------------------ preferences
+
+const PREFS: &str = "memdock_settings.json";
+
+fn prefs_text(theme: &str, at: &str) -> String {
+    let fe = serde_json::json!({"memdock.diffLayout": "unified"});
+    let be = crate::sync::prefs::BackendPrefs {
+        theme: Some(theme.into()),
+        ..Default::default()
+    };
+    crate::sync::prefs::build(be, &fe, "A", at).unwrap()
+}
+
+#[test]
+fn upload_writes_preferences_only_when_they_change() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), "g\n");
+    a.preferences = Some(prefs_text("dark", "2026-11-07T10:00:00Z"));
+    let s = a.sync();
+    assert!(s.committed);
+    assert_eq!(s.pushed, 1, "the preferences file is not a memory file");
+    assert!(w.file(PREFS).unwrap().contains("\"theme\": \"dark\""));
+    // same content, new timestamp: no new commit
+    a.preferences = Some(prefs_text("dark", "2026-11-07T11:00:00Z"));
+    let again = a.sync();
+    assert!(!again.committed);
+    assert!(w.file(PREFS).unwrap().contains("2026-11-07T10:00:00Z"));
+    // changed content: committed with nothing else
+    a.preferences = Some(prefs_text("light", "2026-11-07T12:00:00Z"));
+    let third = a.sync();
+    assert!(third.committed);
+    assert_eq!(third.pushed, 0);
+    assert!(w.file(PREFS).unwrap().contains("light"));
+    // without a snapshot the file stays as it is
+    a.preferences = None;
+    write(&a.global(), "g2\n");
+    a.sync();
+    assert!(w.file(PREFS).unwrap().contains("light"));
+}
+
+#[test]
+fn preferences_file_is_never_a_memory_file() {
+    let w = World::new();
+    w.push_raw(&[(PREFS, Some("{\"version\":1}\n"))]);
+    let mut b = w.machine("B");
+    b.add_project();
+    let (plan, _) = b.download();
+    assert!(plan.absent.iter().all(|f| f.repo_path != PREFS));
+    assert!(plan.take_remote.iter().all(|p| p != PREFS));
+    write(&b.global(), "g\n");
+    let plan = b.prepare();
+    assert!(plan.push_local.iter().chain(&plan.take_remote).all(|p| p != PREFS));
+    assert!(plan.remote_deleted.is_empty() && plan.conflicts.is_empty());
+    b.finish(&plan, &BTreeMap::new()).unwrap();
+    // an upload without a snapshot keeps the remote file untouched
+    assert_eq!(w.file(PREFS).as_deref(), Some("{\"version\":1}\n"));
 }

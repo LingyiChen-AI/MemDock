@@ -38,6 +38,7 @@ use crate::sync::layout::{
     Machine, SyncFile,
 };
 use crate::sync::manifest::{local_entries, lock_entries_for_sync, ManifestSkill};
+use crate::sync::prefs;
 use crate::sync::repo::{Auth, CommitInfo, SyncGit, SyncGitError};
 use crate::sync::state::{load_state, save_state, SyncState};
 use crate::sync::token::{KeyringStore, TokenStore};
@@ -136,6 +137,9 @@ pub struct SyncRuntime {
     /// Whether the token store holds a token, as last seen. Status reads use
     /// this so they never touch the keychain; `None` until first known.
     has_token: Mutex<Option<bool>>,
+    /// `memdock_settings.json` text the current memory upload also writes
+    /// (set by every `sync_start`, reused by `sync_finish`).
+    pub prefs_json: Mutex<Option<String>>,
 }
 
 fn github_clone_url(owner: &str, name: &str) -> String {
@@ -169,6 +173,7 @@ impl SyncRuntime {
             status_tx: Mutex::new(None),
             last_pending: AtomicI64::new(-1),
             has_token: Mutex::new(None),
+            prefs_json: Mutex::new(None),
         }
     }
 
@@ -834,6 +839,7 @@ fn make_ctx<'a>(state: &'a AppState, p: &'a Parts, auth: Auth) -> SyncCtx<'a> {
         write_lock: &state.write_lock,
         secrets: lock(&state.sync.secret_policy).clone(),
         download: false,
+        preferences: lock(&state.sync.prefs_json).clone(),
     }
 }
 
@@ -1248,12 +1254,25 @@ pub fn sync_start_dir(
     secrets: &str,
     direction: &str,
 ) -> Result<SyncStartDto, CommandError> {
+    sync_start_full(state, secrets, direction, None)
+}
+
+/// `sync_start_dir`; `preferences` is the frontend's `localStorage` part:
+/// when given on an upload with "upload preferences with memory" on, the
+/// upload also refreshes `memdock_settings.json`.
+pub fn sync_start_full(
+    state: &AppState,
+    secrets: &str,
+    direction: &str,
+    preferences: Option<Value>,
+) -> Result<SyncStartDto, CommandError> {
     let download = match direction {
         "up" => false,
         "down" => true,
         _ => return Err(err("invalid", "direction must be up or down")),
     };
     let _g = try_sync_lock(state)?;
+    *lock(&state.sync.prefs_json) = None;
     *lock(&state.sync.secret_policy) = SecretPolicy {
         allow: secrets == "allow",
         exclude: BTreeSet::new(),
@@ -1263,7 +1282,19 @@ pub fn sync_start_dir(
         let token = require_token(state, &s)?;
         ensure_ready(state, &token, &mut s)?;
         state.rescan();
+        let with_prefs = s.prefs_with_memory && !download;
         let p = gather(state, s, true)?;
+        *lock(&state.sync.prefs_json) = match (&preferences, with_prefs) {
+            (Some(fe), true) => match prefs_text(state, &p.machine, fe) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    // Preferences never block a memory sync.
+                    eprintln!("preferences left out of the upload: {}", e.message);
+                    None
+                }
+            },
+            _ => None,
+        };
         let mut ctx = make_ctx(state, &p, Some(token));
         ctx.download = download;
         let mut plan = prepare(&ctx).map_err(sync_err)?;
@@ -1284,6 +1315,7 @@ pub fn sync_start_dir(
         {
             let res = finish(&ctx, &plan, &BTreeMap::new());
             let sum = settle(state, &plan, &p, res)?;
+            note_prefs_uploaded(state);
             return Ok(SyncStartDto::Done {
                 summary: (&sum).into(),
                 skipped: plan.skipped,
@@ -1334,7 +1366,9 @@ pub fn sync_finish_impl(
         ) {
             lock(&state.sync.plans).insert(plan.id.clone(), plan.clone());
         }
-        settle(state, &plan, &p, out).map(|s| SyncSummaryDto::from(&s))
+        let sum = settle(state, &plan, &p, out).map(|s| SyncSummaryDto::from(&s))?;
+        note_prefs_uploaded(state);
+        Ok(sum)
     })();
     r.map_err(|e| on_error(state, e))
 }
@@ -1498,6 +1532,230 @@ pub fn restore_from_history_impl(
     Ok(())
 }
 
+// --------------------------------------------------------------- preferences
+
+const PREFS_COMMIT_MESSAGE: &str = "MemDock: update preferences";
+
+/// Where the cloud copy of the preferences stands, as last fetched.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct PrefsMetaDto {
+    pub updated_at: String,
+    pub device: String,
+    pub app_version: String,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct PrefsInfoDto {
+    /// Memory uploads also refresh `memdock_settings.json`.
+    pub with_memory: bool,
+    /// The cloud copy in the local clone (no network); `None` when absent.
+    pub remote: Option<PrefsMetaDto>,
+    /// The cloud copy is newer than what this machine last uploaded / applied.
+    pub newer: bool,
+    /// `updated_at` of what this machine last uploaded / applied.
+    pub seen: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct PrefsUploadDto {
+    /// A new commit was pushed (false: the cloud already had these preferences).
+    pub committed: bool,
+    pub info: PrefsInfoDto,
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// This machine's preferences file text (backend settings + `frontend`).
+fn prefs_text(state: &AppState, machine: &Machine, frontend: &Value) -> Result<String, CommandError> {
+    let settings = crate::settings::load_settings(&state.settings_path);
+    let extract = crate::extract::store::load_config(&state.data_dir);
+    let backend = prefs::backend_prefs(&settings, extract.as_ref());
+    prefs::build(backend, frontend, &machine.name, &now_rfc3339()).map_err(|e| {
+        if e == "secrets" {
+            err("secrets", "the preferences look like they hold a secret (key / password)")
+        } else {
+            err("io", e)
+        }
+    })
+}
+
+fn prefs_updated_at(text: &str) -> Option<String> {
+    prefs::parse(text).ok().map(|f| f.updated_at).filter(|t| !t.is_empty())
+}
+
+/// After a successful memory upload that carried preferences.
+fn note_prefs_uploaded(state: &AppState) {
+    let Some(at) = lock(&state.sync.prefs_json).as_deref().and_then(prefs_updated_at) else {
+        return;
+    };
+    if let Ok(mut s) = load(state) {
+        s.prefs_seen = Some(at);
+        let _ = store(state, &s);
+    }
+}
+
+/// The preferences file at `origin/<branch>` of the local clone.
+fn cached_remote_prefs(state: &AppState, s: &SyncState) -> Option<prefs::PrefsFile> {
+    let dir = repo_dir(state);
+    if !dir.join(".git").exists() {
+        return None;
+    }
+    let branch = s.branch.clone().unwrap_or_else(|| "main".into());
+    let bytes = state
+        .sync
+        .git
+        .read_at(&dir, &format!("origin/{branch}"), prefs::PREFS_FILE)
+        .ok()
+        .flatten()?;
+    prefs::parse(&String::from_utf8(bytes).ok()?).ok()
+}
+
+fn prefs_info(state: &AppState, s: &SyncState) -> PrefsInfoDto {
+    let remote = cached_remote_prefs(state, s);
+    PrefsInfoDto {
+        with_memory: s.prefs_with_memory,
+        newer: remote.as_ref().is_some_and(|r| {
+            !r.updated_at.is_empty() && prefs::is_newer(&r.updated_at, s.prefs_seen.as_deref())
+        }),
+        remote: remote.map(|r| PrefsMetaDto {
+            updated_at: r.updated_at,
+            device: r.device,
+            app_version: r.app_version,
+        }),
+        seen: s.prefs_seen.clone(),
+    }
+}
+
+/// Local only (no network).
+pub fn prefs_sync_info_impl(state: &AppState) -> Result<PrefsInfoDto, CommandError> {
+    let s = load(state)?;
+    Ok(prefs_info(state, &s))
+}
+
+pub fn prefs_set_with_memory_impl(state: &AppState, enabled: bool) -> Result<PrefsInfoDto, CommandError> {
+    let _g = try_sync_lock(state)?;
+    let mut s = load(state)?;
+    s.prefs_with_memory = enabled;
+    store(state, &s)?;
+    Ok(prefs_info(state, &s))
+}
+
+/// Fetches and returns the remote head (`None`: empty repository).
+fn fetch_head(state: &AppState, auth: &Auth) -> Result<Option<String>, CommandError> {
+    state.sync.git.fetch(&repo_dir(state), auth).map_err(git_err)
+}
+
+/// Writes `memdock_settings.json` (this machine's preferences) into the sync
+/// repository as one commit and pushes it. Memory files are not touched.
+pub fn prefs_upload_impl(state: &AppState, frontend: Value) -> Result<PrefsUploadDto, CommandError> {
+    use crate::sync::repo::TreeBlob;
+    let _g = try_sync_lock(state)?;
+    let r = (|| {
+        let mut s = load(state)?;
+        let token = require_token(state, &s)?;
+        ensure_ready(state, &token, &mut s)?;
+        let machine = load_or_create_machine(&sync_dir(state).join("machine.json"))?;
+        let text = prefs_text(state, &machine, &frontend)?;
+        let auth: Auth = Some(token);
+        let dir = repo_dir(state);
+        let git = &state.sync.git;
+        let branch = match &s.branch {
+            Some(b) => b.clone(),
+            None => git.default_branch(&dir).unwrap_or_else(|_| "main".into()),
+        };
+        let mut committed = false;
+        for attempt in 0..2 {
+            let head = fetch_head(state, &auth)?;
+            let same = match &head {
+                Some(h) => git
+                    .read_at(&dir, h, prefs::PREFS_FILE)
+                    .ok()
+                    .flatten()
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .is_some_and(|old| prefs::same_content(&old, &text)),
+                None => false,
+            };
+            if same {
+                break;
+            }
+            let mut tree: BTreeMap<String, TreeBlob> = match &head {
+                Some(h) => git
+                    .tree_entries(&dir, h)
+                    .map_err(git_err)?
+                    .into_iter()
+                    .map(|(p, e)| (p, TreeBlob::Existing(e)))
+                    .collect(),
+                None => BTreeMap::new(),
+            };
+            tree.insert(prefs::PREFS_FILE.to_string(), TreeBlob::Data(text.clone().into_bytes()));
+            let commit = git
+                .commit_tree_blobs(&dir, head.as_deref(), &tree, PREFS_COMMIT_MESSAGE, engine::SYNC_AUTHOR)
+                .map_err(git_err)?;
+            match git.push(&dir, &commit, &branch, &auth) {
+                Ok(()) => {
+                    committed = true;
+                    break;
+                }
+                // Someone pushed meanwhile: rebuild on the new head once.
+                Err(SyncGitError::Rejected) if attempt == 0 => continue,
+                Err(e) => return Err(git_err(e)),
+            }
+        }
+        // Refresh `origin/<branch>` so the info below shows the new copy.
+        let _ = fetch_head(state, &auth);
+        let mut s = load(state)?;
+        s.prefs_seen = prefs_updated_at(&text);
+        store(state, &s)?;
+        Ok(PrefsUploadDto {
+            committed,
+            info: prefs_info(state, &s),
+        })
+    })();
+    r.map_err(|e| on_error(state, e))
+}
+
+/// Fetches and returns the cloud copy of the preferences. Applies nothing:
+/// the frontend shows the differences, applies them through the usual
+/// setters, then calls `prefs_mark_applied`.
+pub fn prefs_download_impl(state: &AppState) -> Result<prefs::PrefsFile, CommandError> {
+    let _g = try_sync_lock(state)?;
+    let r = (|| {
+        let mut s = load(state)?;
+        let token = require_token(state, &s)?;
+        ensure_ready(state, &token, &mut s)?;
+        let missing = || err("prefs_missing", "there are no preferences in the cloud yet");
+        let head = fetch_head(state, &Some(token))?.ok_or_else(missing)?;
+        let bytes = state
+            .sync
+            .git
+            .read_at(&repo_dir(state), &head, prefs::PREFS_FILE)
+            .map_err(git_err)?
+            .ok_or_else(missing)?;
+        let text = String::from_utf8(bytes).map_err(|_| err("prefs_invalid", "not UTF-8 text"))?;
+        prefs::parse(&text).map_err(|m| {
+            if m.starts_with("too_new") {
+                err("prefs_too_new", "the cloud preferences were written by a newer MemDock")
+            } else {
+                err("prefs_invalid", m)
+            }
+        })
+    })();
+    r.map_err(|e| on_error(state, e))
+}
+
+/// Records that the cloud preferences written at `updated_at` were applied here.
+pub fn prefs_mark_applied_impl(state: &AppState, updated_at: &str) -> Result<PrefsInfoDto, CommandError> {
+    if chrono::DateTime::parse_from_rfc3339(updated_at).is_err() {
+        return Err(err("invalid", "updated_at must be an RFC 3339 time"));
+    }
+    let mut s = load(state)?;
+    s.prefs_seen = Some(updated_at.to_string());
+    store(state, &s)?;
+    Ok(prefs_info(state, &s))
+}
+
 // ------------------------------------------------------------------ commands
 
 type St<'a> = State<'a, Arc<AppState>>;
@@ -1548,12 +1806,39 @@ pub fn sync_start(
     state: St,
     secrets: Option<String>,
     direction: Option<String>,
+    preferences: Option<Value>,
 ) -> Result<SyncStartDto, CommandError> {
-    sync_start_dir(
+    sync_start_full(
         &state,
         secrets.as_deref().unwrap_or("block"),
         direction.as_deref().unwrap_or("up"),
+        preferences,
     )
+}
+
+#[tauri::command(async)]
+pub fn prefs_sync_info(state: St) -> Result<PrefsInfoDto, CommandError> {
+    prefs_sync_info_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn prefs_set_with_memory(state: St, enabled: bool) -> Result<PrefsInfoDto, CommandError> {
+    prefs_set_with_memory_impl(&state, enabled)
+}
+
+#[tauri::command(async)]
+pub fn prefs_upload(state: St, frontend: Value) -> Result<PrefsUploadDto, CommandError> {
+    prefs_upload_impl(&state, frontend)
+}
+
+#[tauri::command(async)]
+pub fn prefs_download(state: St) -> Result<prefs::PrefsFile, CommandError> {
+    prefs_download_impl(&state)
+}
+
+#[tauri::command(async)]
+pub fn prefs_mark_applied(state: St, updated_at: String) -> Result<PrefsInfoDto, CommandError> {
+    prefs_mark_applied_impl(&state, &updated_at)
 }
 
 #[tauri::command(async)]

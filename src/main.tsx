@@ -9,6 +9,9 @@ import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "./styles/globals.css";
 import App from "./App";
 import { RootErrorBoundary } from "./components/RootErrorBoundary";
+import { installOverflowTitles } from "./lib/overflowTitles";
+
+installOverflowTitles();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

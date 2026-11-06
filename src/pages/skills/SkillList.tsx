@@ -144,8 +144,8 @@ export function SkillList({
             />
           </div>
         </div>
-        <div className="flex gap-2">
-          <span className="flex min-w-0 flex-1" title={gitOk ? undefined : s.needGit}>
+        <div className="flex flex-wrap gap-2">
+          <span className="flex min-w-fit flex-1" title={gitOk ? undefined : s.needGit}>
             <Button
               type="button"
               variant="outline"

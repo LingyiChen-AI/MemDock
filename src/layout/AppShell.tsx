@@ -126,8 +126,8 @@ function NewChatButton({ onClick }: { onClick: () => void }) {
           className="h-8 cursor-pointer gap-2.5 px-2.5 font-medium text-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none [&>svg:first-child]:text-primary group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:[&>svg:first-child]:text-primary-foreground group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-primary group-data-[collapsible=icon]:text-primary-foreground group-data-[collapsible=icon]:shadow-[0_2px_6px_color-mix(in_oklab,var(--primary)_30%,transparent)] group-data-[collapsible=icon]:hover:bg-primary/90 group-data-[collapsible=icon]:hover:text-primary-foreground"
         >
           <SquarePen aria-hidden="true" />
-          <span>{label}</span>
-          <kbd className="ml-auto font-mono text-[10.5px] font-normal text-muted-foreground/70 group-data-[collapsible=icon]:hidden">{shortcut}</kbd>
+          <span className="min-w-0 truncate">{label}</span>
+          <kbd className="ml-auto shrink-0 pl-1 font-mono text-[10.5px] font-normal text-muted-foreground/70 opacity-0 transition-opacity duration-150 group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 group-data-[collapsible=icon]:hidden">{shortcut}</kbd>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
@@ -149,8 +149,8 @@ function NewTerminalButton({ onClick }: { onClick: () => void }) {
           className="h-8 cursor-pointer gap-2.5 px-2.5 transition-colors duration-150 hover:bg-muted motion-reduce:transition-none text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:mx-auto"
         >
           <SquareTerminal aria-hidden="true" />
-          <span>{label}</span>
-          <kbd className="ml-auto font-mono text-[10.5px] font-normal text-muted-foreground/70 group-data-[collapsible=icon]:hidden">{shortcut}</kbd>
+          <span className="min-w-0 truncate">{label}</span>
+          <kbd className="ml-auto shrink-0 pl-1 font-mono text-[10.5px] font-normal text-muted-foreground/70 opacity-0 transition-opacity duration-150 group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 group-data-[collapsible=icon]:hidden">{shortcut}</kbd>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
@@ -312,7 +312,7 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
                           )}
                         >
                           <Icon aria-hidden="true" />
-                          <span>{label}</span>
+                          <span className="min-w-0 truncate">{label}</span>
                         </SidebarMenuButton>
                         {count ? (
                           <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:flex! group-data-[collapsible=icon]:top-0! group-data-[collapsible=icon]:right-1! group-data-[collapsible=icon]:h-3.5 group-data-[collapsible=icon]:min-w-3.5 group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:text-[9px] group-data-[collapsible=icon]:ring-2 group-data-[collapsible=icon]:ring-sidebar">

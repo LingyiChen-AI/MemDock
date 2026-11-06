@@ -1,11 +1,11 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { LoadingState } from "@/components/ui/loading-state";
 import { ArrowLeftRight, Check, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -59,6 +59,31 @@ function ToolFilterBar({ value, onChange, s }: { value: ToolFilter; onChange: (v
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Loading state shaped like the list: a project header and a few session rows. */
+function SessionListSkeleton({ label }: { label: string }) {
+  const titles = ["w-40", "w-28", "w-36", "w-44", "w-32", "w-24"];
+  return (
+    <div role="status" aria-busy="true" aria-label={label} className="flex flex-col gap-1 p-1">
+      {[0, 1].map((g) => (
+        <div key={g} className="flex flex-col gap-1">
+          <Skeleton className="mx-2.5 mt-3 mb-1 h-3.5 w-24" />
+          {[0, 1, 2].map((r) => (
+            <div key={r} className="flex flex-col gap-1.5 rounded-md px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-5 w-20 rounded" />
+                <Skeleton className={cn("h-4", titles[(g * 3 + r) % titles.length])} />
+                <Skeleton className="ml-auto h-3 w-10" />
+              </div>
+              <Skeleton className="h-3 w-32" />
+            </div>
+          ))}
+        </div>
+      ))}
+      <span className="sr-only">{label}</span>
     </div>
   );
 }
@@ -459,7 +484,7 @@ export function SessionsPage() {
                 {fmt(s.loadFailed, { error: loadError })}
               </p>
             ) : sessions === null ? (
-              <LoadingState label={s.loading} />
+              <SessionListSkeleton label={s.loading} />
             ) : sessions.length === 0 ? (
               <div className="flex flex-col gap-1 p-2">
                 <p className="text-sm font-medium">{s.empty}</p>

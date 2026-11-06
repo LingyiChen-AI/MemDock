@@ -104,8 +104,8 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
   const blocks = toBlocks(shown);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div role="radiogroup" aria-label={s.timeline.filterLabel} className="sticky top-0 z-10 -mx-4 -mt-4 flex flex-wrap gap-1.5 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div role="radiogroup" aria-label={s.timeline.filterLabel} className="flex shrink-0 flex-wrap gap-1.5 border-b border-border bg-background px-4 py-2.5">
         {filters.map((f) => (
           <button
             key={f.key}
@@ -126,6 +126,7 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
         ))}
       </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
       <ol className="flex flex-col gap-4">
         {blocks.map((b) =>
@@ -133,8 +134,9 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
         )}
       </ol>
       {preview.timeline_total > preview.timeline.length ? (
-        <p className="text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
+        <p className="mt-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
       ) : null}
+      </div>
     </div>
   );
 }
@@ -172,7 +174,7 @@ function MessageRow({ item, tool, s }: { item: Exclude<TimelineItem, ToolItem>; 
         <div
           className={cn(
             "min-w-0 px-3.5 py-2.5 text-sm leading-relaxed",
-            isUser ? "rounded-2xl rounded-tr-md bg-primary text-primary-foreground" : "rounded-2xl rounded-tl-md border border-border bg-card",
+            isUser ? "rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 text-foreground" : "rounded-2xl rounded-tl-md border border-border bg-card",
           )}
         >
           <p className={cn("break-words whitespace-pre-wrap", long && !open && "line-clamp-[12]")}>{item.text}</p>
@@ -180,7 +182,7 @@ function MessageRow({ item, tool, s }: { item: Exclude<TimelineItem, ToolItem>; 
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
-              className={cn("mt-1.5 cursor-pointer text-xs font-medium hover:underline", isUser ? "text-primary-foreground/80" : "text-primary")}
+              className="mt-1.5 cursor-pointer text-xs font-medium text-primary hover:underline"
             >
               {open ? s.collapse : s.expand}
             </button>

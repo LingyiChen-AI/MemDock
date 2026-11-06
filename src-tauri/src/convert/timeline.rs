@@ -116,12 +116,18 @@ pub fn build(items: &[Item], text_max: usize, io_max: usize) -> (Vec<TimelineIte
     for it in items {
         match it {
             Item::User { ts, text } => {
+                if text.trim().is_empty() {
+                    continue;
+                }
                 counts.user += 1;
-                out.push(TimelineItem::User { ts: ts.clone(), text: truncate_chars(text, text_max) });
+                out.push(TimelineItem::User { ts: ts.clone(), text: truncate_chars(text.trim(), text_max) });
             }
             Item::Assistant { ts, text } => {
+                if text.trim().is_empty() {
+                    continue;
+                }
                 counts.assistant += 1;
-                out.push(TimelineItem::Assistant { ts: ts.clone(), text: truncate_chars(text, text_max) });
+                out.push(TimelineItem::Assistant { ts: ts.clone(), text: truncate_chars(text.trim(), text_max) });
             }
             Item::Call { ts, id, name, input, shell } => {
                 let kind = if shell.is_some() { ToolKind::Shell } else { classify(name) };
@@ -207,6 +213,24 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn skips_blank_messages() {
+        let items = vec![
+            Item::User { ts: "1".into(), text: "  
+
+ ".into() },
+            Item::Assistant { ts: "2".into(), text: "
+".into() },
+            Item::User { ts: "3".into(), text: "
+ hi 
+".into() },
+        ];
+        let (tl, c) = build(&items, 100, 100);
+        assert_eq!(tl, vec![TimelineItem::User { ts: "3".into(), text: "hi".into() }]);
+        assert_eq!(c.user, 1);
+        assert_eq!(c.assistant, 0);
     }
 
     #[test]

@@ -288,13 +288,13 @@ function PreviewPane({
         </div>
         {result ? <ResultCard result={result} s={s} /> : <ResumeCommands session={session} s={s} />}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col">
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="p-4 text-sm text-destructive">
             {fmt(s.previewFailed, { error })}
           </p>
         ) : !preview ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
             {s.previewLoading}
           </p>

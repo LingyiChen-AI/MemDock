@@ -108,9 +108,12 @@ export function Timeline({
   tool,
   bare = false,
   startAtBottom = false,
+  filter: controlledFilter,
 }: {
   preview: SessionPreview;
   tool: Tool;
+  /** Filter chosen outside (with `TimelineFilterBar`); the built-in bar is used otherwise. */
+  filter?: TimelineFilter;
   /** Only the messages: no filter bar and no scroll container (embedded above a live chat). */
   bare?: boolean;
   /** Open scrolled to the newest message. */
@@ -119,17 +122,9 @@ export function Timeline({
   const { t } = useI18n();
   const scroller = React.useRef<HTMLDivElement>(null);
   const s = t.sessions;
-  const [filter, setFilter] = React.useState<TimelineFilter>("all");
+  const [ownFilter, setFilter] = React.useState<TimelineFilter>("all");
+  const filter = controlledFilter ?? ownFilter;
   const [detail, setDetail] = React.useState<ToolItem | null>(null);
-  const c = preview.counts;
-  const filters: { key: TimelineFilter; label: string; n: number }[] = [
-    { key: "all", label: s.timeline.all, n: preview.timeline.length },
-    { key: "chat", label: s.timeline.chat, n: c.user + c.assistant },
-    { key: "tools", label: s.timeline.tools, n: c.tools },
-    { key: "shell", label: s.timeline.shell, n: c.shell },
-    { key: "files", label: s.timeline.files, n: c.files },
-    { key: "errors", label: s.timeline.errors, n: c.errors },
-  ];
   const blocks = toBlocks(preview.timeline.filter((it) => matches(it, filter)));
 
   React.useLayoutEffect(() => {
@@ -160,30 +155,48 @@ export function Timeline({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div role="radiogroup" aria-label={s.timeline.filterLabel} className="flex shrink-0 flex-wrap gap-1.5 border-b border-border bg-background px-4 py-2.5">
-        {filters.map((f) => (
-          <button
-            key={f.key}
-            type="button"
-            role="radio"
-            aria-checked={filter === f.key}
-            disabled={f.n === 0 && f.key !== "all"}
-            onClick={() => setFilter(f.key)}
-            className={cn(
-              "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40",
-              filter === f.key ? "seg-active border-transparent" : "border-border text-muted-foreground hover:text-foreground",
-              f.key === "errors" && f.n > 0 && filter !== f.key && "text-destructive",
-            )}
-          >
-            {f.label}
-            <span className={cn("tabular-nums", filter === f.key ? "opacity-90" : "opacity-70")}>{f.n}</span>
-          </button>
-        ))}
-      </div>
+      <TimelineFilterBar preview={preview} value={filter} onChange={setFilter} />
 
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {list}
       </div>
+    </div>
+  );
+}
+
+/** The 全部 / 对话 / 工具调用… filter of a session's history. */
+export function TimelineFilterBar({ preview, value, onChange }: { preview: SessionPreview; value: TimelineFilter; onChange: (f: TimelineFilter) => void }) {
+  const { t } = useI18n();
+  const s = t.sessions;
+  const c = preview.counts;
+  const filters: { key: TimelineFilter; label: string; n: number }[] = [
+    { key: "all", label: s.timeline.all, n: preview.timeline.length },
+    { key: "chat", label: s.timeline.chat, n: c.user + c.assistant },
+    { key: "tools", label: s.timeline.tools, n: c.tools },
+    { key: "shell", label: s.timeline.shell, n: c.shell },
+    { key: "files", label: s.timeline.files, n: c.files },
+    { key: "errors", label: s.timeline.errors, n: c.errors },
+  ];
+  return (
+    <div role="radiogroup" aria-label={s.timeline.filterLabel} className="flex shrink-0 flex-wrap gap-1.5 border-b border-border bg-background px-4 py-2.5">
+      {filters.map((f) => (
+        <button
+          key={f.key}
+          type="button"
+          role="radio"
+          aria-checked={value === f.key}
+          disabled={f.n === 0 && f.key !== "all"}
+          onClick={() => onChange(f.key)}
+          className={cn(
+            "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40",
+            value === f.key ? "seg-active border-transparent" : "border-border text-muted-foreground hover:text-foreground",
+            f.key === "errors" && f.n > 0 && value !== f.key && "text-destructive",
+          )}
+        >
+          {f.label}
+          <span className={cn("tabular-nums", value === f.key ? "opacity-90" : "opacity-70")}>{f.n}</span>
+        </button>
+      ))}
     </div>
   );
 }

@@ -62,7 +62,8 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
-import { Timeline } from "./Timeline";
+import { Timeline, TimelineFilterBar, type TimelineFilter } from "./Timeline";
+import { EMPTY_CONV } from "@/pages/chat/liveModel";
 import { filterSessions, formatTime, groupByProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
 
 type S = Messages["sessions"];
@@ -768,6 +769,7 @@ function ChatPane({
   const { session, live } = target;
   const lc = useLiveConv(live?.live_id);
   const [actionError, setActionError] = React.useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = React.useState<TimelineFilter>("all");
   // One key per conversation: its terminal, unsent text, scroll position and settings.
   const termKey = terminalKey(target);
   const [busyPty, setBusyPty] = React.useState<((choice: "close" | "show" | "cancel") => void) | null>(null);
@@ -958,7 +960,7 @@ function ChatPane({
     ) : !before ? (
       live ? null : <ChatSkeleton label={s.previewLoading} />
     ) : before.timeline.length === 0 ? null : (
-      <Timeline bare preview={before} tool={session.tool} />
+      <Timeline bare preview={before} tool={session.tool} filter={historyFilter} />
     )
   ) : null;
 
@@ -1093,37 +1095,36 @@ function ChatPane({
         <TerminalView termKey={termKey} opts={termOpts} c={c} onClose={() => void switchMode("gui")} />
       ) : (
         <>
-          {live && lc?.loaded ? (
-            <Conversation
-              scrollKey={termKey}
-              conv={lc.conv}
-              agent={live.agent}
-              running={running}
-              starting={live.state === "starting"}
-              onRespond={respond}
-              prefix={
-                history ? (
-                  <>
-                    {history}
-                    <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
-                      <span className="h-px flex-1 bg-border" />
-                      {c.continuedHere}
-                      <span className="h-px flex-1 bg-border" />
-                    </div>
-                  </>
-                ) : undefined
-              }
-            />
-          ) : session ? (
-            error ? (
-              <p role="alert" className="p-4 text-sm text-destructive">
-                {fmt(s.previewFailed, { error })}
-              </p>
-            ) : !preview ? (
-              <ChatSkeleton label={s.previewLoading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
-            ) : (
-              <Timeline preview={preview} tool={session.tool} startAtBottom />
-            )
+          {session && !error && !preview && !live ? (
+            <ChatSkeleton label={s.previewLoading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
+          ) : session || (live && lc?.loaded) ? (
+            // History and the live chat share one scroll area: the first live event only appends
+            // below the history (no remount, no flash, scroll kept).
+            <>
+              {session && preview ? <TimelineFilterBar preview={preview} value={historyFilter} onChange={setHistoryFilter} /> : null}
+              <Conversation
+                scrollKey={termKey}
+                conv={live && lc?.loaded ? lc.conv : EMPTY_CONV}
+                agent={target.tool}
+                running={running}
+                starting={live?.state === "starting"}
+                onRespond={respond}
+                prefix={
+                  history ? (
+                    <>
+                      {history}
+                      {live ? (
+                        <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+                          <span className="h-px flex-1 bg-border" />
+                          {c.continuedHere}
+                          <span className="h-px flex-1 bg-border" />
+                        </div>
+                      ) : null}
+                    </>
+                  ) : undefined
+                }
+              />
+            </>
           ) : target.draft ? (
             <div className="grid flex-1 place-items-center p-6 text-center text-sm text-muted-foreground">
               <div className="flex max-w-sm flex-col items-center gap-2">

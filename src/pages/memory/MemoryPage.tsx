@@ -10,6 +10,7 @@ import { MemoryEditor } from "./MemoryEditor";
 import { MemoryTree } from "./MemoryTree";
 import { SearchPanel } from "./SearchPanel";
 import { allFiles, fileKey, findByKey } from "./paths";
+import { useSyncSkipped } from "./useSyncSkipped";
 
 const WIDTH_KEY = "memdock.treeWidth";
 const MIN_W = 220;
@@ -32,11 +33,14 @@ export interface MemoryPageProps {
   onDirtyChange?: (dirty: boolean) => void;
   /** Pending review suggestions per project id, shown as dots in the tree. */
   pendingByProject?: Record<string, number>;
+  /** Asks the page to open a file (memory index id); `nonce` makes repeats count. */
+  openRequest?: { fileId: string; nonce: number } | null;
 }
 
-export function MemoryPage({ onDirtyChange, pendingByProject }: MemoryPageProps = {}) {
+export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: MemoryPageProps = {}) {
   const { t } = useI18n();
   const m = t.memory;
+  const skipped = useSyncSkipped();
   const [index, setIndex] = React.useState<MemoryIndex | null>(null);
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
   const [dirty, setDirty] = React.useState(false);
@@ -116,6 +120,15 @@ export function MemoryPage({ onDirtyChange, pendingByProject }: MemoryPageProps 
     setReveal({ key: fileKey(file), line, nonce: ++revealNonce.current });
   };
   const clearReveal = React.useCallback(() => setReveal(null), []);
+
+  // Requests from other pages (e.g. the sync page's skipped files) open the file once the index is in.
+  const handledOpen = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!openRequest || !index || handledOpen.current === openRequest.nonce) return;
+    handledOpen.current = openRequest.nonce;
+    openHit(openRequest.fileId, 1);
+    // openHit reads the latest index / selection; only a new request should re-run this.
+  }, [openRequest, index]);
   const openSearch = React.useCallback((initial: string) => setSearch((prev) => prev ?? { initial }), []);
 
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -177,6 +190,7 @@ export function MemoryPage({ onDirtyChange, pendingByProject }: MemoryPageProps 
             onRemoveRequest={requestRemove}
             onSearchOpen={openSearch}
             pendingByProject={pendingByProject}
+            skipped={skipped}
           />
         </div>
         {search ? (
@@ -194,6 +208,7 @@ export function MemoryPage({ onDirtyChange, pendingByProject }: MemoryPageProps 
                 onIndexChange={setIndex}
                 onRemoveRequest={requestRemove}
                 pendingByProject={pendingByProject}
+                skipped={skipped}
               />
             }
           />

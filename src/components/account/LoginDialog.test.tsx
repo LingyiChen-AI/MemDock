@@ -28,6 +28,7 @@ const status = (over: Partial<SyncStatus> = {}): SyncStatus => ({
   last_sync_at: null,
   pending: 0,
   needs: null,
+  remote_has_memory: false,
   ...over,
 });
 

@@ -20,6 +20,7 @@ import {
   syncFinish,
   syncHistory,
   syncProjects,
+  syncSkippedFiles,
   syncStart,
   syncStatus,
 } from "./sync";
@@ -56,6 +57,7 @@ describe("sync api", () => {
   it("commands without arguments use the right names", async () => {
     const cases: Array<[() => Promise<unknown>, string]> = [
       [syncStatus, "sync_status"],
+      [syncSkippedFiles, "sync_skipped_files"],
       [loginStart, "login_start"],
       [loginCancel, "login_cancel"],
       [logout, "logout"],
@@ -89,7 +91,9 @@ describe("sync api", () => {
 
   it("syncStart returns the tagged result", async () => {
     const r = await syncStart();
-    expect(last()).toEqual(["sync_start", { secrets: "block" }]);
+    expect(last()).toEqual(["sync_start", { secrets: "block", direction: "up" }]);
+    await syncStart("block", "down");
+    expect(last()).toEqual(["sync_start", { secrets: "block", direction: "down" }]);
     expect(r.kind).toBe("done");
     if (r.kind === "done") expect(r.skipped[0].reason).toBe("not_utf8_remote");
   });

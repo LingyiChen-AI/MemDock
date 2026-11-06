@@ -5,7 +5,9 @@ import type {
   LoginEvent,
   SyncCommit,
   SyncProject,
+  SyncDirection,
   SyncResolution,
+  SyncSkippedRecord,
   SyncStartResult,
   SyncStatus,
   SyncSummary,
@@ -53,10 +55,22 @@ export function openVerificationUrl(): Promise<void> {
   return invoke<void>("open_verification_url");
 }
 
-/** `done` also reports skipped files and skill differences (nothing needed a decision). */
-/** `secrets`: what to do with files that look like they hold secrets (default: stop and report). */
-export function syncStart(secrets: "block" | "allow" | "skip" = "block"): Promise<SyncStartResult> {
-  return invoke<SyncStartResult>("sync_start", { secrets });
+/**
+ * `done` also reports skipped files and skill differences (nothing needed a decision).
+ * `secrets`: what to do with files that look like they hold secrets (default: stop and report).
+ * `direction`: `up` merges the cloud and pushes this computer's changes; `down` only brings the
+ * cloud to this computer (pushes nothing, secrets are not checked).
+ */
+export function syncStart(
+  secrets: "block" | "allow" | "skip" = "block",
+  direction: SyncDirection = "up",
+): Promise<SyncStartResult> {
+  return invoke<SyncStartResult>("sync_start", { secrets, direction });
+}
+
+/** Files left out of a sync and not synced since, mapped to local files (local only). */
+export function syncSkippedFiles(): Promise<SyncSkippedRecord[]> {
+  return invoke<SyncSkippedRecord[]>("sync_skipped_files");
 }
 
 /** Resolutions are keyed by `repo_path`. */

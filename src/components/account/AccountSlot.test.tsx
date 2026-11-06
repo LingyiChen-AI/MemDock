@@ -19,6 +19,7 @@ const loggedIn = (pending: number): SyncStatus => ({
   last_sync_at: null,
   pending,
   needs: null,
+  remote_has_memory: false,
 });
 
 function setup(status: SyncStatus | null, open = true) {

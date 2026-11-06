@@ -692,6 +692,18 @@ fn find_reg<'a>(reg: &'a Registry, id: &str) -> Option<&'a RegistryEntry> {
 }
 
 /// `(local_modified, state_unknown)`.
+/// Like [`local_state`], but a skill that is its own git checkout (no registry
+/// baseline) is judged by `git status` instead of being reported unknown.
+fn local_state_git(ctx: &OpsCtx, entry: &SkillEntry, reg: Option<&RegistryEntry>) -> (bool, bool) {
+    let has_baseline = reg.is_some_and(|r| !r.content_hash.is_empty());
+    if !has_baseline && entry.source.as_ref().is_some_and(|s| is_pull_origin(s.origin)) {
+        if let Some(dirty) = ctx.git.is_dirty(&real_dir(entry)) {
+            return (dirty, false);
+        }
+    }
+    local_state(entry, reg)
+}
+
 fn local_state(entry: &SkillEntry, reg: Option<&RegistryEntry>) -> (bool, bool) {
     match reg {
         Some(r) if !r.content_hash.is_empty() => match dir_content_hash(Path::new(&entry.dir)) {
@@ -764,7 +776,9 @@ pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> 
     for e in entries.iter().filter(|e| !e.readonly) {
         let Some(source) = &e.source else { continue };
         let reg_entry = find_reg(&reg, &e.id);
-        let (local_modified, unknown) = local_state(e, reg_entry);
+        let (modified, unknown) = local_state_git(ctx, e, reg_entry);
+        // Unknown is shown as unknown, never as a confirmed local change.
+        let local_modified = modified && !unknown;
         let current = source.commit.clone();
         let mut st = UpdateStatus {
             skill_id: e.id.clone(),
@@ -930,7 +944,7 @@ pub fn update(
         .clone()
         .ok_or_else(|| invalid("skill has no known source"))?;
     let reg_entry = find_reg(&reg, &entry.id);
-    let (modified, unknown) = local_state(&entry, reg_entry);
+    let (modified, unknown) = local_state_git(ctx, &entry, reg_entry);
     if modified && !accept_local_changes {
         return Err(OpsError::LocalChanges { unknown });
     }
@@ -2132,16 +2146,25 @@ mod tests {
         assert!(st[0].has_update, "{:?}", st[0]);
         assert_eq!(st[0].latest.as_deref(), Some(new.as_str()));
         assert_eq!(st[0].current.as_deref(), Some(old.as_str()));
-        // No registry hash -> local state unknown, treated as modified.
-        assert!(st[0].local_modified && st[0].local_state_unknown);
+        // No registry hash, but the checkout is clean per `git status`.
+        assert!(!st[0].local_modified && !st[0].local_state_unknown, "{:?}", st[0]);
 
+        // A local edit makes it dirty: the update asks first and does not pull.
+        write(&dir.join("SKILL.md"), "---\nname: gd\ndescription: git dir\n---\nedited\n");
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        assert!(st[0].local_modified && !st[0].local_state_unknown, "{:?}", st[0]);
         assert_eq!(
             update(&e.ctx, &id, false).unwrap_err(),
-            OpsError::LocalChanges { unknown: true }
+            OpsError::LocalChanges { unknown: false }
         );
         assert_eq!(git(&dir, &["rev-parse", "HEAD"]), old);
-        update(&e.ctx, &id, true).unwrap();
+        git(&dir, &["checkout", "--", "SKILL.md"]);
+
+        // Clean again: updates without asking, and a recheck finds nothing left.
+        update(&e.ctx, &id, false).unwrap();
         assert_eq!(git(&dir, &["rev-parse", "HEAD"]), new);
+        let st = check_updates(&e.ctx, &all_entries(&e));
+        assert!(!st[0].has_update && !st[0].local_modified, "{:?}", st[0]);
         assert!(dir.join("extra.md").is_file() && dir.join(".git").exists());
         let backups = crate::skills::fsops::list_backups(&e.ctx.backups_root(), &bk(&e, "gd"));
         assert_eq!(backups.len(), 1);
@@ -2874,7 +2897,8 @@ v2
         assert!(!find_reg(&reg, &id).unwrap().content_hash.is_empty());
         let st = check_updates(&e.ctx, &all_entries(&e));
         let c = st.iter().find(|s| s.skill_id == cid).unwrap();
-        assert!(c.local_modified && c.local_state_unknown, "{c:?}");
+        // No baseline for the copy: reported as unknown, not as a confirmed change.
+        assert!(!c.local_modified && c.local_state_unknown, "{c:?}");
     }
 
     #[test]

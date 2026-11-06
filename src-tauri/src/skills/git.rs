@@ -40,6 +40,10 @@ pub trait GitRunner: Send + Sync {
     fn repo_root(&self, dir: &Path) -> Option<PathBuf>;
     /// `git pull --ff-only` inside `dir`; returns the new HEAD commit.
     fn pull_ff_only(&self, dir: &Path) -> Result<String, GitError>;
+    /// Whether the work tree at `dir` has uncommitted changes; `None` when unknown.
+    fn is_dirty(&self, _dir: &Path) -> Option<bool> {
+        None
+    }
 }
 
 /// Runs the real `git` executable.
@@ -291,6 +295,13 @@ impl GitRunner for SystemGit {
         // `dir` is only ever the working directory, never an option-like argument.
         self.run(Some(dir), &["pull", "-q", "--ff-only"])?;
         self.run(Some(dir), &["rev-parse", "HEAD"])
+    }
+
+    fn is_dirty(&self, dir: &Path) -> Option<bool> {
+        if !dir.is_dir() {
+            return None;
+        }
+        self.run(Some(dir), &["status", "--porcelain"]).ok().map(|out| !out.trim().is_empty())
     }
 }
 

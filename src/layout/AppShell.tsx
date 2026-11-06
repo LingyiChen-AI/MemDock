@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   BarChart3,
   BookOpen,
+  ChevronDown,
   ListChecks,
   MessagesSquare,
   Package,
@@ -19,6 +20,8 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarInset,
+  SidebarGroup,
+  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuBadge,
   SidebarMenuButton,
@@ -36,16 +39,46 @@ import logoUrl from "@/assets/memdock-logo.svg";
 
 export type NavKey = "memory" | "review" | "extract" | "skills" | "sessions" | "sync" | "usage" | "settings";
 
-const NAV: { key: NavKey; icon: LucideIcon }[] = [
-  { key: "memory", icon: BookOpen },
-  { key: "review", icon: ListChecks },
-  { key: "extract", icon: Sparkles },
-  { key: "skills", icon: Package },
-  { key: "sessions", icon: MessagesSquare },
-  { key: "sync", icon: RefreshCw },
-  { key: "usage", icon: BarChart3 },
-  { key: "settings", icon: Settings },
+type NavGroupKey = "memory" | "tools" | "data" | "system";
+
+const NAV_GROUPS: { key: NavGroupKey; items: { key: NavKey; icon: LucideIcon }[] }[] = [
+  {
+    key: "memory",
+    items: [
+      { key: "memory", icon: BookOpen },
+      { key: "extract", icon: Sparkles },
+      { key: "review", icon: ListChecks },
+    ],
+  },
+  {
+    key: "tools",
+    items: [
+      { key: "skills", icon: Package },
+      { key: "sessions", icon: MessagesSquare },
+    ],
+  },
+  {
+    key: "data",
+    items: [
+      { key: "sync", icon: RefreshCw },
+      { key: "usage", icon: BarChart3 },
+    ],
+  },
+  { key: "system", items: [{ key: "settings", icon: Settings }] },
 ];
+
+const NAV = NAV_GROUPS.flatMap((g) => g.items);
+
+const COLLAPSED_KEY = "memdock.nav.collapsed";
+
+function loadCollapsed(): NavGroupKey[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 export interface AppShellProps {
   current: NavKey;
@@ -110,6 +143,17 @@ function AppearanceButton() {
 export function AppShell({ current, onNavigate, badges, status, children, pages }: AppShellProps) {
   const { t } = useI18n();
   const page = NAV.find((n) => n.key === current)!;
+  const [collapsed, setCollapsed] = React.useState<NavGroupKey[]>(loadCollapsed);
+  const toggleGroup = (g: NavGroupKey) =>
+    setCollapsed((prev) => {
+      const next = prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g];
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
+      } catch {
+        // storage unavailable: the fold just is not remembered
+      }
+      return next;
+    });
 
   return (
     <SidebarProvider className="h-screen min-h-0">
@@ -121,36 +165,56 @@ export function AppShell({ current, onNavigate, badges, status, children, pages 
           </div>
         </SidebarHeader>
         <SidebarContent className="px-2">
-          <SidebarMenu>
-            {NAV.map(({ key, icon: Icon }) => {
-              const active = key === current;
-              const label = t.nav[key];
-              const count = badges?.[key];
-              return (
-                <SidebarMenuItem key={key}>
-                  <SidebarMenuButton
+          {NAV_GROUPS.map((group) => {
+            const folded = collapsed.includes(group.key) && !group.items.some((i) => i.key === current);
+            return (
+              <SidebarGroup key={group.key} className="px-0 py-1">
+                <SidebarGroupLabel asChild className="h-7 px-2.5 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
+                  <button
                     type="button"
-                    isActive={active}
-                    aria-current={active ? "page" : undefined}
-                    tooltip={label}
-                    onClick={() => onNavigate(key)}
-                    className={cn(
-                      "h-8 cursor-pointer gap-2.5 px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none",
-                      "data-active:bg-muted data-active:font-medium data-active:text-foreground data-active:shadow-[inset_2px_0_0_var(--primary)]",
-                    )}
+                    aria-expanded={!folded}
+                    onClick={() => toggleGroup(group.key)}
+                    className="flex w-full cursor-pointer items-center justify-between rounded-md outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <Icon aria-hidden="true" />
-                    <span>{label}</span>
-                  </SidebarMenuButton>
-                  {count ? (
-                    <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground">
-                      {count}
-                    </SidebarMenuBadge>
-                  ) : null}
-                </SidebarMenuItem>
-              );
-            })}
-          </SidebarMenu>
+                    {t.navGroups[group.key]}
+                    <ChevronDown className={cn("size-3.5 transition-transform duration-150 motion-reduce:transition-none", folded && "-rotate-90")} aria-hidden="true" />
+                  </button>
+                </SidebarGroupLabel>
+                {folded ? null : (
+                  <SidebarMenu>
+                    {group.items.map(({ key, icon: Icon }) => {
+                    const active = key === current;
+                    const label = t.nav[key];
+                    const count = badges?.[key];
+                    return (
+                      <SidebarMenuItem key={key}>
+                        <SidebarMenuButton
+                          type="button"
+                          isActive={active}
+                          aria-current={active ? "page" : undefined}
+                          tooltip={label}
+                          onClick={() => onNavigate(key)}
+                          className={cn(
+                            "h-8 cursor-pointer gap-2.5 px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none",
+                            "data-active:bg-muted data-active:font-medium data-active:text-foreground data-active:shadow-[inset_2px_0_0_var(--primary)]",
+                          )}
+                        >
+                          <Icon aria-hidden="true" />
+                          <span>{label}</span>
+                        </SidebarMenuButton>
+                        {count ? (
+                          <SidebarMenuBadge className="top-2! h-4 min-w-4 rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground peer-data-active/menu-button:text-primary-foreground">
+                            {count}
+                          </SidebarMenuBadge>
+                        ) : null}
+                      </SidebarMenuItem>
+                    );
+                    })}
+                  </SidebarMenu>
+                )}
+              </SidebarGroup>
+            );
+          })}
         </SidebarContent>
         <SidebarFooter className="gap-1 border-t border-sidebar-border px-2 pt-2.5">
           {status ? <div data-slot="sidebar-status">{status}</div> : null}

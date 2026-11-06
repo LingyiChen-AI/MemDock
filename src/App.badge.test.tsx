@@ -28,7 +28,7 @@ describe("sidebar pending badge", () => {
       return () => {};
     });
     render(<App />);
-    const nav = await screen.findByRole("button", { name: "待审核" }, { timeout: 4000 });
+    const nav = await screen.findByRole("button", { name: /^待审核记忆/ }, { timeout: 4000 });
     const item = nav.closest("li")!;
     expect(await within(item).findByText("2", {}, { timeout: 4000 })).toBeInTheDocument();
     await act(async () => cb({ total: 7, by_project: {} }));

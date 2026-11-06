@@ -1,13 +1,19 @@
 {
   "nav": {
     "memory": "Memories",
-    "review": "Review",
-    "extract": "Extraction",
+    "review": "Memory review",
+    "extract": "Memory extraction",
     "skills": "Skills",
-    "sessions": "Sessions",
-    "sync": "Sync",
+    "sessions": "Session convert",
+    "sync": "Memory sync",
     "usage": "Usage",
     "settings": "Settings"
+  },
+  "navGroups": {
+    "memory": "Memory",
+    "tools": "Tools",
+    "data": "Data",
+    "system": "System"
   },
   "shell": {
     "mainNav": "Main navigation",

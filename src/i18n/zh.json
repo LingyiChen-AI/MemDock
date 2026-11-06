@@ -1,13 +1,19 @@
 {
   "nav": {
     "memory": "记忆总览",
-    "review": "待审核",
-    "extract": "提取任务",
+    "review": "待审核记忆",
+    "extract": "记忆提取",
     "skills": "Skill 管理",
-    "sessions": "会话",
-    "sync": "同步",
+    "sessions": "会话转换",
+    "sync": "记忆同步",
     "usage": "用量统计",
     "settings": "环境与设置"
+  },
+  "navGroups": {
+    "memory": "记忆",
+    "tools": "工具",
+    "data": "数据",
+    "system": "系统"
   },
   "shell": {
     "mainNav": "主导航",

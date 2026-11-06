@@ -730,3 +730,28 @@ pub fn suggestion_context(es: Es, id: String) -> Result<Vec<ContextItem>, Comman
 #[cfg(test)]
 #[path = "commands_extract_tests.rs"]
 mod tests;
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct PromptDefaults {
+    /// Built-in editable rules (with the `{project_name}` placeholder).
+    pub rules: String,
+    /// Always appended after the rules; not editable.
+    pub fixed: String,
+    pub placeholder: String,
+    pub max_chars: usize,
+}
+
+pub fn extract_prompt_defaults_impl(lang: &str) -> PromptDefaults {
+    use crate::extract::prompt::{default_rules, fixed_rules, MAX_RULES_CHARS, PROJECT_PLACEHOLDER};
+    PromptDefaults {
+        rules: default_rules(lang),
+        fixed: fixed_rules(lang),
+        placeholder: PROJECT_PLACEHOLDER.to_string(),
+        max_chars: MAX_RULES_CHARS,
+    }
+}
+
+#[tauri::command]
+pub fn extract_prompt_defaults(lang: Option<String>) -> PromptDefaults {
+    extract_prompt_defaults_impl(lang.as_deref().unwrap_or("zh"))
+}

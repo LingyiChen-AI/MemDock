@@ -32,7 +32,7 @@ use chrono::{Offset, TimeZone};
 use serde::Serialize;
 
 use super::prompt::{
-    build_prompt, chunk_turns, output_schema, parse_output_full, MemoryTarget, MAX_EXCERPT_CHARS,
+    build_prompt_with, chunk_turns, output_schema, parse_output_full, MemoryTarget, MAX_EXCERPT_CHARS,
 };
 use super::runner::{CliRunner, RunError};
 use super::sessions::{read_claude_turns, read_codex_turns, Turn};
@@ -575,7 +575,7 @@ fn execute(
                 cancelled = true;
                 break;
             }
-            let prompt = build_prompt(&b.name, &targets, chunk, &lang);
+            let prompt = build_prompt_with(&b.name, &targets, chunk, &lang, cfg.custom_prompt.as_deref());
             let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
                 Ok(r) => r,
                 Err(RunError::Cancelled) => {

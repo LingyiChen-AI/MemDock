@@ -19,6 +19,7 @@ vi.mock("@/api/extract", () => ({
   onExtractProgress: vi.fn(),
   onExtractFinished: vi.fn(),
   onSuggestionsChanged: vi.fn().mockResolvedValue(() => {}),
+  extractPromptDefaults: vi.fn().mockResolvedValue({ rules: "内置规则 {project_name}", fixed: "- 固定条款", placeholder: "{project_name}", max_chars: 20000 }),
 }));
 
 import {
@@ -101,6 +102,19 @@ describe("ExtractPage", () => {
     expect(
       screen.getByText("提取会调用你本机的 Claude Code / Codex，消耗你的订阅用量；会话内容在发送前会去除密钥。"),
     ).toBeInTheDocument();
+  });
+
+  it("edits the extraction prompt and shows the fixed clauses", async () => {
+    renderApp(<ExtractPage />);
+    const box = await screen.findByRole("textbox", { name: "提取提示词" });
+    await waitFor(() => expect(box).toHaveValue("内置规则 {project_name}"));
+    expect(screen.getByText("- 固定条款")).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "保存提示词" });
+    expect(save).toBeDisabled();
+    await userEvent.clear(box);
+    await userEvent.type(box, "只记命名约定");
+    await userEvent.click(save);
+    await waitFor(() => expect(setExtractConfig).toHaveBeenCalledWith({ ...config, custom_prompt: "只记命名约定" }));
   });
 
   it("schedule weekly saves", async () => {

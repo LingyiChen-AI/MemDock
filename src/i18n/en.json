@@ -341,6 +341,20 @@
     "folded": "{n} unchanged lines"
   },
   "extract": {
+    "prompt": {
+      "title": "Extraction prompt",
+      "desc": "The rules sent to the model on every extraction. Rewrite them to suit you, for example to record only certain kinds of things.",
+      "builtIn": "Built-in prompt",
+      "custom": "Customized",
+      "hint": "Use {placeholder} for the project name; it is filled in when the prompt runs.",
+      "tooLong": "Too long; at most {n} characters.",
+      "emptyHint": "Saving it empty uses the built-in prompt.",
+      "fixedTitle": "Fixed clauses (not editable)",
+      "appended": "These keep extraction safe and let MemDock read the result, so they always follow your rules. After them come the current memory files, the conversation excerpt and the required output format.",
+      "save": "Save prompt",
+      "reset": "Restore built-in prompt",
+      "discard": "Discard changes"
+    },
     "title": "Extraction",
     "configTitle": "Settings",
     "runsTitle": "Run history",

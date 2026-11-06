@@ -75,6 +75,9 @@ pub struct ExtractConfig {
     pub lookback_days: u32,
     #[serde(default)]
     pub lang: Option<String>,
+    /// The user's extraction rules replacing the built-in ones (`None` = built-in).
+    #[serde(default)]
+    pub custom_prompt: Option<String>,
 }
 
 impl Default for ExtractConfig {
@@ -86,6 +89,7 @@ impl Default for ExtractConfig {
             include_global: true,
             lookback_days: 7,
             lang: None,
+            custom_prompt: None,
         }
     }
 }
@@ -93,6 +97,10 @@ impl Default for ExtractConfig {
 impl ExtractConfig {
     fn normalized(mut self) -> Self {
         self.lookback_days = self.lookback_days.clamp(1, 90);
+        self.custom_prompt = self
+            .custom_prompt
+            .map(|p| p.chars().take(super::prompt::MAX_RULES_CHARS).collect::<String>())
+            .filter(|p| !p.trim().is_empty());
         self.schedule = match self.schedule {
             Schedule::Off => Schedule::Off,
             Schedule::Daily { hh, mm } => Schedule::Daily { hh: hh.min(23), mm: mm.min(59) },
@@ -533,6 +541,7 @@ mod tests {
             include_global: false,
             lookback_days: 30,
             lang: Some("zh".into()),
+            custom_prompt: Some("rules".into()),
         };
         s.set_config(c.clone());
         s.save().unwrap();

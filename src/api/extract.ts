@@ -6,6 +6,7 @@ import type {
   ExtractConfig,
   ExtractProgress,
   PendingSummary,
+  PromptDefaults,
   RunRecord,
   RunnerInfo,
   Suggestion,
@@ -20,6 +21,11 @@ export function getExtractConfig(): Promise<ExtractConfig> {
 /** Rejects with `CommandError` code `invalid` for out-of-range values. */
 export function setExtractConfig(config: ExtractConfig): Promise<ExtractConfig> {
   return invoke<ExtractConfig>("set_extract_config", { config });
+}
+
+/** Built-in extraction rules and the fixed clauses appended after any rules. */
+export function extractPromptDefaults(lang: string | null): Promise<PromptDefaults> {
+  return invoke<PromptDefaults>("extract_prompt_defaults", { lang });
 }
 
 export function extractRunners(): Promise<RunnerInfo[]> {

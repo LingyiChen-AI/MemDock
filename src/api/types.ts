@@ -326,6 +326,17 @@ export interface ExtractConfig {
   /** 1..=90. */
   lookback_days: number;
   lang: string | null;
+  /** The user's extraction rules replacing the built-in ones; null = built-in. */
+  custom_prompt?: string | null;
+}
+
+export interface PromptDefaults {
+  /** Built-in editable rules (with the placeholder). */
+  rules: string;
+  /** Always appended; not editable. */
+  fixed: string;
+  placeholder: string;
+  max_chars: number;
 }
 
 export interface RunnerInfo {

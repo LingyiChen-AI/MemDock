@@ -127,6 +127,7 @@ pub fn run() {
             commands::update_ui_prefs,
             commands_extract::get_extract_config,
             commands_extract::set_extract_config,
+            commands_extract::extract_prompt_defaults,
             commands_extract::extract_runners,
             commands_extract::reset_extract_data,
             commands_extract::start_extraction,

@@ -21,6 +21,7 @@ import { fmt } from "@/pages/memory/paths";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
+import { PromptSettings } from "./PromptSettings";
 import { ExtractConfigForm, type DraftState } from "./ExtractConfigForm";
 import { RunsTable, runErrorText } from "./RunsTable";
 
@@ -281,6 +282,14 @@ export function ExtractPage({ onNavigate, onDirtyChange }: ExtractPageProps) {
               )}
               <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">{x.notice}</p>
             </section>
+
+            {config ? (
+              <section aria-label={x.prompt.title} className="rounded-lg border border-border bg-card p-4">
+                <h2 className="mb-1 text-sm font-semibold">{x.prompt.title}</h2>
+                <p className="mb-3 text-xs text-muted-foreground">{x.prompt.desc}</p>
+                <PromptSettings config={config} saving={saving} onSave={(c) => void save(c)} />
+              </section>
+            ) : null}
 
             <section aria-label={x.runsTitle} className="rounded-lg border border-border bg-card">
               <h2 className="px-4 pt-4 pb-2 text-sm font-semibold">{x.runsTitle}</h2>

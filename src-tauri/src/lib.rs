@@ -28,6 +28,7 @@ pub mod sync;
 pub mod usage;
 pub mod watcher;
 pub mod window;
+pub mod worktree;
 
 use std::sync::Arc;
 
@@ -225,6 +226,13 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_close,
+            worktree::worktree_check,
+            worktree::worktree_create,
+            worktree::worktree_list,
+            worktree::worktree_status,
+            worktree::worktree_diff,
+            worktree::worktree_merge,
+            worktree::worktree_remove,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

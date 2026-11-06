@@ -124,6 +124,8 @@ fn stop_marks_exited_and_rejects_further_sends() {
     assert_eq!(h.calls.lock().unwrap().interrupted, 1);
     assert_eq!(h.calls.lock().unwrap().stopped, 1);
     assert_eq!(h.mgr.list()[0].state, LiveState::Exited);
+    let exits = h.published.lock().unwrap().iter().filter(|e| matches!(e.event, LiveEvent::Exited { .. })).count();
+    assert_eq!(exits, 1, "the driver's own Exited after stop() is dropped");
     assert!(h.mgr.send(&info.live_id, "hi").is_err());
     h.mgr.close(&info.live_id).unwrap();
     assert!(h.mgr.list().is_empty());

@@ -31,5 +31,7 @@ export default defineConfig(() => ({
     include: ["src/**/*.test.{ts,tsx}"],
     // Radix/userEvent flows get slow while cargo builds run in parallel.
     testTimeout: 15000,
+    // Each worker is a node process of 1-2 GB; cap them (see src-tauri/.cargo/config.toml).
+    maxWorkers: 4,
   },
 }));

@@ -1,0 +1,4 @@
+# Fewer parallel rustc processes: several builds at once (dev app + worktrees)
+# exhausted the commit limit and froze the machine (2026-11-06).
+[build]
+jobs = 8

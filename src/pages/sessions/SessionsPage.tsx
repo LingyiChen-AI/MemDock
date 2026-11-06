@@ -70,6 +70,8 @@ type S = Messages["sessions"];
 type C = Messages["chat"];
 
 const LIVE_PREFIX = "live:";
+/** How often the open session's file is checked for new messages written elsewhere. */
+const PREVIEW_FOLLOW_MS = 8000;
 const DRAFT_PREFIX = "draft:";
 const SHELL_PREFIX = "term:";
 
@@ -1331,8 +1333,27 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     sessionPreview(selectedTool, selectedPath)
       .then((p) => alive && setPreview(p))
       .catch((e) => alive && setPreviewError(errorMessage(e)));
+    // The session may go on elsewhere (a terminal, another app): follow its file. The backend
+    // answers from its cache while the file is unchanged, so this is cheap; we re-render only
+    // when the history actually changed.
+    const sig = (p: SessionPreview) => `${p.timeline_total}:${p.timeline[p.timeline.length - 1]?.ts ?? ""}:${p.summary.updated_at ?? ""}`;
+    let inFlight = false;
+    const timer = window.setInterval(() => {
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      sessionPreview(selectedTool, selectedPath)
+        .then((p) => {
+          if (!alive) return;
+          setPreview((cur) => (cur && sig(cur) === sig(p) ? cur : p));
+        })
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
+    }, PREVIEW_FOLLOW_MS);
     return () => {
       alive = false;
+      window.clearInterval(timer);
     };
   }, [selectedPath, selectedTool, previewNonce]);
 

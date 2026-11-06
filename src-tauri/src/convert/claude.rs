@@ -76,7 +76,13 @@ fn active_chain(path: &Path) -> Option<HashSet<String>> {
     let mut leaf: Option<String> = None;
     for_each_json(path, |v| {
         let Some(uuid) = v.get("uuid").and_then(Value::as_str) else { return };
-        let parent = v.get("parentUuid").and_then(Value::as_str).map(String::from);
+        // A compaction boundary starts a new root but keeps `logicalParentUuid`: follow it, so the
+        // history before a compaction stays on the active branch.
+        let parent = v
+            .get("parentUuid")
+            .and_then(Value::as_str)
+            .or_else(|| v.get("logicalParentUuid").and_then(Value::as_str))
+            .map(String::from);
         parents.insert(uuid.to_string(), parent);
         let kind = v.get("type").and_then(Value::as_str);
         let sidechain = v.get("isSidechain").and_then(Value::as_bool) == Some(true);

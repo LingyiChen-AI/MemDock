@@ -138,6 +138,24 @@ fn parses_claude_active_branch() {
 }
 
 #[test]
+fn claude_history_continues_across_compaction() {
+    // `/compact` writes a boundary with no parentUuid but a logicalParentUuid: the messages
+    // before it are still this conversation's history.
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("src-claude.jsonl");
+    write_lines(&f, &[
+        cl("user", "u1", None, "2026-11-01T10:00:00.000Z", json!("before compaction")),
+        cl("assistant", "a1", Some("u1"), "2026-11-01T10:00:01.000Z", json!([{"type": "text", "text": "old answer"}])),
+        json!({"type": "system", "subtype": "compact_boundary", "uuid": "b1", "parentUuid": null,
+               "logicalParentUuid": "a1", "timestamp": "2026-11-01T10:00:02.000Z"}),
+        cl("user", "u2", Some("b1"), "2026-11-01T10:00:03.000Z", json!("after compaction")),
+        cl("assistant", "a2", Some("u2"), "2026-11-01T10:00:04.000Z", json!([{"type": "text", "text": "new answer"}])),
+    ]);
+    let got: Vec<String> = texts(&claude::parse(&f).items).into_iter().map(|(_, t)| t).collect();
+    assert_eq!(got, ["before compaction", "old answer", "after compaction", "new answer"]);
+}
+
+#[test]
 fn parses_codex_and_skips_injected_items() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("rollout-2026-11-02T08-00-00-11111111-2222-3333-4444-555555555555.jsonl");

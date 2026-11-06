@@ -219,6 +219,8 @@ pub struct SessionSummary {
     pub project_name: String,
     pub title: Option<String>,
     pub first_prompt: String,
+    /// Starts from an automatic summary of an earlier conversation.
+    pub continued: bool,
     pub message_count: usize,
     pub tool_calls: usize,
     /// Unix milliseconds of the first / last item (file mtime when absent).
@@ -229,6 +231,34 @@ pub struct SessionSummary {
     pub converted_from: Option<store::SessionRef>,
     /// Sessions MemDock already wrote from this one.
     pub converted_to: Vec<store::SessionRef>,
+}
+
+/// The session picks up from an earlier, compacted conversation.
+pub fn is_continuation(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("This session is being continued from a previous conversation")
+        || t.starts_with("(Continuing a conversation converted by MemDock")
+}
+
+/// A user message as the person typed it, for list summaries: empty when the
+/// message is injected (continuation summaries, tool / command wrappers).
+pub fn clean_prompt(text: &str) -> String {
+    let t = text.trim();
+    if t.is_empty()
+        || is_continuation(t)
+        || t.starts_with('<')
+        || t.starts_with("Caveat:")
+        || t.starts_with("[Request interrupted")
+        || t.starts_with("Base directory for this skill:")
+    {
+        return String::new();
+    }
+    let no_images: String = t
+        .split_whitespace()
+        .filter(|w| !(w.starts_with("[Image") || w.starts_with("#") && w.ends_with(']')) && *w != "[image]")
+        .collect::<Vec<_>>()
+        .join(" ");
+    one_line(&no_images, 160)
 }
 
 fn item_ts(item: &Item) -> &str {
@@ -248,13 +278,20 @@ fn project_name(cwd: &str) -> String {
 /// Builds the list row for a parsed conversation (mapping fields left empty).
 pub fn summarize(conv: &Conversation, path: &Path) -> SessionSummary {
     use crate::extract::sessions::parse_ts;
-    let first_prompt = conv
+    let users: Vec<&str> = conv
         .items
         .iter()
-        .find_map(|i| match i {
-            Item::User { text, .. } => Some(one_line(text, 160)),
+        .filter_map(|i| match i {
+            Item::User { text, .. } => Some(text.as_str()),
             _ => None,
         })
+        .collect();
+    let continued = users.first().is_some_and(|t| is_continuation(t));
+    let first_prompt = users
+        .iter()
+        .map(|t| clean_prompt(t))
+        .find(|t| !t.is_empty())
+        .or_else(|| users.first().map(|t| one_line(t, 160)))
         .unwrap_or_default();
     let mut message_count = 0;
     let mut tool_calls = 0;
@@ -281,6 +318,7 @@ pub fn summarize(conv: &Conversation, path: &Path) -> SessionSummary {
         project_name: project_name(&conv.cwd),
         title: conv.title.clone(),
         first_prompt,
+        continued,
         message_count,
         tool_calls,
         started_at,
@@ -321,5 +359,19 @@ pub fn resume_command(tool: Tool, cwd: &str, session_id: &str) -> String {
     match tool {
         Tool::Claude => format!("{cd}claude --resume {session_id}"),
         Tool::Codex => format!("{cd}codex resume {session_id}"),
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    #[test]
+    fn clean_prompt_skips_injected_messages() {
+        assert_eq!(clean_prompt("This session is being continued from a previous conversation that ran out of context."), "");
+        assert_eq!(clean_prompt("<local-command-stdout>{\"chatId\":1}</local-command-stdout>"), "");
+        assert_eq!(clean_prompt("[Image #3] 这个页面\n优化一下"), "这个页面 优化一下");
+        assert_eq!(clean_prompt("[image]"), "");
+        assert!(is_continuation("  This session is being continued from a previous conversation"));
     }
 }

@@ -777,6 +777,8 @@ export interface SessionSummary {
   project_name: string;
   title: string | null;
   first_prompt: string;
+  /** Starts from an automatic summary of an earlier conversation. */
+  continued: boolean;
   message_count: number;
   tool_calls: number;
   /** Unix milliseconds. */

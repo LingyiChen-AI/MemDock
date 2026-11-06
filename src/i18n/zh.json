@@ -989,6 +989,8 @@
     "previewMore": "仅显示前 {shown} 条，共 {total} 条",
     "expand": "展开全文",
     "collapse": "收起",
+    "continued": "接续",
+    "continuedHint": "这个会话接着上一段对话继续，开头是自动生成的前情摘要",
     "timeline": {
       "more": "+{n} 个",
       "filterLabel": "按类型筛选",

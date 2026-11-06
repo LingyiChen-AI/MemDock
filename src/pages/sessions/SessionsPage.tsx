@@ -82,6 +82,11 @@ function SessionRow({ session, selected, onSelect, s }: { session: SessionSummar
         <p className="line-clamp-2 text-xs text-muted-foreground">{session.first_prompt}</p>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
+        {session.continued ? (
+          <span className="rounded bg-muted px-1.5 text-foreground/70" title={s.continuedHint}>
+            {s.continued}
+          </span>
+        ) : null}
         <span>{fmt(s.messages, { n: session.message_count })}</span>
         {session.tool_calls > 0 ? <span>{fmt(s.toolCalls, { n: session.tool_calls })}</span> : null}
         {session.converted_from ? (

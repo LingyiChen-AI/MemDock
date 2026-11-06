@@ -29,6 +29,7 @@ function mk(over: Partial<SessionSummary> & { id: string }): SessionSummary {
     project_name: "demo",
     title: null,
     first_prompt: "Fix the build",
+    continued: false,
     message_count: 4,
     tool_calls: 2,
     started_at: 1_700_000_000_000,

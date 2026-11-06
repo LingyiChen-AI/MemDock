@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { SessionPreview, TimelineItem, Tool, ToolKind } from "@/api/types";
+import { ToolLogo } from "@/components/brand/ToolLogo";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
@@ -142,19 +143,16 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
 }
 
 function Avatar({ who, tool }: { who: "user" | "assistant"; tool: Tool }) {
+  if (who === "user") {
+    return (
+      <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+        <User className="size-3.5" />
+      </span>
+    );
+  }
   return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold",
-        who === "user"
-          ? "bg-primary text-primary-foreground"
-          : tool === "claude"
-            ? "bg-tool-claude/15 text-tool-claude"
-            : "bg-tool-codex/15 text-tool-codex",
-      )}
-    >
-      {who === "user" ? <User className="size-3.5" /> : tool === "claude" ? "C" : "X"}
+    <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full border border-border bg-card">
+      <ToolLogo tool={tool} className="size-4" aria-hidden="true" />
     </span>
   );
 }
@@ -173,11 +171,11 @@ function MessageRow({ item, tool, s }: { item: Exclude<TimelineItem, ToolItem>; 
         </div>
         <div
           className={cn(
-            "min-w-0 px-3.5 py-2.5 text-sm leading-relaxed",
+            "max-w-full min-w-0 overflow-hidden px-3.5 py-2.5 text-sm leading-relaxed",
             isUser ? "rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 text-foreground" : "rounded-2xl rounded-tl-md border border-border bg-card",
           )}
         >
-          <p className={cn("break-words whitespace-pre-wrap", long && !open && "line-clamp-[12]")}>{item.text}</p>
+          <p className={cn("whitespace-pre-wrap [overflow-wrap:anywhere]", long && !open && "line-clamp-[12]")}>{item.text}</p>
           {long ? (
             <button
               type="button"

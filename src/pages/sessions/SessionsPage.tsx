@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowLeftRight, Check, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
+import { ToolLogo } from "@/components/brand/ToolLogo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -23,10 +24,11 @@ function ToolBadge({ tool, s }: { tool: Tool; s: S }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 shrink-0 items-center rounded px-1.5 text-[11px] font-medium",
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] font-medium",
         tool === "claude" ? "bg-orange-500/12 text-orange-700 dark:text-orange-300" : "bg-sky-500/12 text-sky-700 dark:text-sky-300",
       )}
     >
+      <ToolLogo tool={tool} className="size-3" aria-hidden="true" />
       {s.tools[tool]}
     </span>
   );

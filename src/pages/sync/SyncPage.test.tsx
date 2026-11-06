@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { SyncConflict, SyncPlan, SyncStatus } from "@/api/types";
@@ -28,7 +28,7 @@ vi.mock("@/api/sync", () => ({
 }));
 
 import { installSkill } from "@/api/skills";
-import { restoreFromHistory, syncFinish, syncHistory, syncProjects, syncSkippedFiles, syncStart, syncStatus } from "@/api/sync";
+import { restoreFromHistory, syncDiscard, syncFinish, syncHistory, syncProjects, syncSkippedFiles, syncStart, syncStatus } from "@/api/sync";
 import { renderApp } from "@/test/fixtures";
 import { SyncPage } from "./SyncPage";
 
@@ -157,6 +157,13 @@ describe("SyncPage", () => {
     expect(allow).toHaveAccessibleDescription(/密钥可能因此泄露/);
     await userEvent.click(within(box).getByRole("button", { name: "跳过这些文件，继续同步" }));
     expect(syncStart).toHaveBeenLastCalledWith("skip", "up");
+  });
+
+  it("leaving the page mid-resolution discards the plan", async () => {
+    const p = plan();
+    await startWith(p);
+    cleanup();
+    expect(syncDiscard).toHaveBeenCalledWith(p.id);
   });
 
   it("finish_disabled_until_resolved", async () => {

@@ -98,6 +98,16 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenM
   const [hits, setHits] = React.useState<FileSecretHit[] | null>(null);
   const [extras, setExtras] = React.useState<Extras | null>(null);
   const [plan, setPlan] = React.useState<SyncPlan | null>(null);
+  // Leaving the page mid-resolution drops the stored plan, so the next sync starts clean.
+  const planRef = React.useRef<SyncPlan | null>(null);
+  planRef.current = plan;
+  React.useEffect(
+    () => () => {
+      const p = planRef.current;
+      if (p) void syncDiscard(p.id).catch(() => {});
+    },
+    [],
+  );
   const [projects, setProjects] = React.useState<SyncProject[] | null>(null);
   const [records, setRecords] = React.useState<SyncSkippedRecord[]>([]);
   const [historyKey, setHistoryKey] = React.useState(0);

@@ -1227,6 +1227,7 @@
     "quit": "Quit MemDock"
   },
   "chat": {
+    "usedElsewhere": "This session is also in use in Claude Code in a terminal: compacting or switching models here doesn't affect it, and the context shown is from its latest request. Using both at once makes them overwrite each other; continue in one place.",
     "notices": {
       "commandOutput": "Command output",
       "compacting": "Compacting the context…",
@@ -1234,6 +1235,8 @@
       "compactedPlain": "Context compacted"
     },
     "meters": {
+      "sourceTerminal": "from a terminal",
+      "sourceMemdock": "from MemDock",
       "context": "Context",
       "contextHint": "Context {used} / {window} ({model})",
       "weekly": "Week",

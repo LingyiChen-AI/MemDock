@@ -8,7 +8,7 @@ vi.mock("@/api/usage", () => ({ usageQuota: () => usageQuota() }));
 
 import { ContextMeters } from "./ContextMeter";
 
-const t = { context: "上下文", contextHint: "当前上下文 {used} / {window}（{model}）", weekly: "本周", weeklyHint: "本周额度" };
+const t = { context: "上下文", contextHint: "当前上下文 {used} / {window}（{model}）", sourceTerminal: "来自外部终端", sourceMemdock: "来自 MemDock", weekly: "本周", weeklyHint: "本周额度" };
 
 describe("ContextMeters", () => {
   it("shows the context fill and the weekly quota", async () => {

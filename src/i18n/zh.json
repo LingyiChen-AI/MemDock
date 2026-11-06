@@ -1227,6 +1227,7 @@
     "quit": "退出 MemDock"
   },
   "chat": {
+    "usedElsewhere": "这个会话也在外部终端的 Claude Code 里使用中：在这里压缩、切换模型都不会影响那边，上下文显示的是最近一次请求（来自外部）。两边同时用会互相覆盖记录，建议只在一处继续。",
     "notices": {
       "commandOutput": "命令输出",
       "compacting": "正在压缩上下文…",
@@ -1234,6 +1235,8 @@
       "compactedPlain": "已压缩上下文"
     },
     "meters": {
+      "sourceTerminal": "来自外部终端",
+      "sourceMemdock": "来自 MemDock",
       "context": "上下文",
       "contextHint": "当前上下文 {used} / {window}（{model}）",
       "weekly": "本周",

@@ -549,6 +549,12 @@ pub struct SessionContext {
     /// The model's context window.
     pub window: u64,
     pub model: Option<String>,
+    /// Who made that request: Claude Code's `entrypoint` (`cli` = a terminal, `sdk-cli` = MemDock).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// When (epoch ms), if recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
 }
 
 /// Bytes read from the end of a session file to find the last usage record.
@@ -617,7 +623,9 @@ pub fn claude_context(lines: &[String]) -> Option<SessionContext> {
             continue;
         }
         let window = claude_context_window(model.as_deref().unwrap_or(""));
-        return Some(SessionContext { used: compacted.unwrap_or(used), window, model });
+        let source = v.get("entrypoint").and_then(|e| e.as_str()).map(String::from);
+        let at = v.get("timestamp").and_then(|t| t.as_str()).and_then(crate::usage::parse_ts);
+        return Some(SessionContext { used: compacted.unwrap_or(used), window, model, source, at });
     }
     None
 }
@@ -643,7 +651,7 @@ pub fn codex_context(lines: &[String]) -> Option<SessionContext> {
         if window == 0 || used == 0 {
             continue;
         }
-        return Some(SessionContext { used, window, model });
+        return Some(SessionContext { used, window, model, source: None, at: None });
     }
     None
 }

@@ -8,6 +8,10 @@ export interface SessionContext {
   used: number;
   window: number;
   model: string | null;
+  /** Who made the last request: `cli` (a terminal) or `sdk-cli` (MemDock). Claude only. */
+  source?: string | null;
+  /** When it was made (epoch ms). */
+  at?: number | null;
 }
 
 export function sessionContext(tool: "claude" | "codex", path: string): Promise<SessionContext | null> {
@@ -46,6 +50,8 @@ function Meter({ label, pct, tip }: { label: string; pct: number; tip: string })
 export interface ContextMeterText {
   context: string;
   contextHint: string;
+  sourceTerminal: string;
+  sourceMemdock: string;
   weekly: string;
   weeklyHint: string;
 }
@@ -60,6 +66,7 @@ export function ContextMeters({
   nativeId = null,
   refreshKey,
   t,
+  onContext,
 }: {
   tool: "claude" | "codex";
   path: string | null;
@@ -67,7 +74,11 @@ export function ContextMeters({
   nativeId?: string | null;
   refreshKey: unknown;
   t: ContextMeterText;
+  /** Gets the context read (or null), e.g. to warn when the session is used elsewhere. */
+  onContext?: (ctx: SessionContext | null) => void;
 }) {
+  const report = React.useRef(onContext);
+  report.current = onContext;
   const [ctx, setCtx] = React.useState<SessionContext | null>(null);
   const [weekly, setWeekly] = React.useState<number | null>(null);
   React.useEffect(() => {
@@ -77,7 +88,11 @@ export function ContextMeters({
     }
     let alive = true;
     (path ? sessionContext(tool, path) : sessionContextById(tool, nativeId!))
-      .then((c) => alive && setCtx(c))
+      .then((c) => {
+        if (!alive) return;
+        setCtx(c);
+        report.current?.(c);
+      })
       .catch(() => alive && setCtx(null));
     return () => {
       alive = false;
@@ -102,7 +117,10 @@ export function ContextMeters({
         <Meter
           label={t.context}
           pct={(ctx.used * 100) / ctx.window}
-          tip={fmt(t.contextHint, { used: short(ctx.used), window: short(ctx.window), model: ctx.model ?? "" })}
+          tip={
+            fmt(t.contextHint, { used: short(ctx.used), window: short(ctx.window), model: ctx.model ?? "" }) +
+            (ctx.source === "cli" ? ` · ${t.sourceTerminal}` : ctx.source === "sdk-cli" ? ` · ${t.sourceMemdock}` : "")
+          }
         />
       ) : null}
       {weekly !== null ? <Meter label={t.weekly} pct={weekly} tip={t.weeklyHint} /> : null}

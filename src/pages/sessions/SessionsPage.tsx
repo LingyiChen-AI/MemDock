@@ -775,6 +775,7 @@ function ChatPane({
   const lc = useLiveConv(live?.live_id);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = React.useState<TimelineFilter>("all");
+  const [usedElsewhere, setUsedElsewhere] = React.useState(false);
   // One key per conversation: its terminal, unsent text, scroll position and settings.
   const termKey = terminalKey(target);
   const [busyPty, setBusyPty] = React.useState<((choice: "close" | "show" | "cancel") => void) | null>(null);
@@ -1141,6 +1142,12 @@ function ChatPane({
           ) : (
             <ChatSkeleton label={c.loading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
           )}
+          {usedElsewhere ? (
+            <p role="status" className="mx-4 mb-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+              <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+              {c.usedElsewhere}
+            </p>
+          ) : null}
           <ChatComposer
             key={termKey}
             stateKey={termKey}
@@ -1150,6 +1157,11 @@ function ChatPane({
                 tool={target.tool}
                 path={session?.path ?? null}
                 nativeId={target.nativeId ?? live?.native_id ?? null}
+                onContext={(ctx) =>
+                  // The last request came from Claude Code in a terminal after MemDock attached:
+                  // the same session is running in two places.
+                  setUsedElsewhere(!!live && live.state !== "exited" && ctx?.source === "cli" && (ctx.at ?? 0) > live.created_at)
+                }
                 refreshKey={`${session?.updated_at ?? ""}:${lc?.conv.lastUsage ? JSON.stringify(lc.conv.lastUsage) : ""}:${live?.state ?? ""}`}
                 t={c.meters}
               />

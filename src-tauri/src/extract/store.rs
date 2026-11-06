@@ -488,6 +488,7 @@ mod tests {
             created_at: 1,
             base_hash: "h".into(),
             status: SuggestionStatus::Pending,
+            origin: None,
         }
     }
 

@@ -107,6 +107,7 @@ fn sug(id: &str, path: &str, base_hash: &str, new_text: &str) -> Suggestion {
         created_at: 1,
         base_hash: base_hash.into(),
         status: SuggestionStatus::Pending,
+        origin: None,
     }
 }
 

@@ -99,7 +99,13 @@ export type CommandErrorCode =
   | "plan_not_found"
   // Environment install
   | "npm_missing"
-  | "busy";
+  | "busy"
+  // GitHub import
+  | "import_bad_url"
+  | "import_not_found"
+  | "import_rate_limited"
+  | "import_too_large"
+  | "import_expired";
 
 /** Error thrown by failing commands. `current_hash` is set for `disk_changed`. */
 export interface CommandError {
@@ -375,7 +381,19 @@ export interface Suggestion {
   created_at: number;
   base_hash: string;
   status: SuggestionStatus;
+  /** Set for suggestions that did not come from an extraction run. */
+  origin?: SuggestionOrigin | null;
 }
+
+export type SuggestionOrigin = {
+  type: "github";
+  /** `owner/repo`. */
+  repo: string;
+  path: string;
+  git_ref: string;
+  commit: string;
+  url: string;
+};
 
 /** Keys of `by_project` are project ids; `__global__` for files outside any project. */
 export interface PendingSummary {
@@ -680,3 +698,52 @@ export interface EnvReport {
 export type InstallEvent =
   | { kind: "log"; tool: string; line: string }
   | { kind: "done"; tool: string; ok: boolean; code: number | null; error: string | null };
+
+// ------------------------------------------------------------ GitHub import
+
+export type GhMemoryKind = "claude_md" | "claude_local" | "agents_md" | "claude_dir" | "memory_dir" | "file";
+
+export type GhImportItem = {
+  /** `m:<path>` or `s:<dir>`. */
+  id: string;
+  path: string;
+  name: string;
+  size: number;
+  too_large: boolean;
+} & ({ type: "memory"; memory_kind: GhMemoryKind } | { type: "skill"; files: number });
+
+export interface GhImportScan {
+  session_id: string;
+  repo: string;
+  repo_url: string;
+  git_ref: string;
+  commit: string;
+  scope: string;
+  items: GhImportItem[];
+  truncated: boolean;
+  tree_truncated: boolean;
+  authenticated: boolean;
+}
+
+export interface GhImportPreview {
+  text: string;
+  binary: boolean;
+  files: { path: string; size: number }[];
+}
+
+export type GhImportTarget =
+  | { type: "global_claude" }
+  | { type: "global_agents" }
+  | { type: "project_claude"; project_id: string }
+  | { type: "project_agents"; project_id: string };
+
+export interface GhMemoryPick {
+  item_id: string;
+  target: GhImportTarget;
+}
+
+export interface GhImportMemoriesResult {
+  added: number;
+  duplicates: number;
+  skipped: { item_id: string; reason: "binary" | "empty" | "too_large" }[];
+}

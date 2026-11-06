@@ -298,6 +298,27 @@ pub struct Suggestion {
     /// Hash of the target file when the suggestion was generated.
     pub base_hash: String,
     pub status: SuggestionStatus,
+    /// Where a suggestion came from when it was not produced by an extraction
+    /// run (e.g. a GitHub import). Absent for extracted suggestions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SuggestionOrigin>,
+}
+
+/// Source of a suggestion that did not come from session extraction.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SuggestionOrigin {
+    /// Imported from a GitHub repository file.
+    Github {
+        /// `owner/repo`.
+        repo: String,
+        /// File path inside the repository.
+        path: String,
+        git_ref: String,
+        commit: String,
+        /// Browser URL of the file at that commit.
+        url: String,
+    },
 }
 
 fn normalize_ws(s: &str) -> String {
@@ -538,6 +559,7 @@ pub fn parse_output_full(
             created_at,
             base_hash: target.hash.clone(),
             status: SuggestionStatus::Pending,
+            origin: None,
         });
     }
     ParsedOutput { suggestions: out, warnings, unusable: false }

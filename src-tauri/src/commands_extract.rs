@@ -267,6 +267,25 @@ impl ExtractState {
         Ok(self.inner()?.store.clone())
     }
 
+    /// Adds suggestions produced outside an extraction run (GitHub import),
+    /// saves, and announces the new pending summary. Returns how many were new
+    /// (the rest duplicated an existing non-stale suggestion).
+    pub fn add_external_suggestions(&self, items: Vec<Suggestion>) -> Result<u32, CommandError> {
+        let inner = self.inner()?;
+        let added = {
+            let mut st = lock(&inner.store);
+            let added = st.add_suggestions(items);
+            if added > 0 {
+                st.save().map_err(|e| CommandError::new("io", e.to_string()))?;
+            }
+            added
+        };
+        if added > 0 {
+            self.emit_summary();
+        }
+        Ok(added)
+    }
+
     /// Connects the event sink and makes manual and scheduled runs report
     /// progress / completion through it.
     pub fn set_emitter(&self, emit: Emit) {
@@ -521,14 +540,18 @@ fn authorize_target(es: &ExtractState, id: &str) -> Result<(), CommandError> {
     }
     let p = std::path::Path::new(&path);
     let is_claude_md = p.file_name().is_some_and(|n| n == "CLAUDE.md");
+    let is_agents_md = p.file_name().is_some_and(|n| n == "AGENTS.md");
     let parent = p.parent().map(|d| normalize_path(&d.to_string_lossy()));
-    let roots = idx
-        .projects
-        .iter()
-        .map(|pm| normalize_path(&pm.project.path))
-        .chain(std::iter::once(normalize_path(&es.app.paths.claude_home.to_string_lossy())));
-    if is_claude_md && parent.is_some_and(|d| roots.into_iter().any(|r| r == d)) {
-        return Ok(());
+    let project_roots: Vec<String> =
+        idx.projects.iter().map(|pm| normalize_path(&pm.project.path)).collect();
+    let claude_home = normalize_path(&es.app.paths.claude_home.to_string_lossy());
+    if let Some(d) = parent {
+        let in_project = project_roots.iter().any(|r| *r == d);
+        // CLAUDE.md: project root or Claude home; AGENTS.md: project root
+        // (the global AGENTS.md is always indexed).
+        if (is_claude_md && (in_project || d == claude_home)) || (is_agents_md && in_project) {
+            return Ok(());
+        }
     }
     Err(CommandError::new("invalid", "target is not a known memory file"))
 }

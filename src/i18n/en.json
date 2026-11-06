@@ -4,6 +4,7 @@
     "review": "Review",
     "extract": "Extraction",
     "skills": "Skills",
+    "sessions": "Sessions",
     "sync": "Sync",
     "usage": "Usage",
     "settings": "Settings"
@@ -813,6 +814,66 @@
       "open": "Open folder",
       "openFailed": "Could not open: {error}",
       "copy": "Copy path"
+    }
+  },
+  "sessions": {
+    "title": "Sessions",
+    "subtitle": "Convert sessions between Claude Code and Codex to continue the same work in the other tool",
+    "refresh": "Refresh",
+    "search": "Search content, project or ID",
+    "all": "All",
+    "loading": "Reading local sessions…",
+    "loadFailed": "Failed to read sessions: {error}",
+    "empty": "No sessions found",
+    "emptyHint": "Sessions on this machine appear here after you use Claude Code or Codex",
+    "noMatch": "No matching sessions",
+    "count": "{n} sessions",
+    "messages": "{n} messages",
+    "toolCalls": "{n} tool calls",
+    "untitled": "(untitled)",
+    "convertedFrom": "Converted from {tool}",
+    "convertedTo": "Converted to {tool}",
+    "selectHint": "Select a session on the left to preview and convert it",
+    "previewLoading": "Reading session…",
+    "previewFailed": "Failed to read the session: {error}",
+    "previewTitle": "Conversion preview",
+    "previewMore": "Showing the first {shown} of {total}",
+    "roles": {
+      "user": "User",
+      "assistant": "Assistant",
+      "shell": "Command"
+    },
+    "stats": {
+      "mapped": "{n} shell commands kept as tool calls",
+      "degraded": "{n} other tool calls turned into text summaries",
+      "none": "No tool calls"
+    },
+    "convertTo": "Convert to {tool} session",
+    "converting": "Converting…",
+    "confirmTitle": "Convert to a {tool} session?",
+    "confirmBody": "A new {tool} session file will be written to:\n{dir}\n\nThe original session file is not changed. Thinking is not carried over; shell commands stay tool calls, other tool calls become text summaries and long outputs are truncated.",
+    "confirmAgain": "\n\nNote: this session was converted before ({ids}); continuing writes another new copy.",
+    "confirm": "Convert",
+    "cancel": "Cancel",
+    "doneTitle": "{tool} session created",
+    "sessionId": "Session ID",
+    "file": "File",
+    "resumeHint": "Run this in a terminal to continue:",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "codexIndexed": "Registered in Codex's session list, so the desktop app history shows it too.",
+    "codexNotIndexed": "Could not register it in the Codex desktop session list ({reason}); resume it by ID with the command above.",
+    "reasons": {
+      "state_db_missing": "Codex state database not found",
+      "state_db_schema": "unknown Codex state database layout"
+    },
+    "warning": "Note: {text}",
+    "convertFailed": "Conversion failed: {error}",
+    "empty_session": "This session has no user message and cannot be converted",
+    "tools": {
+      "claude": "Claude Code",
+      "codex": "Codex"
     }
   }
 }

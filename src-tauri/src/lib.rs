@@ -1,9 +1,11 @@
 pub mod commands;
 pub mod commands_env;
 pub mod commands_extract;
+pub mod commands_sessions;
 pub mod commands_skills;
 pub mod commands_sync;
 pub mod commands_usage;
+pub mod convert;
 pub mod env;
 pub mod extract;
 pub mod fsutil;
@@ -97,6 +99,7 @@ pub fn run() {
             let env_state = Arc::new(commands_env::EnvState::new(state.clone()));
             app.manage(usage);
             app.manage(env_state);
+            app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
             app.manage(state);
             app.manage(handle);
             app.manage(extract);
@@ -169,6 +172,10 @@ pub fn run() {
             commands_env::env_detect,
             commands_env::env_install,
             commands_env::open_data_dir,
+            commands_sessions::list_sessions,
+            commands_sessions::session_preview,
+            commands_sessions::convert_target_dir,
+            commands_sessions::convert_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

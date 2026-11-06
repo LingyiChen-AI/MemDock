@@ -739,6 +739,7 @@ fn manifest_merges_local_skills() {
         scope: ManifestScope::Global,
         installed_on: Default::default(),
         removed_on: Default::default(),
+        local_only: false,
     };
     let ctx = SyncCtx {
         local_skills: Some(vec![skill.clone()]),
@@ -1048,6 +1049,7 @@ fn skills_json_is_scanned() {
         scope: ManifestScope::Global,
         installed_on: Default::default(),
         removed_on: Default::default(),
+        local_only: false,
     };
     let ctx = SyncCtx {
         local_skills: Some(vec![skill]),

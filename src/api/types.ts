@@ -94,6 +94,8 @@ export type CommandErrorCode =
   | "remote_moved"
   | "push_failed"
   | "manifest"
+  /** An imported skill manifest file is not valid JSON / is newer than supported. */
+  | "manifest_invalid"
   | "repo_not_ours"
   | "public_not_acked"
   | "plan_not_found"
@@ -564,6 +566,34 @@ export interface ManifestSkill {
   scope: ManifestScope;
   installed_on: string[];
   removed_on: string[];
+  /** No known source: recorded for the inventory only, must be copied by hand. */
+  local_only?: boolean;
+}
+
+/** `skills.json` / exported manifest file. */
+export interface SkillManifest {
+  description?: string;
+  format: number;
+  skills: ManifestSkill[];
+}
+
+/** A manifest entry this machine lacks, with where it would be installed here. */
+export interface MissingManifestSkill extends ManifestSkill {
+  /** `null` when the project is not on this computer. */
+  local_scope: SkillScope | null;
+}
+
+export interface ManifestCompare {
+  local: SkillManifest;
+  /** `null` when there is nothing to compare with (not logged in / never synced). */
+  remote: SkillManifest | null;
+  missing_here: MissingManifestSkill[];
+  only_here: ManifestSkill[];
+  in_both: ManifestSkill[];
+  local_only: ManifestSkill[];
+  /** Last sync time (ms) when `remote` comes from the synced repository. */
+  remote_updated_at: number | null;
+  logged_in: boolean;
 }
 
 export interface SyncPlanCounts {

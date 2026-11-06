@@ -58,7 +58,7 @@ function Shell() {
               }}
             />
           ),
-          skills: <SkillsPage onDirtyChange={onDirty} />,
+          skills: <SkillsPage onDirtyChange={onDirty} onNavigate={navigate} />,
           sync: (
             <SyncPage
               status={syncStatus}

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronRight, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { DeletedSkill, SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,8 @@ export interface SkillListProps {
   checkedUpdates: number | null;
   onCheck: () => void;
   onAdd: () => void;
+  /** Opens the skill manifest (sync) dialog; the button is hidden without it. */
+  onManifest?: () => void;
   /** Deleted skills whose backups remain; the group is hidden when empty. */
   deleted?: DeletedSkill[];
   /** Bucket of the opened deleted skill. */
@@ -52,6 +54,7 @@ export function SkillList({
   checkedUpdates,
   onCheck,
   onAdd,
+  onManifest,
   deleted = [],
   selectedDeleted,
   onSelectDeleted,
@@ -154,6 +157,18 @@ export function SkillList({
               <span className="truncate">{checkLabel}</span>
             </Button>
           </span>
+          {onManifest ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onManifest}
+              title={s.manifest.open}
+              className="h-7 shrink-0 cursor-pointer gap-1.5 bg-card px-2.5 text-xs hover:bg-muted"
+            >
+              <ArrowLeftRight className="size-3.5" aria-hidden="true" />
+              {s.manifest.open}
+            </Button>
+          ) : null}
           <Button type="button" onClick={onAdd} className="h-7 shrink-0 cursor-pointer gap-1.5 px-3 text-xs font-semibold">
             <Plus className="size-4" aria-hidden="true" />
             {s.addSkill}

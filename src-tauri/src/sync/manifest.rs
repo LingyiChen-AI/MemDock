@@ -1,4 +1,37 @@
 //! Skills install manifest (`skills.json`): syncs how skills are installed, not their files.
+//!
+//! # File format (`format: 1`)
+//!
+//! ```text
+//! {
+//!   "description": "MemDock skill install manifest ...",  // optional, export files only
+//!   "format": 1,
+//!   "skills": [
+//!     {
+//!       "name": "huashu-motion",               // SKILL.md name (directory name fallback)
+//!       "url": "https://github.com/o/r",       // normalized repo URL; "" when local_only
+//!       "git_ref": null,                       // branch / tag tracked; null = remote HEAD
+//!       "commit": "c0ffee...",                 // commit installed, when known
+//!       "skill_path": "skills/huashu-motion",  // folder inside the repo; "" = repo root
+//!       "tool": "claude",                      // "claude" | "codex"
+//!       "scope": { "type": "global" },         // or { "type": "project", "key": "github.com/o/p" }
+//!       "installed_on": ["<machine id>"],      // machines that have it now
+//!       "removed_on": ["<machine id>"],        // machines that uninstalled it
+//!       "local_only": true                     // optional: no known source, copy by hand
+//!     }
+//!   ]
+//! }
+//! ```
+//!
+//! Every non-read-only skill found by the scan is recorded: registry installs,
+//! git checkouts (origin remote), symlinks into a git repo, `npx skills`
+//! (skill-lock) installs, and skills without any source (`local_only`: only
+//! counted, never installable). Identity: `url + skill_path + tool + scope`,
+//! or `name + tool + scope` for local-only entries.
+//!
+//! Compatibility: `local_only` / `description` are optional fields and older
+//! readers ignore unknown fields (no `deny_unknown_fields`), so the format
+//! number stays 1.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -6,8 +39,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::model::Tool;
-use crate::skills::model::{SkillScope, SkillSource};
-use crate::skills::registry::Registry;
+use crate::skills::model::{SkillEntry, SkillScope, SkillSource};
 use crate::skills::source::normalize_url;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -32,10 +64,27 @@ pub struct ManifestSkill {
     pub installed_on: BTreeSet<String>,
     #[serde(default)]
     pub removed_on: BTreeSet<String>,
+    /// No known source: recorded for the inventory, must be copied by hand.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub local_only: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl ManifestSkill {
+    /// Local-only entries (flag set, or no url at all) cannot be installed.
+    pub fn is_local_only(&self) -> bool {
+        self.local_only || self.url.trim().is_empty()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Manifest {
+    /// Human-readable note (export files); ignored when reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub format: u32,
     pub skills: Vec<ManifestSkill>,
 }
@@ -43,6 +92,7 @@ pub struct Manifest {
 impl Default for Manifest {
     fn default() -> Self {
         Manifest {
+            description: None,
             format: 1,
             skills: Vec::new(),
         }
@@ -71,12 +121,17 @@ impl Manifest {
         for s in &mut m.skills {
             s.url = norm_url(&s.url);
             s.skill_path = norm_path(&s.skill_path);
+            if s.url.is_empty() {
+                s.local_only = true;
+            }
         }
         Ok(m)
     }
 }
 
-type Identity = (String, String, u8, ManifestScope);
+/// `(url, skill_path, tool, scope, local name)`; the name is only set for
+/// local-only entries, which have no url to tell them apart.
+type Identity = (String, String, u8, ManifestScope, String);
 
 fn tool_rank(t: Tool) -> u8 {
     match t {
@@ -94,11 +149,21 @@ fn norm_path(p: &str) -> String {
 }
 
 fn identity(s: &ManifestSkill) -> Identity {
+    if s.is_local_only() {
+        return (
+            String::new(),
+            String::new(),
+            tool_rank(s.tool),
+            s.scope.clone(),
+            s.name.clone(),
+        );
+    }
     (
         norm_url(&s.url),
         norm_path(&s.skill_path),
         tool_rank(s.tool),
         s.scope.clone(),
+        String::new(),
     )
 }
 
@@ -106,63 +171,51 @@ fn sort_skills(v: &mut [ManifestSkill]) {
     v.sort_by_key(identity);
 }
 
-fn make(name: &str, src: &SkillSource, tool: Tool, scope: ManifestScope) -> Option<ManifestSkill> {
-    if src.url.trim().is_empty() {
-        return None;
-    }
-    Some(ManifestSkill {
+fn make(name: &str, src: Option<&SkillSource>, tool: Tool, scope: ManifestScope) -> ManifestSkill {
+    let src = src.filter(|s| !s.url.trim().is_empty());
+    ManifestSkill {
         name: name.to_string(),
-        url: norm_url(&src.url),
-        git_ref: src.git_ref.clone(),
-        commit: src.commit.clone(),
-        skill_path: norm_path(&src.skill_path),
+        url: src.map(|s| norm_url(&s.url)).unwrap_or_default(),
+        git_ref: src.and_then(|s| s.git_ref.clone()),
+        commit: src.and_then(|s| s.commit.clone()),
+        skill_path: src.map(|s| norm_path(&s.skill_path)).unwrap_or_default(),
         tool,
         scope,
         installed_on: BTreeSet::new(),
         removed_on: BTreeSet::new(),
-    })
+        local_only: src.is_none(),
+    }
 }
 
-/// Installs on this machine that can be reproduced elsewhere. Plugin skills and
-/// skills without a source never appear in the registry, so they are skipped;
-/// project installs whose project has no key are skipped too.
-///
-/// Skill-lock entries (`npx skills`) cannot say which tool reads them; they are
-/// treated as Codex global installs (`~/.agents/skills`). Registry entries win.
-/// Callers pass `skill_lock` already filtered by `installed_lock_entries`, so
-/// stale lock entries (directory gone) do not count as installed.
+/// This machine's skills for the manifest, from a scan whose entries already
+/// carry their inferred source (`scan_with_sources` / `infer_source`).
+/// Read-only skills (plugins, Codex built-ins, synced) are skipped. Skills
+/// with a source url become installable entries; the rest are recorded as
+/// `local_only`. Project skills need their project's key in `projects`
+/// (`(project_id, key)`), otherwise they are skipped. The first entry wins
+/// for a repeated identity.
 pub fn local_entries(
-    registry: &Registry,
-    skill_lock: &[(String, SkillSource)],
+    entries: &[SkillEntry],
     projects: &[(String, Option<String>)],
 ) -> Vec<ManifestSkill> {
     let mut out: Vec<ManifestSkill> = Vec::new();
-    for e in &registry.skills {
-        for inst in &e.installs {
-            let scope = match &inst.scope {
-                SkillScope::Global => ManifestScope::Global,
-                SkillScope::Project { project_id } => {
-                    match projects
-                        .iter()
-                        .find(|(id, _)| id == project_id)
-                        .and_then(|(_, k)| k.clone())
-                    {
-                        Some(key) => ManifestScope::Project { key },
-                        None => continue,
-                    }
+    for e in entries.iter().filter(|e| !e.readonly) {
+        let scope = match &e.scope {
+            SkillScope::Global => ManifestScope::Global,
+            SkillScope::Project { project_id } => {
+                match projects
+                    .iter()
+                    .find(|(id, _)| id == project_id)
+                    .and_then(|(_, k)| k.clone())
+                {
+                    Some(key) => ManifestScope::Project { key },
+                    None => continue,
                 }
-            };
-            if let Some(m) = make(&e.name, &e.source, inst.tool, scope) {
-                out.push(m);
             }
-        }
+        };
+        out.push(make(&e.name, e.source.as_ref(), e.tool, scope));
     }
-    for (name, src) in skill_lock {
-        if let Some(m) = make(name, src, Tool::Codex, ManifestScope::Global) {
-            out.push(m);
-        }
-    }
-    // stable sort + dedup keeps the first (registry) entry for a repeated identity
+    // stable sort + dedup keeps the first entry for a repeated identity
     sort_skills(&mut out);
     out.dedup_by(|b, a| identity(a) == identity(b));
     out
@@ -222,6 +275,7 @@ pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> 
             item.removed_on.remove(machine);
             item.commit = l.commit.clone().or(item.commit.take());
             item.git_ref = l.git_ref.clone().or(item.git_ref.take());
+            item.local_only = l.is_local_only();
         } else if item.installed_on.contains(machine) {
             item.installed_on.remove(machine);
             item.removed_on.insert(machine.to_string());
@@ -241,6 +295,7 @@ pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> 
     }
     sort_skills(&mut result);
     Manifest {
+        description: None,
         format: 1,
         skills: result,
     }
@@ -282,11 +337,53 @@ pub fn removed_elsewhere(
         .collect()
 }
 
+/// How this machine's skills relate to another manifest (the synced
+/// `skills.json` or an imported file).
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+pub struct Comparison {
+    /// In `remote`, not here, still installed somewhere else (or the file does
+    /// not say), and not removed on this machine on purpose.
+    pub missing_here: Vec<ManifestSkill>,
+    /// Here, not in `remote` (local entries).
+    pub only_here: Vec<ManifestSkill>,
+    /// Here and in `remote` (local entries).
+    pub in_both: Vec<ManifestSkill>,
+}
+
+/// Compares by identity (url + skill_path + tool + scope; name + tool + scope
+/// for local-only entries).
+pub fn compare(local: &[ManifestSkill], remote: &Manifest, machine: &str) -> Comparison {
+    let remote_ids: BTreeSet<Identity> = remote.skills.iter().map(identity).collect();
+    let mut seen: BTreeSet<Identity> = BTreeSet::new();
+    let missing_here = remote
+        .skills
+        .iter()
+        .filter(|s| {
+            let nobody = s.installed_on.is_empty() && !s.removed_on.is_empty();
+            let only_me = !s.installed_on.is_empty() && s.installed_on.iter().all(|o| o == machine);
+            !has_local(local, s)
+                && !s.removed_on.contains(machine)
+                && !nobody
+                && !only_me
+                && seen.insert(identity(s))
+        })
+        .cloned()
+        .collect();
+    let (in_both, only_here) = local
+        .iter()
+        .cloned()
+        .partition(|l| remote_ids.contains(&identity(l)));
+    Comparison {
+        missing_here,
+        only_here,
+        in_both,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skills::model::SourceOrigin;
-    use crate::skills::registry::{InstallRecord, RegistryEntry};
+    use crate::skills::model::{SkillKind, SourceOrigin};
 
     fn src(url: &str, path: &str) -> SkillSource {
         SkillSource {
@@ -298,23 +395,29 @@ mod tests {
         }
     }
 
-    fn entry(name: &str, source: SkillSource, installs: Vec<InstallRecord>) -> RegistryEntry {
-        RegistryEntry {
+    fn scanned(name: &str, tool: Tool, scope: SkillScope, source: Option<SkillSource>) -> SkillEntry {
+        SkillEntry {
+            id: format!("{name}-{tool:?}-{scope:?}"),
             name: name.into(),
+            description: String::new(),
+            tool,
+            scope,
+            kind: SkillKind::User,
+            dir: format!("/x/{name}"),
+            is_symlink: false,
+            symlink_target: None,
+            readonly: false,
+            plugin: None,
             source,
-            clone_url: None,
-            installs,
-            content_hash: String::new(),
-            installed_at: 0,
-            updated_at: 0,
+            file_count: 1,
+            size_bytes: 1,
+            modified_at: None,
         }
     }
 
-    fn inst(tool: Tool, scope: SkillScope) -> InstallRecord {
-        InstallRecord {
-            tool,
-            scope,
-            dir: "/x".into(),
+    fn proj(id: &str) -> SkillScope {
+        SkillScope::Project {
+            project_id: id.into(),
         }
     }
 
@@ -329,51 +432,50 @@ mod tests {
             scope: ManifestScope::Global,
             installed_on: on.iter().map(|s| s.to_string()).collect(),
             removed_on: off.iter().map(|s| s.to_string()).collect(),
+            local_only: false,
         }
     }
 
+    fn local_sk(name: &str, on: &[&str]) -> ManifestSkill {
+        let mut s = sk(name, on, &[]);
+        s.url = String::new();
+        s.local_only = true;
+        s
+    }
+
     fn man(skills: Vec<ManifestSkill>) -> Manifest {
-        Manifest { format: 1, skills }
+        Manifest {
+            description: None,
+            format: 1,
+            skills,
+        }
     }
 
     #[test]
-    fn local_entries_skip_plugin_and_local() {
-        let reg = Registry {
-            version: 1,
-            skills: vec![
-                entry(
-                    "a",
-                    src("https://github.com/o/a", ""),
-                    vec![
-                        inst(Tool::Claude, SkillScope::Global),
-                        inst(
-                            Tool::Claude,
-                            SkillScope::Project {
-                                project_id: "p1".into(),
-                            },
-                        ),
-                        inst(
-                            Tool::Claude,
-                            SkillScope::Project {
-                                project_id: "p2".into(),
-                            },
-                        ),
-                    ],
-                ),
-                entry(
-                    "nosrc",
-                    src("", ""),
-                    vec![inst(Tool::Claude, SkillScope::Global)],
-                ),
-            ],
-        };
-        let lock = vec![("l".to_string(), src("https://github.com/o/l", "s/l"))];
+    fn local_entries_cover_every_user_skill() {
+        let mut plugin = scanned("plug", Tool::Claude, SkillScope::Global, None);
+        plugin.readonly = true;
+        plugin.kind = SkillKind::Plugin;
+        let mut git_src = src("git@github.com:o/r.git", "/skills/g/");
+        git_src.origin = SourceOrigin::GitDir;
+        let mut lock_src = src("https://github.com/o/l", "s/l");
+        lock_src.origin = SourceOrigin::SkillLock;
+        let entries = vec![
+            scanned("a", Tool::Claude, SkillScope::Global, Some(src("https://github.com/o/a", ""))),
+            scanned("a", Tool::Claude, proj("p1"), Some(src("https://github.com/o/a", ""))),
+            scanned("a", Tool::Claude, proj("p2"), Some(src("https://github.com/o/a", ""))),
+            scanned("g", Tool::Claude, SkillScope::Global, Some(git_src)),
+            scanned("l", Tool::Codex, SkillScope::Global, Some(lock_src)),
+            scanned("mine", Tool::Codex, SkillScope::Global, None),
+            scanned("empty", Tool::Claude, SkillScope::Global, Some(src("", ""))),
+            plugin,
+        ];
         let projects = vec![
             ("p1".to_string(), Some("github.com/o/p".to_string())),
             ("p2".to_string(), None),
         ];
-        let got = local_entries(&reg, &lock, &projects);
-        assert_eq!(got.len(), 3);
+        let got = local_entries(&entries, &projects);
+        assert_eq!(got.len(), 6, "{got:?}");
         assert!(got.iter().all(|s| s.installed_on.is_empty()));
         assert!(got
             .iter()
@@ -381,9 +483,116 @@ mod tests {
         assert!(got.iter().any(
             |s| matches!(&s.scope, ManifestScope::Project { key } if key == "github.com/o/p")
         ));
+        let g = got.iter().find(|s| s.name == "g").unwrap();
+        assert_eq!(g.url, "https://github.com/o/r");
+        assert_eq!(g.skill_path, "skills/g");
+        assert!(!g.local_only);
         let l = got.iter().find(|s| s.name == "l").unwrap();
         assert_eq!((l.tool, &l.scope), (Tool::Codex, &ManifestScope::Global));
-        assert!(!got.iter().any(|s| s.name == "nosrc"));
+        let mine = got.iter().find(|s| s.name == "mine").unwrap();
+        assert!(mine.local_only && mine.url.is_empty() && mine.commit.is_none());
+        assert!(got.iter().find(|s| s.name == "empty").unwrap().local_only);
+        assert!(!got.iter().any(|s| s.name == "plug"));
+    }
+
+    #[test]
+    fn local_only_identity_uses_name() {
+        let entries = vec![
+            scanned("x", Tool::Claude, SkillScope::Global, None),
+            scanned("y", Tool::Claude, SkillScope::Global, None),
+            scanned("x", Tool::Claude, SkillScope::Global, None),
+        ];
+        let got = local_entries(&entries, &[]);
+        assert_eq!(got.len(), 2);
+        // merge keeps two distinct local-only entries
+        let merged = merge(&Manifest::default(), &got, "A");
+        assert_eq!(merged.skills.len(), 2);
+        let json = merged.to_json().unwrap();
+        assert!(json.contains("\"local_only\": true"));
+        let back = Manifest::from_json(&json).unwrap();
+        assert!(back.skills.iter().all(|s| s.local_only));
+    }
+
+    #[test]
+    fn old_files_and_unknown_fields_read() {
+        // no local_only -> false; unknown fields ignored; empty url -> local_only
+        let t = r#"{"format":1,"extra":1,"skills":[{"name":"a","url":"https://github.com/o/a","skill_path":"","tool":"claude","scope":{"type":"global"},"future":true},{"name":"b","url":"","skill_path":"","tool":"codex","scope":{"type":"global"}}]}"#;
+        let m = Manifest::from_json(t).unwrap();
+        assert!(!m.skills[0].local_only);
+        assert!(m.skills[1].local_only);
+        // false is not written, so unchanged entries keep their old bytes
+        assert!(!man(vec![sk("a", &[], &[])]).to_json().unwrap().contains("local_only"));
+    }
+
+    #[test]
+    fn local_entries_from_git_clone() {
+        use crate::skills::git::SystemGit;
+        use crate::skills::registry::Registry;
+        use crate::skills::source::infer_source;
+        let git = SystemGit::new();
+        if !crate::skills::git::GitRunner::available(&git) {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("cloned");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: cloned\n---\n").unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["remote", "add", "origin", "https://github.com/acme/cloned.git"]);
+        let local = tmp.path().join("plain");
+        std::fs::create_dir_all(&local).unwrap();
+        let mut a = scanned("cloned", Tool::Claude, SkillScope::Global, None);
+        a.dir = dir.to_string_lossy().into_owned();
+        let mut b = scanned("plain", Tool::Claude, SkillScope::Global, None);
+        b.dir = local.to_string_lossy().into_owned();
+        let mut entries = vec![a, b];
+        for e in entries.iter_mut() {
+            e.source = infer_source(e, &Registry::default(), &[], &git);
+        }
+        let got = local_entries(&entries, &[]);
+        assert_eq!(got.len(), 2);
+        let c = got.iter().find(|s| s.name == "cloned").unwrap();
+        assert_eq!(c.url, "https://github.com/acme/cloned");
+        assert_eq!(c.skill_path, "");
+        assert!(!c.local_only);
+        let p = got.iter().find(|s| s.name == "plain").unwrap();
+        assert!(p.local_only);
+        assert!(p.url.is_empty());
+    }
+
+    #[test]
+    fn compare_groups() {
+        let mut remote = man(vec![
+            sk("other", &["B"], &[]),
+            sk("both", &["A", "B"], &[]),
+            sk("removed_here", &["B"], &["A"]),
+            sk("nobody", &[], &["B"]),
+            sk("was_mine", &["A"], &[]),
+            sk("from_file", &[], &[]),
+            local_sk("copy", &["B"]),
+        ]);
+        remote.skills.push(sk("other", &["C"], &[]));
+        let local = vec![sk("both", &[], &[]), sk("new", &[], &[]), local_sk("mine", &[])];
+        let c = compare(&local, &remote, "A");
+        let names = |v: &[ManifestSkill]| v.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&c.missing_here), vec!["other", "from_file", "copy"]);
+        assert!(c.missing_here.iter().find(|s| s.name == "copy").unwrap().local_only);
+        assert_eq!(names(&c.in_both), vec!["both"]);
+        assert_eq!(names(&c.only_here), vec!["new", "mine"]);
+        // a local-only skill with the same name/tool/scope counts as present
+        let c2 = compare(&[local_sk("copy", &[])], &remote, "A");
+        assert!(!names(&c2.missing_here).contains(&"copy".to_string()));
+        assert_eq!(names(&c2.in_both), vec!["copy"]);
     }
 
     #[test]
@@ -504,24 +713,6 @@ mod tests {
     fn missing_here_excludes_self_installed() {
         let m = man(vec![sk("x", &["A", "B"], &[])]);
         assert!(missing_here(&m, &[], "A").is_empty());
-    }
-
-    #[test]
-    fn registry_wins_over_skill_lock() {
-        let reg = Registry {
-            version: 1,
-            skills: vec![entry(
-                "a",
-                src("https://github.com/o/a", ""),
-                vec![inst(Tool::Codex, SkillScope::Global)],
-            )],
-        };
-        let mut lock_src = src("https://github.com/o/a", "");
-        lock_src.origin = SourceOrigin::SkillLock;
-        lock_src.commit = Some("lock".into());
-        let got = local_entries(&reg, &[("a".into(), lock_src)], &[]);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].commit.as_deref(), Some("abc"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Download, Loader2, Trash2 } from "lucide-react";
-import { deleteSkill, installSkill, listSkills } from "@/api/skills";
+import { deleteSkill, listSkills } from "@/api/skills";
+import { installFromManifest } from "@/pages/skills/manifestInstall";
 import type { ManifestSkill, SkillEntry, SkillScope, SyncProject } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,8 +20,10 @@ export interface MissingSkillsProps {
 
 const keyOf = (m: ManifestSkill) => `${m.tool}|${m.scope.type === "global" ? "" : m.scope.key}|${m.name}`;
 
-/** Local scope of a manifest entry; `null` when the project is not on this computer. */
+/** Local scope of a manifest entry; `null` when the project is not on this computer
+ * or the entry has no source to install from (local-only). */
 function localScope(m: ManifestSkill, projects: SyncProject[] | null): SkillScope | null {
+  if (m.local_only || !m.url) return null;
   if (m.scope.type === "global") return { type: "global" };
   const key = m.scope.key;
   const p = projects?.find((x) => x.key === key || x.dir_key === key);
@@ -67,11 +70,7 @@ export function MissingSkills({ missing, removed, projects, notify }: MissingSki
     const k = keyOf(m);
     mark(setBusy, k, true);
     try {
-      await installSkill(
-        { type: "git", url: m.url, clone_url: m.url, git_ref: m.git_ref, skill_path: m.skill_path, commit: m.commit },
-        [{ tool: m.tool, scope }],
-        false,
-      );
+      await installFromManifest(m, scope);
       mark(setDone, k, true);
       if (!quiet) notify("success", fmt(s.installed, { name: m.name }));
       return true;
@@ -175,7 +174,7 @@ export function MissingSkills({ missing, removed, projects, notify }: MissingSki
                       {s.install}
                     </Button>
                   ) : (
-                    <span className="shrink-0 text-xs text-muted-foreground">{s.noLocalProject}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{m.local_only || !m.url ? t.skills.manifest.manualCopy : s.noLocalProject}</span>
                   )}
                 </li>
               );

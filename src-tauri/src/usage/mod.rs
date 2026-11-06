@@ -5,6 +5,7 @@ pub mod cache;
 pub mod claude;
 pub mod claude_quota;
 pub mod codex;
+pub mod codex_quota;
 pub mod pricing;
 
 use serde::{Deserialize, Serialize};
@@ -95,11 +96,31 @@ pub struct ToolQuota {
     /// Short machine-readable reason for `unavailable` (never contains credentials).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Where the windows come from: "live" (quota endpoint) or "log" (local
+    /// log snapshot). `None` when there are no windows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Set when the live lookup is on but failed and the log snapshot is shown
+    /// instead (same codes as `reason`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_error: Option<String>,
+    /// Subscription plan reported by the endpoint (e.g. "plus", "pro").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 impl ToolQuota {
     pub fn with_status(status: &str, reason: Option<String>) -> Self {
-        ToolQuota { status: status.into(), five_hour: None, weekly: None, updated_at: None, reason }
+        ToolQuota {
+            status: status.into(),
+            five_hour: None,
+            weekly: None,
+            updated_at: None,
+            reason,
+            source: None,
+            live_error: None,
+            plan: None,
+        }
     }
 }
 
@@ -110,17 +131,19 @@ pub struct QuotaDto {
 }
 
 /// Codex quota from the newest log snapshot. Windows of up to 6 hours are the
-/// session window, longer ones the weekly window; a window whose reset time has
-/// passed is shown as 0% used.
-pub fn codex_quota(snap: Option<&RateSnapshot>, now_ms: i64) -> ToolQuota {
+/// session window, longer ones the weekly window. A window whose reset time
+/// has passed is shown as 0% used and keeps its (past) `resets_at`, so the UI
+/// can say "reset" instead of "reset time unknown".
+pub fn codex_log_quota(snap: Option<&RateSnapshot>, now_ms: i64) -> ToolQuota {
     let Some(s) = snap else { return ToolQuota::with_status("no_data", None) };
     let mut q = ToolQuota::with_status("ok", None);
     q.updated_at = Some(s.ts);
+    q.source = Some("log".into());
     for w in [&s.primary, &s.secondary].into_iter().flatten() {
         let expired = w.resets_at.is_some_and(|r| r <= now_ms);
         let win = QuotaWindow {
             used_percent: if expired { 0.0 } else { w.used_percent },
-            resets_at: if expired { None } else { w.resets_at },
+            resets_at: w.resets_at,
             window_minutes: w.window_minutes,
         };
         if w.window_minutes.is_some_and(|m| m <= 360) {
@@ -143,13 +166,15 @@ mod quota_tests {
             primary: Some(RateWindow { used_percent: 30.0, window_minutes: Some(300), resets_at: Some(5_000) }),
             secondary: Some(RateWindow { used_percent: 60.0, window_minutes: Some(10080), resets_at: Some(50_000) }),
         };
-        let q = codex_quota(Some(&snap), 2_000);
+        let q = codex_log_quota(Some(&snap), 2_000);
         assert_eq!(q.status, "ok");
+        assert_eq!(q.source.as_deref(), Some("log"));
         assert_eq!(q.five_hour.as_ref().unwrap().used_percent, 30.0);
         assert_eq!(q.weekly.as_ref().unwrap().used_percent, 60.0);
-        let q = codex_quota(Some(&snap), 10_000);
+        let q = codex_log_quota(Some(&snap), 10_000);
         assert_eq!(q.five_hour.as_ref().unwrap().used_percent, 0.0);
-        assert_eq!(q.five_hour.as_ref().unwrap().resets_at, None);
-        assert_eq!(codex_quota(None, 0).status, "no_data");
+        // The past reset time is kept so the UI can show "reset".
+        assert_eq!(q.five_hour.as_ref().unwrap().resets_at, Some(5_000));
+        assert_eq!(codex_log_quota(None, 0).status, "no_data");
     }
 }

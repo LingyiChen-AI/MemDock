@@ -16,12 +16,14 @@ use crate::model::Tool;
 use crate::settings::{load_settings, Settings};
 use crate::usage::aggregate::{build_report, local_time, to_csv, Query, UsageReport, View};
 use crate::usage::cache::UsageCache;
-use crate::usage::{claude_quota, codex_quota, pricing, QuotaDto, ToolQuota};
+use crate::usage::{claude_quota, codex_log_quota, codex_quota, pricing, QuotaDto, ToolQuota};
 
 pub const EVENT_UPDATED: &str = "usage://updated";
 const THROTTLE: Duration = Duration::from_secs(5);
 const FALLBACK_RESCAN: Duration = Duration::from_secs(300);
 const CLAUDE_QUOTA_TTL: Duration = Duration::from_secs(60);
+/// The live Codex lookup is cached a little longer (the page polls every minute).
+const CODEX_QUOTA_TTL: Duration = Duration::from_secs(180);
 
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -33,6 +35,7 @@ pub struct UsageState {
     refresh_lock: Mutex<()>,
     scanning: AtomicBool,
     claude_quota: Mutex<Option<(Instant, ToolQuota)>>,
+    codex_quota: Mutex<Option<(Instant, ToolQuota)>>,
 }
 
 impl UsageState {
@@ -45,6 +48,7 @@ impl UsageState {
             refresh_lock: Mutex::new(()),
             scanning: AtomicBool::new(true),
             claude_quota: Mutex::new(None),
+            codex_quota: Mutex::new(None),
         }
     }
 
@@ -152,28 +156,40 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// `fetch_claude` is injected so tests never touch the network.
-pub fn usage_quota_impl(
-    us: &UsageState,
-    fetch_claude: &dyn Fn(&Path, i64) -> ToolQuota,
-) -> QuotaDto {
+type Fetch<'a> = &'a dyn Fn(&Path, i64) -> ToolQuota;
+
+/// Returns the cached result when it is younger than `ttl`, otherwise fetches.
+fn cached_fetch(slot: &Mutex<Option<(Instant, ToolQuota)>>, ttl: Duration, fetch: impl FnOnce() -> ToolQuota) -> ToolQuota {
+    if let Some((_, q)) = lock(slot).as_ref().filter(|(at, _)| at.elapsed() < ttl) {
+        return q.clone();
+    }
+    let q = fetch();
+    *lock(slot) = Some((Instant::now(), q.clone()));
+    q
+}
+
+/// The fetchers are injected so tests never touch the network or real
+/// credentials. Both lookups are opt-in; Codex falls back to the newest log
+/// snapshot when its live lookup is off or fails (`live_error` says why).
+pub fn usage_quota_impl(us: &UsageState, fetch_claude: Fetch, fetch_codex: Fetch) -> QuotaDto {
     let now = now_ms();
-    let codex = codex_quota(lock(&us.cache).latest_rate(), now);
-    let enabled = load_settings(&us.app.settings_path).claude_quota_enabled;
-    let claude = if !enabled {
+    let settings = load_settings(&us.app.settings_path);
+    let claude = if !settings.claude_quota_enabled {
         ToolQuota::with_status("disabled", None)
     } else {
-        let cached = lock(&us.claude_quota)
-            .as_ref()
-            .filter(|(at, _)| at.elapsed() < CLAUDE_QUOTA_TTL)
-            .map(|(_, q)| q.clone());
-        match cached {
-            Some(q) => q,
-            None => {
-                let q = fetch_claude(&us.app.paths.claude_home, now);
-                *lock(&us.claude_quota) = Some((Instant::now(), q.clone()));
-                q
-            }
+        cached_fetch(&us.claude_quota, CLAUDE_QUOTA_TTL, || fetch_claude(&us.app.paths.claude_home, now))
+    };
+    let log = codex_log_quota(lock(&us.cache).latest_rate(), now);
+    let codex = if !settings.codex_quota_enabled {
+        log
+    } else {
+        let live = cached_fetch(&us.codex_quota, CODEX_QUOTA_TTL, || fetch_codex(&us.app.paths.codex_home, now));
+        if live.status == "ok" {
+            live
+        } else if log.status == "ok" {
+            ToolQuota { live_error: live.reason.clone(), ..log }
+        } else {
+            live
         }
     };
     QuotaDto { claude, codex }
@@ -182,6 +198,11 @@ pub fn usage_quota_impl(
 pub fn set_claude_quota_enabled_impl(us: &UsageState, enabled: bool) -> Result<Settings, CommandError> {
     *lock(&us.claude_quota) = None;
     modify_settings(&us.app, |s| s.claude_quota_enabled = enabled)
+}
+
+pub fn set_codex_quota_enabled_impl(us: &UsageState, enabled: bool) -> Result<Settings, CommandError> {
+    *lock(&us.codex_quota) = None;
+    modify_settings(&us.app, |s| s.codex_quota_enabled = enabled)
 }
 
 type Us<'a> = State<'a, Arc<UsageState>>;
@@ -200,7 +221,7 @@ pub fn usage_summary(
 
 #[tauri::command(async)]
 pub fn usage_quota(us: Us) -> QuotaDto {
-    usage_quota_impl(&us, &claude_quota::fetch)
+    usage_quota_impl(&us, &claude_quota::fetch, &codex_quota::fetch)
 }
 
 #[tauri::command(async)]
@@ -219,6 +240,11 @@ pub fn usage_export_csv(
 #[tauri::command(async)]
 pub fn set_claude_quota_enabled(us: Us, enabled: bool) -> Result<Settings, CommandError> {
     set_claude_quota_enabled_impl(&us, enabled)
+}
+
+#[tauri::command(async)]
+pub fn set_codex_quota_enabled(us: Us, enabled: bool) -> Result<Settings, CommandError> {
+    set_codex_quota_enabled_impl(&us, enabled)
 }
 
 /// Rescans now (the "refresh" button); returns whether anything changed.
@@ -268,15 +294,29 @@ mod tests {
             calls.set(calls.get() + 1);
             ToolQuota::with_status("ok", None)
         };
-        let dto = usage_quota_impl(&us, &fake);
+        let codex_calls = Cell::new(0);
+        let fake_codex = |_: &Path, _: i64| {
+            codex_calls.set(codex_calls.get() + 1);
+            ToolQuota::with_status("unavailable", Some("codex_login_expired".into()))
+        };
+        let dto = usage_quota_impl(&us, &fake, &fake_codex);
         assert_eq!(dto.claude.status, "disabled");
         assert_eq!(dto.codex.status, "no_data");
         assert_eq!(calls.get(), 0, "no network call while the switch is off");
+        assert_eq!(codex_calls.get(), 0, "no Codex network call while its switch is off");
 
         set_claude_quota_enabled_impl(&us, true).unwrap();
-        assert_eq!(usage_quota_impl(&us, &fake).claude.status, "ok");
-        usage_quota_impl(&us, &fake);
+        assert_eq!(usage_quota_impl(&us, &fake, &fake_codex).claude.status, "ok");
+        usage_quota_impl(&us, &fake, &fake_codex);
         assert_eq!(calls.get(), 1, "cached for a minute");
+
+        // Codex live on but failing and no log snapshot: the error is shown.
+        set_codex_quota_enabled_impl(&us, true).unwrap();
+        let dto = usage_quota_impl(&us, &fake, &fake_codex);
+        assert_eq!(dto.codex.status, "unavailable");
+        assert_eq!(dto.codex.reason.as_deref(), Some("codex_login_expired"));
+        usage_quota_impl(&us, &fake, &fake_codex);
+        assert_eq!(codex_calls.get(), 1, "Codex result is cached");
 
         let out = tmp.path().join("u.csv");
         usage_export_csv_impl(&us, &q, &out).unwrap();

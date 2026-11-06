@@ -6,7 +6,7 @@ export function usageSummary(q: UsageQuery): Promise<UsageReport> {
   return invoke<UsageReport>("usage_summary", { ...q });
 }
 
-/** Codex from local logs; Claude only when the opt-in switch is on. */
+/** Claude and live Codex only when their opt-in switches are on; Codex falls back to local logs. */
 export function usageQuota(): Promise<QuotaDto> {
   return invoke<QuotaDto>("usage_quota");
 }
@@ -17,6 +17,11 @@ export function usageExportCsv(q: UsageQuery, path: string): Promise<void> {
 
 export function setClaudeQuotaEnabled(enabled: boolean): Promise<Settings> {
   return invoke<Settings>("set_claude_quota_enabled", { enabled });
+}
+
+/** Opt-in live Codex quota lookup (reads `~/.codex/auth.json`, never writes it). */
+export function setCodexQuotaEnabled(enabled: boolean): Promise<Settings> {
+  return invoke<Settings>("set_codex_quota_enabled", { enabled });
 }
 
 export function usageRescan(): Promise<boolean> {

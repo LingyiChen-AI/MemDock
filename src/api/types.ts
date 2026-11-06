@@ -163,6 +163,8 @@ export interface Settings {
   accent: string | null;
   manual_projects: string[];
   claude_quota_enabled?: boolean;
+  /** Opt-in live Codex quota lookup with the local ChatGPT login (`~/.codex/auth.json`). */
+  codex_quota_enabled?: boolean;
 }
 
 export interface MemoryChangedPayload {
@@ -668,12 +670,34 @@ export interface QuotaWindow {
   window_minutes: number | null;
 }
 
+/**
+ * Why a quota lookup failed (`ToolQuota.reason` / `live_error`). `http_<status>`
+ * codes are passed through for other HTTP failures.
+ */
+export type QuotaReason =
+  /** Claude Code has no OAuth login on this machine. */
+  | "not_logged_in"
+  /** No ChatGPT login token in `~/.codex/auth.json`. */
+  | "codex_not_logged_in"
+  /** The endpoint answered 401/403: sign in again in Codex. */
+  | "codex_login_expired"
+  /** The endpoint answered with JSON MemDock cannot read. */
+  | "unexpected_response"
+  | "network"
+  | `http_${number}`;
+
 export interface ToolQuota {
   status: "ok" | "disabled" | "unavailable" | "no_data";
   five_hour: QuotaWindow | null;
   weekly: QuotaWindow | null;
   updated_at: number | null;
-  reason?: string;
+  reason?: QuotaReason | string;
+  /** "live": quota endpoint; "log": newest local log snapshot (Codex). */
+  source?: "live" | "log";
+  /** The live lookup is on but failed; the log snapshot is shown instead. */
+  live_error?: QuotaReason | string;
+  /** Subscription plan reported by the endpoint ("plus", "pro", ...). */
+  plan?: string;
 }
 
 export interface QuotaDto {

@@ -736,13 +736,26 @@
       "used": "已用 {pct}%",
       "resetsIn": "{time}后重置",
       "resetUnknown": "重置时间未知",
+      "resetDone": "已重置",
       "unavailable": "暂不可用",
       "unavailableReason": "额度接口暂不可用（{reason}），token 统计不受影响",
       "noData": "暂无额度数据，使用 Codex 后会出现",
       "disabledTitle": "Claude Code 额度查询未开启",
       "explain": "开启后，MemDock 读取 Claude Code 本机的登录凭据，向 Anthropic 的用量接口查询 5 小时和本周额度。这是非公开接口，可能随时失效；凭据只用于这次请求，不保存、不写日志。关闭时不会发出任何网络请求。",
       "enable": "开启查询",
-      "updated": "数据时间 {time}"
+      "updated": "数据时间 {time}",
+      "plan": "{plan} 套餐",
+      "codexLogSnapshot": "这是 {date} 日志里的快照，开启实时查询可看当前额度。",
+      "codexLiveFailed": "实时查询失败：{reason}。以下是 {date} 日志里的快照。",
+      "codexEnableLive": "开启实时查询",
+      "codexExplain": "开启后，MemDock 读取本机 ~/.codex/auth.json 里 Codex 的 ChatGPT 登录令牌，向 OpenAI 的用量接口（chatgpt.com）查询 5 小时和本周额度，结果缓存 3 分钟。这是非公开接口，可能随时失效；令牌只用于这次请求，不保存、不写日志，也不会刷新或改写 auth.json。关闭时只读取本机日志里的额度快照，不发出网络请求。",
+      "reasons": {
+        "not_logged_in": "没有找到 Claude Code 的登录凭据，请先在 Claude Code 里登录",
+        "codex_not_logged_in": "没有找到 Codex 的 ChatGPT 登录，请先在 Codex 里登录",
+        "codex_login_expired": "Codex 登录已过期，请在 Codex 里重新登录",
+        "unexpected_response": "额度接口返回了无法识别的数据",
+        "network": "网络请求失败"
+      }
     },
     "views": {
       "today": "今天",
@@ -830,7 +843,11 @@
       "fri": "五",
       "aria": "{from} 至 {to} 每日用量热力图",
       "activeDays": "{n} 天有用量",
-      "loadFailed": "热力图加载失败：{error}"
+      "loadFailed": "热力图加载失败：{error}",
+      "tool": "按工具着色",
+      "allTools": "全部",
+      "total": "合计",
+      "last30": "最近 30 天"
     }
   },
   "settings": {
@@ -882,6 +899,10 @@
     "quota": {
       "title": "Claude Code 额度查询",
       "toggle": "查询 Claude Code 额度"
+    },
+    "codexQuota": {
+      "title": "Codex 额度实时查询",
+      "toggle": "实时查询 Codex 额度"
     },
     "data": {
       "title": "数据目录",

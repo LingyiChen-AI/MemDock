@@ -175,6 +175,7 @@ pub fn run() {
             commands_usage::usage_quota,
             commands_usage::usage_export_csv,
             commands_usage::set_claude_quota_enabled,
+            commands_usage::set_codex_quota_enabled,
             commands_usage::usage_rescan,
             commands_env::env_detect,
             commands_env::env_install,

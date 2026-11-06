@@ -735,6 +735,7 @@
       "weekly": "This week",
       "used": "{pct}% used",
       "resetsIn": "resets in {time}",
+      "resetDone": "Reset",
       "resetUnknown": "reset time unknown",
       "unavailable": "Unavailable",
       "unavailableReason": "Quota endpoint unavailable ({reason}); token statistics are not affected",
@@ -742,7 +743,19 @@
       "disabledTitle": "Claude Code quota lookup is off",
       "explain": "When on, MemDock reads Claude Code's local login credentials and asks Anthropic's usage endpoint for the 5-hour and weekly quota. The endpoint is not public and may stop working; the credentials are used only for that request and are never stored or logged. While off, no network request is made.",
       "enable": "Turn on",
-      "updated": "Data from {time}"
+      "updated": "Data from {time}",
+      "plan": "{plan} plan",
+      "codexLogSnapshot": "This is the snapshot from the {date} logs. Turn on live lookup to see the current quota.",
+      "codexLiveFailed": "Live lookup failed: {reason}. Showing the snapshot from the {date} logs.",
+      "codexEnableLive": "Turn on live lookup",
+      "codexExplain": "When on, MemDock reads Codex's ChatGPT login token from ~/.codex/auth.json and asks OpenAI's usage endpoint (chatgpt.com) for the 5-hour and weekly quota; results are cached for 3 minutes. The endpoint is not public and may stop working; the token is used only for that request, is never stored or logged, and auth.json is never refreshed or rewritten. While off, only the quota snapshot in the local logs is read and no network request is made.",
+      "reasons": {
+        "not_logged_in": "No Claude Code login found; sign in to Claude Code first",
+        "codex_not_logged_in": "No ChatGPT login found for Codex; sign in to Codex first",
+        "codex_login_expired": "Your Codex login has expired; sign in again in Codex",
+        "unexpected_response": "The quota endpoint returned data MemDock cannot read",
+        "network": "Network request failed"
+      }
     },
     "views": {
       "today": "Today",
@@ -830,7 +843,11 @@
       "fri": "Fri",
       "aria": "Daily usage heatmap from {from} to {to}",
       "activeDays": "{n} active days",
-      "loadFailed": "Failed to load heatmap: {error}"
+      "loadFailed": "Failed to load heatmap: {error}",
+      "tool": "Color by tool",
+      "allTools": "All",
+      "total": "Total",
+      "last30": "last 30 days"
     }
   },
   "settings": {
@@ -882,6 +899,10 @@
     "quota": {
       "title": "Claude Code quota lookup",
       "toggle": "Look up Claude Code quota"
+    },
+    "codexQuota": {
+      "title": "Codex live quota lookup",
+      "toggle": "Look up Codex quota live"
     },
     "data": {
       "title": "Data folder",

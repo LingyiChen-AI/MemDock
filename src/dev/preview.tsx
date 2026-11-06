@@ -455,11 +455,14 @@ const usageReport = (a: Record<string, unknown>) => {
   };
 };
 let claudeQuotaOn = params.get("quota") === "on";
+let codexQuotaOn = params.get("codexQuota") === "on";
 const usageQuotaNow = () => ({
   claude: claudeQuotaOn
     ? { status: "ok", five_hour: { used_percent: 37.5, resets_at: Date.now() + 2.4 * 3600_000, window_minutes: 300 }, weekly: { used_percent: 84, resets_at: Date.now() + 3.2 * 86_400_000, window_minutes: 10080 }, updated_at: Date.now() }
     : { status: "disabled", five_hour: null, weekly: null, updated_at: null },
-  codex: { status: "ok", five_hour: { used_percent: 12, resets_at: Date.now() + 47 * 60_000, window_minutes: 300 }, weekly: { used_percent: 46, resets_at: Date.now() + 5 * 86_400_000, window_minutes: 10080 }, updated_at: Date.now() - 600_000 },
+  codex: codexQuotaOn
+    ? { status: "ok", source: "live", plan: "plus", five_hour: { used_percent: 23, resets_at: Date.now() + 2.1 * 3600_000, window_minutes: 300 }, weekly: { used_percent: 61, resets_at: Date.now() + 4 * 86_400_000, window_minutes: 10080 }, updated_at: Date.now() }
+    : { status: "ok", source: "log", five_hour: { used_percent: 0, resets_at: Date.now() - 9 * 86_400_000, window_minutes: 300 }, weekly: { used_percent: 0, resets_at: Date.now() - 3 * 86_400_000, window_minutes: 10080 }, updated_at: Date.now() - 10 * 86_400_000 },
 });
 const envReport = () => ({
   tools: [
@@ -496,7 +499,7 @@ mockIPC(
       case "read_codex_db":
         return { status: "unavailable", reason: "preview" };
       case "get_settings":
-        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn };
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn, codex_quota_enabled: codexQuotaOn };
       case "update_ui_prefs":
         if (a.accent) previewAccent = String(a.accent);
         return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [] };
@@ -617,7 +620,10 @@ mockIPC(
         return usageQuotaNow();
       case "set_claude_quota_enabled":
         claudeQuotaOn = Boolean(a.enabled);
-        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn };
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn, codex_quota_enabled: codexQuotaOn };
+      case "set_codex_quota_enabled":
+        codexQuotaOn = Boolean(a.enabled);
+        return { language: params.get("lang") ?? "zh", theme, accent: previewAccent, manual_projects: [], claude_quota_enabled: claudeQuotaOn, codex_quota_enabled: codexQuotaOn };
       case "usage_rescan":
         return false;
       case "usage_export_csv":

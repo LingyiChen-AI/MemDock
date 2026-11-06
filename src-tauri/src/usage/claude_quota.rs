@@ -69,6 +69,7 @@ pub fn parse_usage_response(v: &Value, now_ms: i64) -> ToolQuota {
     q.five_hour = window(v.get("five_hour")).map(|w| QuotaWindow { window_minutes: Some(300), ..w });
     q.weekly = window(v.get("seven_day")).map(|w| QuotaWindow { window_minutes: Some(10080), ..w });
     q.updated_at = Some(now_ms);
+    q.source = Some("live".into());
     if q.five_hour.is_none() && q.weekly.is_none() {
         return ToolQuota::with_status("unavailable", Some("unexpected_response".into()));
     }

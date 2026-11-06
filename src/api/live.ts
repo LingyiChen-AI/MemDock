@@ -26,6 +26,8 @@ export interface StartOptions {
   extra_args?: string[];
   /** Sent right after the process starts. */
   prompt?: string | null;
+  /** Images of the first message (`data:image/...;base64,` URIs). */
+  prompt_images?: string[];
 }
 
 export interface TurnUsage {
@@ -38,7 +40,7 @@ export interface TurnUsage {
 export type LiveEvent =
   | { type: "started"; native_id: string; model: string | null }
   | { type: "status"; state: LiveState }
-  | { type: "user_message"; id: string; text: string }
+  | { type: "user_message"; id: string; text: string; images?: string[] }
   | { type: "assistant_delta"; id: string; text: string }
   | { type: "assistant_message"; id: string; text: string }
   | { type: "thinking"; id: string; text: string }
@@ -82,8 +84,9 @@ export function liveStart(opts: StartOptions): Promise<LiveSessionInfo> {
   return invoke<LiveSessionInfo>("live_start", { opts: { extra_args: [], ...opts } });
 }
 
-export function liveSend(liveId: string, text: string): Promise<void> {
-  return invoke<void>("live_send", { liveId, text });
+/** `images` are `data:image/...;base64,` URIs (pasted or dropped screenshots). */
+export function liveSend(liveId: string, text: string, images: string[] = []): Promise<void> {
+  return invoke<void>("live_send", { liveId, text, images });
 }
 
 export function liveRespond(liveId: string, requestId: string, decision: Decision): Promise<void> {

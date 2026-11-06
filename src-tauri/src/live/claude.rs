@@ -87,8 +87,19 @@ pub(crate) fn build_args(opts: &StartOptions, new_session_id: Option<&str>) -> V
 
 // ---- stdin messages ---------------------------------------------------------
 
-pub(crate) fn user_message(text: &str) -> Value {
-    json!({"type": "user", "message": {"role": "user", "content": text}})
+pub(crate) fn user_message(text: &str, images: &[String]) -> Value {
+    if images.is_empty() {
+        return json!({"type": "user", "message": {"role": "user", "content": text}});
+    }
+    let mut content: Vec<Value> = images
+        .iter()
+        .filter_map(|uri| super::decode_data_uri(uri))
+        .map(|(media, data)| json!({"type": "image", "source": {"type": "base64", "media_type": media, "data": data}}))
+        .collect();
+    if !text.trim().is_empty() {
+        content.push(json!({"type": "text", "text": text}));
+    }
+    json!({"type": "user", "message": {"role": "user", "content": content}})
 }
 
 pub(crate) fn control_request(request_id: &str, subtype: &str) -> Value {
@@ -404,8 +415,8 @@ struct ClaudeDriver {
 }
 
 impl Driver for ClaudeDriver {
-    fn send(&mut self, text: &str) -> Result<(), String> {
-        write_line(&self.stdin, &user_message(text))
+    fn send(&mut self, text: &str, images: &[String]) -> Result<(), String> {
+        write_line(&self.stdin, &user_message(text, images))
     }
 
     fn respond(&mut self, request_id: &str, decision: Decision) -> Result<(), String> {

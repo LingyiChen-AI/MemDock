@@ -15,7 +15,7 @@ struct FakeDriver {
 }
 
 impl Driver for FakeDriver {
-    fn send(&mut self, text: &str) -> Result<(), String> {
+    fn send(&mut self, text: &str, _images: &[String]) -> Result<(), String> {
         self.calls.lock().unwrap().sent.push(text.to_string());
         Ok(())
     }
@@ -63,6 +63,7 @@ fn opts(cwd: &str) -> StartOptions {
         resume_id: None,
         extra_args: vec![],
         prompt: None,
+        prompt_images: vec![],
     }
 }
 
@@ -126,7 +127,7 @@ fn stop_marks_exited_and_rejects_further_sends() {
     assert_eq!(h.mgr.list()[0].state, LiveState::Exited);
     let exits = h.published.lock().unwrap().iter().filter(|e| matches!(e.event, LiveEvent::Exited { .. })).count();
     assert_eq!(exits, 1, "the driver's own Exited after stop() is dropped");
-    assert!(h.mgr.send(&info.live_id, "hi").is_err());
+    assert!(h.mgr.send(&info.live_id, "hi", &[]).is_err());
     h.mgr.close(&info.live_id).unwrap();
     assert!(h.mgr.list().is_empty());
 }
@@ -140,4 +141,23 @@ fn missing_dir_and_spawn_failure_are_errors() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(mgr.start(opts(dir.path().to_str().unwrap())).unwrap_err(), "boom");
     assert_eq!(mgr.list()[0].state, LiveState::Exited);
+}
+
+#[test]
+fn data_uris_are_checked_before_sending() {
+    assert_eq!(decode_data_uri("data:image/png;base64,AAAA"), Some(("image/png", "AAAA")));
+    assert_eq!(decode_data_uri("data:text/plain;base64,AAAA"), None);
+    assert_eq!(decode_data_uri("data:image/png,AAAA"), None);
+    assert_eq!(decode_data_uri("C:/x.png"), None);
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness();
+    let info = h.mgr.start(opts(dir.path().to_str().unwrap())).unwrap();
+    assert!(h.mgr.send(&info.live_id, "see", &["not-an-image".into()]).is_err());
+    assert!(h.calls.lock().unwrap().sent.is_empty());
+    h.mgr.send(&info.live_id, "see", &["data:image/png;base64,AAAA".into()]).unwrap();
+    let last = h.published.lock().unwrap().iter().rev().find_map(|e| match &e.event {
+        LiveEvent::UserMessage { images, .. } => Some(images.clone()),
+        _ => None,
+    });
+    assert_eq!(last, Some(vec!["data:image/png;base64,AAAA".to_string()]));
 }

@@ -73,6 +73,9 @@ pub struct StartOptions {
     /// First message, sent right after start when present.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Images of the first message, as `data:image/...;base64,` URIs.
+    #[serde(default)]
+    pub prompt_images: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,7 +123,13 @@ pub enum LiveEvent {
     /// Emitted by the manager whenever the state changes.
     Status { state: LiveState },
     /// The user's message as sent (emitted by the manager on `send`).
-    UserMessage { id: String, text: String },
+    UserMessage {
+        id: String,
+        text: String,
+        /// Attached images as data URIs.
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        images: Vec<String>,
+    },
     /// Streaming text appended to the assistant message `id`.
     AssistantDelta { id: String, text: String },
     /// The full assistant message `id`; replaces any deltas received for it.
@@ -164,7 +173,8 @@ pub type Emit = Arc<dyn Fn(LiveEvent) + Send + Sync>;
 /// One running CLI process. Methods must not block on the model; they only
 /// write to the child's stdin (or kill it).
 pub trait Driver: Send {
-    fn send(&mut self, text: &str) -> Result<(), String>;
+    /// `images` are `data:image/...;base64,` URIs.
+    fn send(&mut self, text: &str, images: &[String]) -> Result<(), String>;
     fn respond(&mut self, request_id: &str, decision: Decision) -> Result<(), String>;
     /// Stop the current turn, keep the session.
     fn interrupt(&mut self) -> Result<(), String>;
@@ -209,6 +219,14 @@ pub struct LiveManager {
 }
 
 const TITLE_CHARS: usize = 40;
+
+/// `(media_type, base64 payload)` of a `data:image/...;base64,...` URI.
+pub fn decode_data_uri(uri: &str) -> Option<(&str, &str)> {
+    let rest = uri.strip_prefix("data:")?;
+    let (head, data) = rest.split_once(',')?;
+    let media = head.strip_suffix(";base64")?;
+    (media.starts_with("image/") && !data.is_empty()).then_some((media, data))
+}
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -322,8 +340,9 @@ impl LiveManager {
                 e.driver = Some(driver);
             }
         }
-        if let Some(p) = opts.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
-            self.send(&live_id, p)?;
+        let prompt = opts.prompt.as_deref().unwrap_or("");
+        if !prompt.trim().is_empty() || !opts.prompt_images.is_empty() {
+            self.send(&live_id, prompt, &opts.prompt_images)?;
         }
         self.info(&live_id)
     }
@@ -339,8 +358,11 @@ impl LiveManager {
         f(d.as_mut())
     }
 
-    pub fn send(&self, live_id: &str, text: &str) -> Result<(), String> {
-        self.with_driver(live_id, |d| d.send(text))?;
+    pub fn send(&self, live_id: &str, text: &str, images: &[String]) -> Result<(), String> {
+        if let Some(bad) = images.iter().find(|i| decode_data_uri(i).is_none()) {
+            return Err(format!("无法识别的图片数据：{}", crate::convert::truncate_chars(bad, 40)));
+        }
+        self.with_driver(live_id, |d| d.send(text, images))?;
         {
             let mut map = self.sessions.lock().unwrap();
             if let Some(e) = map.get_mut(live_id) {
@@ -350,7 +372,12 @@ impl LiveManager {
             }
         }
         let id = format!("user-{}", uuid::Uuid::new_v4());
-        Self::record(&self.sessions, &self.publish, live_id, LiveEvent::UserMessage { id, text: text.to_string() });
+        Self::record(
+            &self.sessions,
+            &self.publish,
+            live_id,
+            LiveEvent::UserMessage { id, text: text.to_string(), images: images.to_vec() },
+        );
         Ok(())
     }
 
@@ -424,8 +451,13 @@ pub async fn live_start(mgr: tauri::State<'_, Arc<LiveManager>>, opts: StartOpti
 }
 
 #[tauri::command]
-pub fn live_send(mgr: tauri::State<'_, Arc<LiveManager>>, live_id: String, text: String) -> Result<(), String> {
-    mgr.send(&live_id, &text)
+pub fn live_send(
+    mgr: tauri::State<'_, Arc<LiveManager>>,
+    live_id: String,
+    text: String,
+    images: Option<Vec<String>>,
+) -> Result<(), String> {
+    mgr.send(&live_id, &text, &images.unwrap_or_default())
 }
 
 #[tauri::command]

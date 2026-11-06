@@ -59,7 +59,7 @@ pub struct Mapper {
     thread_id: Option<String>,
     started: bool,
     /// Messages typed before the thread was ready.
-    queued: Vec<String>,
+    queued: Vec<(String, Vec<String>)>,
     turn_id: Option<String>,
     /// `interrupt` arrived before the turn id was known.
     interrupt_wanted: bool,
@@ -263,21 +263,21 @@ impl Mapper {
         }
     }
 
-    fn turn_request(&mut self, thread_id: &str, text: &str) -> Value {
+    fn turn_request(&mut self, thread_id: &str, text: &str, images: &[String]) -> Value {
         self.turn_error = None;
-        self.request(
-            Pending::Turn,
-            "turn/start",
-            json!({"threadId": thread_id, "input": [{"type": "text", "text": text}]}),
-        )
+        let mut input: Vec<Value> = images.iter().map(|p| json!({"type": "localImage", "path": p})).collect();
+        if !text.trim().is_empty() || input.is_empty() {
+            input.push(json!({"type": "text", "text": text, "text_elements": []}));
+        }
+        self.request(Pending::Turn, "turn/start", json!({"threadId": thread_id, "input": input}))
     }
 
-    /// A user message. Queued until the thread is ready.
-    pub fn send(&mut self, text: &str) -> Vec<Value> {
+    /// A user message; `images` are local image file paths. Queued until the thread is ready.
+    pub fn send(&mut self, text: &str, images: &[String]) -> Vec<Value> {
         match self.thread_id.clone() {
-            Some(tid) if self.started => vec![self.turn_request(&tid, text)],
+            Some(tid) if self.started => vec![self.turn_request(&tid, text, images)],
             _ => {
-                self.queued.push(text.to_string());
+                self.queued.push((text.to_string(), images.to_vec()));
                 vec![]
             }
         }
@@ -391,9 +391,9 @@ impl Mapper {
                 self.thread_id = Some(tid.to_string());
                 self.started = true;
                 st.events.push(LiveEvent::Started { native_id: tid.to_string(), model });
-                for text in std::mem::take(&mut self.queued) {
+                for (text, images) in std::mem::take(&mut self.queued) {
                     let tid = tid.to_string();
-                    st.writes.push(self.turn_request(&tid, &text));
+                    st.writes.push(self.turn_request(&tid, &text, &images));
                 }
             }
             Pending::Turn => {

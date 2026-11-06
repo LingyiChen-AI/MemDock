@@ -160,6 +160,7 @@ fn opts(permission: PermissionMode) -> StartOptions {
         resume_id: Some("sid".into()),
         extra_args: vec!["--add-dir".into(), "x".into()],
         prompt: None,
+        prompt_images: vec![],
     }
 }
 
@@ -202,7 +203,7 @@ fn real_smoke_haiku() {
     let early = rx.recv_timeout(Duration::from_secs(5));
     eprintln!("before first message: {early:?}");
     let Ok(LiveEvent::Started { native_id, .. }) = early else { panic!("no early Started") };
-    d.send("Reply with exactly: pong").unwrap();
+    d.send("Reply with exactly: pong", &[]).unwrap();
     let mut got_text = false;
     let deadline = Instant::now() + Duration::from_secs(120);
     while Instant::now() < deadline {
@@ -246,4 +247,14 @@ fn early_announce_is_not_repeated_but_model_update_is() {
     let mut p = Parser::default();
     p.announce("462f7148-74ee-4bd9-96da-1dfd5adddaaa", Some("haiku".into()));
     assert_eq!(events(&mut p, INIT).len(), 1);
+}
+
+#[test]
+fn user_message_with_images_uses_content_blocks() {
+    let v = user_message("look", &["data:image/jpeg;base64,QUJD".to_string()]);
+    let content = &v["message"]["content"];
+    assert_eq!(content[0]["type"], "image");
+    assert_eq!(content[0]["source"]["media_type"], "image/jpeg");
+    assert_eq!(content[0]["source"]["data"], "QUJD");
+    assert_eq!(content[1], serde_json::json!({"type": "text", "text": "look"}));
 }

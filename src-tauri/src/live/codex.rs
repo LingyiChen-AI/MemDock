@@ -42,13 +42,32 @@ fn write_all(stdin: &Mutex<Option<ChildStdin>>, msgs: &[Value]) -> Result<(), St
     w.flush().map_err(|e| format!("写入 Codex 失败：{e}"))
 }
 
+/// Codex takes images as local files: writes a data URI to the temp folder.
+fn save_image(uri: &str) -> Result<String, String> {
+    use base64::Engine;
+    let (media, data) = super::decode_data_uri(uri).ok_or("无法识别的图片数据")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| format!("图片解码失败：{e}"))?;
+    let ext = match media {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let dir = std::env::temp_dir().join("memdock-images");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法保存图片：{e}"))?;
+    let path = dir.join(format!("{}.{ext}", uuid::Uuid::new_v4()));
+    std::fs::write(&path, bytes).map_err(|e| format!("无法保存图片：{e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 fn kill(child: &Mutex<Child>) {
     proc::kill_tree(&mut child.lock().unwrap());
 }
 
 impl Driver for CodexDriver {
-    fn send(&mut self, text: &str) -> Result<(), String> {
-        let msgs = self.mapper.lock().unwrap().send(text);
+    fn send(&mut self, text: &str, images: &[String]) -> Result<(), String> {
+        let paths = images.iter().map(|uri| save_image(uri)).collect::<Result<Vec<_>, _>>()?;
+        let msgs = self.mapper.lock().unwrap().send(text, &paths);
         write_all(&self.stdin, &msgs)
     }
 

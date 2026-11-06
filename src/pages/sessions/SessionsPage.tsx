@@ -45,7 +45,7 @@ import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
 import { ChatComposer, type ComposerMessage, type ProjectChoice } from "@/pages/chat/Composer";
 import { agentSettings, isActive, loadChatPrefs, parseExtraArgs, rememberLast } from "@/pages/chat/chatPrefs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
+import { closeLive, ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
 import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
 import { resolveNewChatDir } from "@/pages/chat/newChatDir";
 import { ContextMeters } from "@/pages/chat/ContextMeter";
@@ -1107,7 +1107,14 @@ function ChatPane({
             // History and the live chat share one scroll area: the first live event only appends
             // below the history (no remount, no flash, scroll kept).
             <>
-              {session && preview ? <TimelineFilterBar preview={preview} value={historyFilter} onChange={setHistoryFilter} /> : null}
+              {session && preview ? (
+                <TimelineFilterBar preview={preview} value={historyFilter} onChange={setHistoryFilter} />
+              ) : session ? (
+                // Holds the filter bar's place while the history loads, so the messages don't shift down.
+                <div className="flex shrink-0 border-b border-border bg-background px-4 py-2.5" aria-hidden="true">
+                  <span className="h-7" />
+                </div>
+              ) : null}
               <Conversation
                 scrollKey={termKey}
                 conv={live && lc?.loaded ? lc.conv : EMPTY_CONV}
@@ -1145,7 +1152,23 @@ function ChatPane({
           {usedElsewhere ? (
             <p role="status" className="mx-4 mb-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
               <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-              {c.usedElsewhere}
+              <span className="min-w-0 flex-1">{c.usedElsewhere}</span>
+              {live && !running ? (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
+                  onClick={() => {
+                    // Let MemDock's process go: the next message resumes from the newest record,
+                    // i.e. what the terminal last did.
+                    void closeLive(live.live_id).finally(() => {
+                      setUsedElsewhere(false);
+                      onRefresh();
+                    });
+                  }}
+                >
+                  {c.catchUpTerminal}
+                </button>
+              ) : null}
             </p>
           ) : null}
           <ChatComposer

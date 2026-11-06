@@ -94,6 +94,7 @@ export function Conversation({
       if (stick.current) toBottom(el);
     });
     ro.observe(inner);
+    ro.observe(el); // the visible area shrinks too (a notice above the composer)
     return () => ro.disconnect();
   }, []);
 

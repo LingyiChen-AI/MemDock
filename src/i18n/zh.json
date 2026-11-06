@@ -1227,6 +1227,7 @@
     "quit": "退出 MemDock"
   },
   "chat": {
+    "catchUpTerminal": "接上终端的最新进度",
     "usedElsewhere": "这个会话也在外部终端的 Claude Code 里使用中：在这里压缩、切换模型都不会影响那边，上下文显示的是最近一次请求（来自外部）。两边同时用会互相覆盖记录，建议只在一处继续。",
     "notices": {
       "commandOutput": "命令输出",

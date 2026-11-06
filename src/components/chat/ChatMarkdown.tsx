@@ -1,11 +1,57 @@
+import * as React from "react";
 import ReactMarkdown from "react-markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useI18n } from "@/i18n/I18nProvider";
+import { fmt } from "@/pages/memory/paths";
 import remarkGfm from "remark-gfm";
 import { ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+/** Only web and mail links are opened outside the app. */
+export function externalHref(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const u = new URL(href);
+    return ["http:", "https:", "mailto:"].includes(u.protocol) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A link that opens in the default browser on Ctrl+click (⌘+click on macOS); a plain click does nothing. */
+export function ExternalLink({ href, children }: { href?: string; children: React.ReactNode }) {
+  const { t } = useI18n();
+  const url = externalHref(href);
+  if (!url) return <span className="text-primary">{children}</span>;
+  const open = (e: React.MouseEvent | React.KeyboardEvent) => {
+    if (e.type === "click" && !(e as React.MouseEvent).ctrlKey && !(e as React.MouseEvent).metaKey) return;
+    e.preventDefault();
+    void openUrl(url).catch(() => {});
+  };
+  return (
+    <a
+      href={url}
+      title={fmt(t.shell.openLinkHint, { key: IS_MAC ? "⌘" : "Ctrl", url })}
+      onClick={(e) => {
+        e.preventDefault();
+        open(e);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") open(e);
+      }}
+      onAuxClick={(e) => e.preventDefault()}
+      className="cursor-pointer text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
+    >
+      {children}
+    </a>
+  );
+}
+
 /**
  * Markdown for chat bubbles: tighter than the memory preview. Links never
- * navigate the app webview and images are never loaded (no network egress).
+ * navigate the app webview (Ctrl+click opens them in the browser) and images are never loaded (no network egress).
  */
 export function ChatMarkdown({ text }: { text: string }) {
   return (
@@ -24,11 +70,7 @@ export function ChatMarkdown({ text }: { text: string }) {
           strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
           blockquote: ({ children }) => <blockquote className="my-2 border-l-[3px] border-border pl-3 text-muted-foreground">{children}</blockquote>,
           hr: () => <hr className="my-3 border-border" />,
-          a: ({ children, href }) => (
-            <span className="text-primary underline-offset-2 hover:underline" title={href}>
-              {children}
-            </span>
-          ),
+          a: ({ children, href }) => <ExternalLink href={href}>{children}</ExternalLink>,
           img: ({ alt, src }) => (
             <span className="inline-flex max-w-full items-center gap-1 align-middle text-xs text-muted-foreground">
               <ImageOff size={13} aria-hidden />

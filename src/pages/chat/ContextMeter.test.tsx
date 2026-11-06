@@ -28,3 +28,24 @@ describe("ContextMeters", () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+import { prettyModel } from "./Composer";
+
+describe("model names", () => {
+  it("turns Claude model ids into display names", () => {
+    expect(prettyModel("claude-opus-5-5")).toBe("Opus 5.5");
+    expect(prettyModel("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+    expect(prettyModel("claude-fable-5-1")).toBe("Fable 5.1");
+    expect(prettyModel("claude-sonnet-4-6[1m]")).toBe("Sonnet 4.6 (1M)");
+    expect(prettyModel("gpt-6.1-sol")).toBe("gpt-6.1-sol");
+  });
+
+  it("asks by session id when the file path is unknown", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue({ used: 17_073, window: 475_000, model: "gpt-6.1-sol" });
+    usageQuota.mockRejectedValue(new Error("off"));
+    render(<ContextMeters tool="codex" path={null} nativeId="thread-1" refreshKey="1" t={t} />);
+    expect(await screen.findByText("4%")).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("session_context_by_id", { tool: "codex", id: "thread-1" });
+  });
+});

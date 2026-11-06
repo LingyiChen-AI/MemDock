@@ -14,6 +14,11 @@ export function sessionContext(tool: "claude" | "codex", path: string): Promise<
   return invoke<SessionContext | null>("session_context", { tool, path });
 }
 
+/** For a conversation known only by its session / thread id (a live chat not on the list yet). */
+export function sessionContextById(tool: "claude" | "codex", id: string): Promise<SessionContext | null> {
+  return invoke<SessionContext | null>("session_context_by_id", { tool, id });
+}
+
 function short(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
   if (n >= 1000) return `${Math.round(n / 1000)}k`;
@@ -52,29 +57,32 @@ export interface ContextMeterText {
 export function ContextMeters({
   tool,
   path,
+  nativeId = null,
   refreshKey,
   t,
 }: {
   tool: "claude" | "codex";
   path: string | null;
+  /** Used when there's no path yet. */
+  nativeId?: string | null;
   refreshKey: unknown;
   t: ContextMeterText;
 }) {
   const [ctx, setCtx] = React.useState<SessionContext | null>(null);
   const [weekly, setWeekly] = React.useState<number | null>(null);
   React.useEffect(() => {
-    if (!path) {
+    if (!path && !nativeId) {
       setCtx(null);
       return;
     }
     let alive = true;
-    sessionContext(tool, path)
+    (path ? sessionContext(tool, path) : sessionContextById(tool, nativeId!))
       .then((c) => alive && setCtx(c))
       .catch(() => alive && setCtx(null));
     return () => {
       alive = false;
     };
-  }, [tool, path, refreshKey]);
+  }, [tool, path, nativeId, refreshKey]);
   React.useEffect(() => {
     let alive = true;
     usageQuota()

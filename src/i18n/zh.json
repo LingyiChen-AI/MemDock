@@ -1330,6 +1330,7 @@
     },
     "startingAgent": "正在启动 {agent}…首条消息会在启动完成后发送",
     "composer": {
+      "modelDefaultIs": "默认 · {model}",
       "modelSearch": "搜索或输入模型名",
       "modelRefresh": "重新读取模型列表",
       "modelLoading": "正在读取模型列表",

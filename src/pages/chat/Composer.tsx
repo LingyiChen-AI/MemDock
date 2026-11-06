@@ -183,9 +183,31 @@ function toRows(agent: LiveAgent, models: ModelOption[] | null, c: C): ModelRow[
   return rows;
 }
 
-function modelName(models: ModelOption[] | null, value: string, c: C): string {
-  if (!value) return c.modelDefault;
-  return models?.find((m) => m.value === value)?.display_name ?? value;
+/** "claude-opus-5-5" -> "Opus 5.5"; other ids unchanged. */
+export function prettyModel(id: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{6,})?(\[1m\])?$/i.exec(id.trim());
+  if (!m) return id;
+  const family = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+  return `${family} ${m[2]}${m[3] ? `.${m[3]}` : ""}${m[4] ? " (1M)" : ""}`;
+}
+
+/** The model the CLI uses when none is chosen, as a display name. */
+function defaultModelName(models: ModelOption[] | null): string | null {
+  const d = models?.find((m) => m.is_default);
+  if (!d) return null;
+  // Claude lists its default as "Default (recommended)" with the real model first in the description.
+  if (d.value === "default") return d.description.split(/[·•]/)[0]?.trim() || null;
+  return d.display_name;
+}
+
+/**
+ * Label of the model button: the chosen model, else "默认 · <model>" with the model the running
+ * session reports (`actual`) or the CLI's declared default.
+ */
+function modelName(models: ModelOption[] | null, value: string, c: C, actual?: string | null): string {
+  if (value) return models?.find((m) => m.value === value)?.display_name ?? prettyModel(value);
+  const real = actual ? (models?.find((m) => m.value === actual)?.display_name ?? prettyModel(actual)) : defaultModelName(models);
+  return real ? fmt(c.composer.modelDefaultIs, { model: real }) : c.modelDefault;
 }
 
 /** The model whose effort levels apply: the chosen one, else the CLI's default. */
@@ -1096,7 +1118,7 @@ export function ChatComposer({
     }
   })();
 
-  const modelLabel = modelName(models, model, c);
+  const modelLabel = modelName(models, model, c, attached?.model ?? null);
 
   return (
     <div ref={rootRef} className="flex flex-col gap-1.5 px-4 pt-2 pb-3">

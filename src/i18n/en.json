@@ -1330,6 +1330,7 @@
     },
     "startingAgent": "Starting {agent}… the first message is sent once it is ready",
     "composer": {
+      "modelDefaultIs": "Default · {model}",
       "modelSearch": "Search or type a model",
       "modelRefresh": "Reload the model list",
       "modelLoading": "Loading models",

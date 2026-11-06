@@ -637,3 +637,26 @@ pub fn session_context_impl(paths: &AgentPaths, tool: Tool, path: &str) -> Resul
 pub fn session_context(ss: Ss, tool: Tool, path: String) -> Result<Option<SessionContext>, CommandError> {
     session_context_impl(&ss.app.paths, tool, &path)
 }
+
+/// Like [`session_context`], for a conversation known only by its Claude session id / Codex
+/// thread id (a live chat whose file isn't on the list yet). The list is refreshed once on a miss.
+#[tauri::command(async)]
+pub fn session_context_by_id(ss: Ss, tool: Tool, id: String) -> Result<Option<SessionContext>, CommandError> {
+    let find = || {
+        lock(&ss.cache)
+            .values()
+            .find(|(_, _, s)| s.tool == tool && s.id == id)
+            .map(|(_, _, s)| s.path.clone())
+    };
+    let path = match find() {
+        Some(p) => Some(p),
+        None => {
+            list_sessions_impl(&ss.app.paths, &ss.app.data_dir, &ss.cache);
+            find()
+        }
+    };
+    match path {
+        Some(p) => session_context_impl(&ss.app.paths, tool, &p),
+        None => Ok(None),
+    }
+}

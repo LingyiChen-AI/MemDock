@@ -182,7 +182,7 @@ describe("ChatComposer", () => {
     const menu = await screen.findByRole("listbox", { name: "命令" });
     await within(menu).findByText("/fireworks-tech-graph");
     const names = within(menu).getAllByRole("option").map((o) => o.textContent);
-    expect(names[0]).toMatch(/^\/model切换模型默认模型$/);
+    expect(names[0]).toMatch(/^\/model切换模型默认 · Opus 5\.5$/);
     expect(names.slice(0, 4).map((n) => n!.split(/[^/a-z-]/)[0])).toEqual(["/model", "/effort", "/permissions", "/args"]);
     expect(within(menu).queryByText("/agent")).toBeNull();
     expect(within(menu).getByText("每次询问")).toBeInTheDocument();

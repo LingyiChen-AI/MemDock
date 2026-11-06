@@ -1122,6 +1122,7 @@ function ChatPane({
               <ContextMeters
                 tool={target.tool}
                 path={session?.path ?? null}
+                nativeId={target.nativeId ?? live?.native_id ?? null}
                 refreshKey={`${session?.updated_at ?? ""}:${lc?.conv.lastUsage ? JSON.stringify(lc.conv.lastUsage) : ""}:${live?.state ?? ""}`}
                 t={c.meters}
               />

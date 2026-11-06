@@ -913,6 +913,8 @@
     "previewFailed": "Failed to read the session: {error}",
     "previewTitle": "Conversion preview",
     "previewMore": "Showing the first {shown} of {total}",
+    "expand": "Show all",
+    "collapse": "Show less",
     "roles": {
       "user": "User",
       "assistant": "Assistant",
@@ -953,5 +955,9 @@
       "claude": "Claude Code",
       "codex": "Codex"
     }
+  },
+  "tray": {
+    "show": "Show MemDock",
+    "quit": "Quit MemDock"
   }
 }

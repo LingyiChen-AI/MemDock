@@ -18,6 +18,7 @@ pub mod proc;
 pub mod projects;
 pub mod secrets;
 pub mod settings;
+pub mod tray;
 pub mod skills;
 pub mod sync;
 pub mod usage;
@@ -59,7 +60,9 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
+        .on_window_event(|win, event| tray::handle_window_event(win, event))
         .setup(|app| {
+            tray::create(app.handle())?;
             if let Some(win) = app.get_webview_window("main") {
                 let state_file = app
                     .path()
@@ -184,10 +187,15 @@ pub fn run() {
             commands_ghimport::gh_import_preview,
             commands_ghimport::gh_import_memories,
             commands_ghimport::gh_import_skill,
+            tray::set_tray_labels,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                tray::show_main(app);
+            }
             if let tauri::RunEvent::Exit = event {
                 // Stop the scheduler and cancel a running extraction (kills the CLI).
                 if let Some(es) = app.try_state::<Arc<commands_extract::ExtractState>>() {

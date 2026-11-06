@@ -1,4 +1,5 @@
 import * as React from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { usePrefs } from "@/prefs/PrefsProvider";
 import { stableContext } from "@/lib/stableContext";
 import { getMessages, htmlLang, resolveLanguage, type Language, type Messages } from "./index";
@@ -16,6 +17,13 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     document.documentElement.lang = htmlLang(language);
+  }, [language]);
+
+  // Tray menu labels follow the UI language (only inside the Tauri app).
+  React.useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const t = getMessages(language).tray;
+    void invoke("set_tray_labels", { show: t.show, quit: t.quit }).catch(() => {});
   }, [language]);
 
   const value = React.useMemo(() => ({ language, t: getMessages(language) }), [language]);

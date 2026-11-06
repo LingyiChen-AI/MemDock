@@ -913,6 +913,8 @@
     "previewFailed": "读取会话失败：{error}",
     "previewTitle": "转换预览",
     "previewMore": "仅显示前 {shown} 条，共 {total} 条",
+    "expand": "展开全文",
+    "collapse": "收起",
     "roles": {
       "user": "用户",
       "assistant": "助手",
@@ -953,5 +955,9 @@
       "claude": "Claude Code",
       "codex": "Codex"
     }
+  },
+  "tray": {
+    "show": "显示 MemDock",
+    "quit": "退出 MemDock"
   }
 }

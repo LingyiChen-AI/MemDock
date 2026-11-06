@@ -11,6 +11,7 @@ import { renderApp } from "@/test/fixtures";
 import type { SkillEntry, UpdateStatus } from "@/api/types";
 import { SkillList } from "./SkillList";
 import { mkSkill, mkUpdate } from "./testUtils";
+import { selectOption } from "@/test/selectOption";
 
 const alpha = mkSkill({ name: "alpha", description: "Draws diagrams" });
 const zeta = mkSkill({ name: "zeta", description: "Writes tests", tool: "codex" });
@@ -74,14 +75,14 @@ describe("SkillList", () => {
 
   it("tool and scope filters", async () => {
     setup([alpha, zeta, proj, plug]);
-    await userEvent.selectOptions(screen.getByLabelText("工具"), "codex");
+    await selectOption(screen.getByLabelText("工具"), "codex");
     expect(names()).toEqual(["zeta"]);
-    await userEvent.selectOptions(screen.getByLabelText("工具"), "all");
-    await userEvent.selectOptions(screen.getByLabelText("范围"), "project");
+    await selectOption(screen.getByLabelText("工具"), "all");
+    await selectOption(screen.getByLabelText("范围"), "project");
     expect(names()).toEqual(["beta"]);
-    await userEvent.selectOptions(screen.getByLabelText("范围"), "global");
+    await selectOption(screen.getByLabelText("范围"), "global");
     expect(names()).toEqual(["alpha", "zeta", "plugged"]);
-    await userEvent.selectOptions(screen.getByLabelText("范围"), "readonly");
+    await selectOption(screen.getByLabelText("范围"), "readonly");
     expect(names()).toEqual(["plugged"]);
   });
 

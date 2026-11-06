@@ -24,6 +24,7 @@ import type { EnvReport, EnvToolStatus } from "@/api/types";
 import { AppearanceControls } from "@/components/appearance/AppearanceControls";
 import { Button } from "@/components/ui/button";
 import type { NavKey } from "@/layout/AppShell";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
@@ -292,24 +293,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
 
         <Section icon={Gauge} title={s.quota.title} desc={t.usage.quota.explain}>
           <label className="flex cursor-pointer items-center gap-3 text-sm">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={quotaOn === true}
-              disabled={quotaOn === null}
-              onClick={() => void toggleQuota()}
-              className={cn(
-                "relative h-5 w-9 shrink-0 cursor-pointer rounded-full border border-border outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                quotaOn ? "bg-primary" : "bg-muted",
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-0.5 left-0.5 size-3.5 rounded-full bg-foreground transition-transform duration-150 motion-reduce:transition-none",
-                  quotaOn && "translate-x-4 bg-primary-foreground",
-                )}
-              />
-            </button>
+            <Switch checked={quotaOn === true} disabled={quotaOn === null} onCheckedChange={() => void toggleQuota()} />
             {s.quota.toggle}
           </label>
         </Section>

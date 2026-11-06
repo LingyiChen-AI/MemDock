@@ -1,9 +1,9 @@
 import * as React from "react";
-import { Dialog } from "radix-ui";
 import { Check, Copy, CopyPlus, History, Loader2, Pencil, RefreshCw, RefreshCcw, Trash2, TriangleAlert } from "lucide-react";
 import { registerSkillSource } from "@/api/skills";
 import type { SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -373,12 +373,10 @@ function RegisterDialog({
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 motion-reduce:animate-none" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 w-[460px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-popover p-5 text-popover-foreground shadow-xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none">
-          <Dialog.Title className="text-base font-semibold">{s.registerTitle}</Dialog.Title>
-          <Dialog.Description className="mt-2 text-sm text-muted-foreground">{s.registerDesc}</Dialog.Description>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent showCloseButton={false} className="w-[460px]">
+          <DialogTitle>{s.registerTitle}</DialogTitle>
+          <DialogDescription className="mt-2">{s.registerDesc}</DialogDescription>
           <form
             className="mt-4 flex flex-col gap-3"
             onSubmit={(e) => {
@@ -421,18 +419,17 @@ function RegisterDialog({
               </div>
             ) : null}
             <div className="mt-2 flex justify-end gap-2">
-              <Dialog.Close asChild>
+              <DialogClose asChild>
                 <Button type="button" variant="outline" className="h-7 cursor-pointer px-3 text-xs">
                   {s.cancel}
                 </Button>
-              </Dialog.Close>
+              </DialogClose>
               <Button type="submit" disabled={busy || !url.trim()} className="h-7 cursor-pointer px-3 text-xs font-semibold">
                 {busy ? s.registering : s.register}
               </Button>
             </div>
           </form>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </DialogContent>
+    </Dialog>
   );
 }

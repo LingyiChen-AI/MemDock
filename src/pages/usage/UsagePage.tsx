@@ -4,6 +4,8 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { onUsageUpdated, setClaudeQuotaEnabled, usageExportCsv, usageQuota, usageRescan, usageSummary } from "@/api/usage";
 import type { QuotaDto, Tool, UsageQuery, UsageReport, UsageView } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/date-picker";
+import { SimpleSelect } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
@@ -18,8 +20,7 @@ import { localDate, monthRange, presetRange, PRESETS, type RangePreset } from ".
 
 const QUOTA_REFRESH_MS = 60_000;
 
-const fieldCls =
-  "h-8 cursor-pointer rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none transition-colors duration-150 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none";
+const fieldCls = "border-border bg-card text-foreground hover:bg-muted dark:bg-card dark:hover:bg-muted";
 
 function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string }) {
   return (
@@ -210,54 +211,57 @@ export function UsagePage() {
           />
           {view !== "today" ? (
             <>
-              <select aria-label={u.range.from} value={preset} onChange={(e) => changePreset(e.target.value as RangePreset)} className={fieldCls}>
-                {PRESETS[view].map((p) => (
-                  <option key={p} value={p}>
-                    {u.range[p as Exclude<RangePreset, "custom">]}
-                  </option>
-                ))}
-                {preset === "custom" ? <option value="custom">{`${range.from} ~ ${range.to}`}</option> : null}
-              </select>
-              <input
-                type="date"
+              <SimpleSelect
+                aria-label={u.range.from}
+                value={preset}
+                onValueChange={(v) => changePreset(v as RangePreset)}
+                className={fieldCls}
+                options={[
+                  ...PRESETS[view].map((p) => ({ value: p, label: u.range[p as Exclude<RangePreset, "custom">] })),
+                  ...(preset === "custom" ? [{ value: "custom", label: `${range.from} ~ ${range.to}` }] : []),
+                ]}
+              />
+              <DatePicker
                 aria-label={u.range.from}
                 value={range.from}
                 max={range.to}
-                onChange={(e) => {
-                  if (!e.target.value) return;
+                onChange={(v) => {
                   setPreset("custom");
-                  setRange((r) => ({ ...r, from: e.target.value }));
+                  setRange((r) => ({ ...r, from: v }));
                 }}
-                className={cn(fieldCls, "tabular-nums")}
+                className={fieldCls}
               />
               <span className="text-muted-foreground">~</span>
-              <input
-                type="date"
+              <DatePicker
                 aria-label={u.range.to}
                 value={range.to}
                 min={range.from}
-                onChange={(e) => {
-                  if (!e.target.value) return;
+                onChange={(v) => {
                   setPreset("custom");
-                  setRange((r) => ({ ...r, to: e.target.value }));
+                  setRange((r) => ({ ...r, to: v }));
                 }}
-                className={cn(fieldCls, "tabular-nums")}
+                className={fieldCls}
               />
             </>
           ) : null}
-          <select aria-label={u.filter.tool} value={tool} onChange={(e) => setTool(e.target.value as "all" | Tool)} className={fieldCls}>
-            <option value="all">{u.filter.allTools}</option>
-            <option value="claude">{t.memory.toolClaude}</option>
-            <option value="codex">{t.memory.toolCodex}</option>
-          </select>
-          <select aria-label={u.filter.model} value={model} onChange={(e) => setModel(e.target.value)} className={cn(fieldCls, "max-w-56")}>
-            <option value="all">{u.filter.allModels}</option>
-            {modelOptions.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+          <SimpleSelect
+            aria-label={u.filter.tool}
+            value={tool}
+            onValueChange={(v) => setTool(v as "all" | Tool)}
+            className={fieldCls}
+            options={[
+              { value: "all", label: u.filter.allTools },
+              { value: "claude", label: t.memory.toolClaude },
+              { value: "codex", label: t.memory.toolCodex },
+            ]}
+          />
+          <SimpleSelect
+            aria-label={u.filter.model}
+            value={model}
+            onValueChange={setModel}
+            className={cn(fieldCls, "max-w-56")}
+            options={[{ value: "all", label: u.filter.allModels }, ...modelOptions.map((m) => ({ value: m, label: m }))]}
+          />
           <span className="flex-1" />
           <Button type="button" variant="outline" size="sm" onClick={() => void exportCsv()} disabled={!report} className="cursor-pointer">
             <Download className="size-3.5" aria-hidden="true" />

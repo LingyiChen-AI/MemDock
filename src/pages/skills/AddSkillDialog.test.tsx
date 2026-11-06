@@ -18,6 +18,7 @@ import { AppProviders } from "@/providers";
 import { mkProject, renderApp } from "@/test/fixtures";
 import { AddSkillDialog } from "./AddSkillDialog";
 import { mkSkill } from "./testUtils";
+import { optionLabels, selectOption } from "@/test/selectOption";
 
 const inspected: InspectResult = {
   url: "https://github.com/o/repo",
@@ -192,9 +193,10 @@ describe("AddSkillDialog", () => {
     await userEvent.type(screen.getByLabelText("名称"), "my-skill");
     await userEvent.click(screen.getByRole("radio", { name: "选择项目" }));
     const select = screen.getByLabelText("项目");
-    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.textContent)).toEqual(["选择项目", "jev"]);
+    expect(select).toHaveTextContent("选择项目");
+    expect(await optionLabels(select)).toEqual(["jev"]);
     expect(screen.getByRole("button", { name: "安装" })).toBeDisabled();
-    await userEvent.selectOptions(select, "c:/work/jev");
+    await selectOption(select, "c:/work/jev");
     await userEvent.click(screen.getByRole("checkbox", { name: "Codex" }));
     await userEvent.click(screen.getByRole("button", { name: "安装" }));
     await waitFor(() => expect(installSkill).toHaveBeenCalled());

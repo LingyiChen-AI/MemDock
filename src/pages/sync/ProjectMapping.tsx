@@ -1,7 +1,6 @@
-import { Check } from "lucide-react";
 import { setIncludedLocal } from "@/api/sync";
 import type { SyncProject } from "@/api/types";
-import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { ToastKind } from "@/pages/skills/Toasts";
 import { syncErrorText } from "@/components/account/syncErrors";
@@ -52,24 +51,10 @@ export function ProjectMapping({ projects, onChange, notify }: ProjectMappingPro
               {p.key !== null ? (
                 <span className="shrink-0 text-xs text-accent-text">{s.included}</span>
               ) : (
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={p.included}
-                  aria-label={`${s.include}: ${p.name}`}
-                  onClick={() => void toggle(p)}
-                  className="flex shrink-0 cursor-pointer items-center gap-2 rounded-sm text-xs text-muted-foreground transition-colors duration-150 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
-                >
-                  <span
-                    className={cn(
-                      "grid size-3.5 place-items-center rounded-sm border border-border",
-                      p.included && "border-primary bg-primary text-primary-foreground",
-                    )}
-                  >
-                    {p.included ? <Check className="size-3" aria-hidden="true" /> : null}
-                  </span>
+                <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground motion-reduce:transition-none">
+                  <Switch checked={p.included} aria-label={`${s.include}: ${p.name}`} onCheckedChange={() => void toggle(p)} />
                   {s.include}
-                </button>
+                </label>
               )}
             </li>
           ))}

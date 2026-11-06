@@ -8,6 +8,7 @@ import { Check, Copy, History, ImageOff, Info, Link2, Save, TriangleAlert, Unlin
 import { onMemoryChanged, readMemoryFile, writeMemoryFile } from "@/api/memory";
 import type { CommandError, FileContentDto, MemoryFile, MemoryIndex } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { memdockCmTheme } from "./cmTheme";
@@ -514,7 +515,12 @@ export function Preview({ text }: { text: string }) {
           ul: (p) => <ul className="my-2.5 ml-5 list-disc" {...strip(p)} />,
           ol: (p) => <ol className="my-2.5 ml-5 list-decimal" {...strip(p)} />,
           li: (p) => <li className="my-1" {...strip(p)} />,
-          input: (p) => <input {...strip(p)} className="mr-1.5 align-middle" />,
+          input: (p) =>
+            p.type === "checkbox" ? (
+              <Checkbox checked={!!p.checked} disabled aria-readonly className="mr-1.5 inline-grid align-middle disabled:cursor-default disabled:opacity-100" />
+            ) : (
+              <input {...strip(p)} className="mr-1.5 align-middle" />
+            ),
           blockquote: (p) => (
             <blockquote className="my-3 border-l-[3px] border-border pl-3 text-muted-foreground" {...strip(p)} />
           ),

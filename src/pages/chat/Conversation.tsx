@@ -244,9 +244,9 @@ function Segment({ seg, onOpen, c }: { seg: TurnSegment; onOpen: (call: LiveTool
     case "text":
       return seg.streaming ? (
         // Streaming text is re-rendered on every delta; skip the fold until it settles.
-        <div className="min-w-0 [&>div>*:last-child]:inline">
+        // Same layout as the finished text; the caret is drawn after the last block (no layout change).
+        <div className="min-w-0 [&>div>*:last-child]:after:ml-0.5 [&>div>*:last-child]:after:inline-block [&>div>*:last-child]:after:h-4 [&>div>*:last-child]:after:w-1.5 [&>div>*:last-child]:after:translate-y-0.5 [&>div>*:last-child]:after:animate-pulse [&>div>*:last-child]:after:bg-primary/60 [&>div>*:last-child]:after:content-[''] motion-reduce:[&>div>*:last-child]:after:animate-none">
           <ChatMarkdown text={seg.text} />
-          <span className="ml-0.5 inline-block h-4 w-1.5 translate-y-0.5 animate-pulse bg-primary/60 motion-reduce:animate-none" aria-hidden="true" />
         </div>
       ) : (
         <ChatText text={seg.text} expandLabel={c.expand} collapseLabel={c.collapse} />

@@ -1297,8 +1297,17 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   // A chat started from a draft (or elsewhere) becomes the selection.
   const lastLiveSel = React.useRef(store.selectedId);
   React.useEffect(() => {
-    if (store.selectedId && store.selectedId !== lastLiveSel.current) setSelectedKey(LIVE_PREFIX + store.selectedId);
-    lastLiveSel.current = store.selectedId;
+    const id = store.selectedId;
+    if (id && id !== lastLiveSel.current) {
+      // Continuing the session that is already open (same session / thread id): keep its
+      // entry selected, so its history stays on screen instead of blinking away and back.
+      const info = store.sessions.find((x) => x.live_id === id);
+      const open = sessions?.find((x) => sessionKey(x) === selectedKey);
+      const sameSession = !!info?.native_id && !!open && open.id === info.native_id && open.tool === info.agent;
+      if (!sameSession) setSelectedKey(LIVE_PREFIX + id);
+    }
+    lastLiveSel.current = id;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.selectedId]);
 
   // Once a new chat's session file shows up in the list, select that entry instead.

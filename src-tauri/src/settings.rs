@@ -16,6 +16,8 @@ pub struct Settings {
     pub manual_projects: Vec<String>,
     /// Opt-in: query Claude Code's quota endpoint with its OAuth token.
     pub claude_quota_enabled: bool,
+    /// Opt-in: query Codex's live quota with its local ChatGPT login token.
+    pub codex_quota_enabled: bool,
 }
 
 /// Loads settings from `path`. A missing file yields `Settings::default()`.
@@ -118,6 +120,7 @@ mod tests {
             accent: Some("blue".to_string()),
             manual_projects: vec!["/a".to_string()],
             claude_quota_enabled: true,
+            codex_quota_enabled: true,
         };
         save_settings(&path, &s).unwrap();
         let loaded = load_settings(&path);

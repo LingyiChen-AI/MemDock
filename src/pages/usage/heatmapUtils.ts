@@ -1,10 +1,22 @@
-import type { UsageRow, UsageView } from "@/api/types";
+import type { UsageRow, UsageTotals, UsageView } from "@/api/types";
 import { localDate } from "./usageUtils";
 
-/** Default heatmap span: 26 weeks. */
-export const HEATMAP_DAYS = 26 * 7;
+/** Span of the heatmap in the `today` view (the page itself shows only one day). */
+export const TODAY_SPAN_DAYS = 30;
 
 export type HeatMetric = "tokens" | "cost";
+/** Which tool's usage colors the cells. */
+export type HeatTool = "all" | "claude" | "codex";
+
+/** Cell pitch (cell + gap) in px: fills the width, but stays within these bounds. */
+export const MIN_STEP = 13;
+export const MAX_STEP = 30;
+
+/** Pitch that spreads `weeks` columns over `available` px, clamped to [MIN_STEP, MAX_STEP]. */
+export function cellStep(available: number, weeks: number): number {
+  if (available <= 0 || weeks <= 0) return MIN_STEP;
+  return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.floor(available / weeks)));
+}
 
 /** `$2,308.53`: always two decimals with thousands separators (KPI card). */
 export function fmtCostFull(n: number): string {
@@ -29,23 +41,42 @@ function addDays(d: Date, n: number): Date {
 }
 
 /**
- * Days the heatmap covers: the current filter range, extended back so at least
- * 26 weeks are shown. The `today` view shows the last 26 weeks.
+ * Days the heatmap covers: exactly the page's filter range. The `today` view
+ * (a single day on the page) shows the last 30 days up to today.
  */
 export function heatmapRange(view: UsageView, range: { from: string; to: string }, now: Date): { from: string; to: string } {
-  const to = view === "today" ? localDate(now) : range.to;
-  const minFrom = localDate(addDays(parseLocal(to), -(HEATMAP_DAYS - 1)));
-  const from = view === "today" || range.from > minFrom ? minFrom : range.from;
-  return { from, to };
+  if (view === "today") {
+    const to = localDate(now);
+    return { from: localDate(addDays(parseLocal(to), -(TODAY_SPAN_DAYS - 1))), to };
+  }
+  return range.from <= range.to ? { from: range.from, to: range.to } : { from: range.to, to: range.from };
+}
+
+export interface HeatStat {
+  cost: number;
+  tokens: number;
+  requests: number;
 }
 
 export interface HeatCell {
   date: string;
-  cost: number;
-  tokens: number;
-  requests: number;
-  /** 0 (no usage) to 4 (most). */
+  /** Both tools together. */
+  total: HeatStat;
+  claude: HeatStat;
+  codex: HeatStat;
+  /** 0 (no usage) to 4 (most), from the selected tool and metric. */
   level: 0 | 1 | 2 | 3 | 4;
+}
+
+const ZERO: HeatStat = { cost: 0, tokens: 0, requests: 0 };
+
+function stat(t: UsageTotals | undefined): HeatStat {
+  return t ? { cost: t.cost, tokens: t.total_tokens, requests: t.requests } : ZERO;
+}
+
+function pick(r: UsageRow | undefined, tool: HeatTool): HeatStat {
+  if (!r) return ZERO;
+  return stat(tool === "claude" ? r.claude : tool === "codex" ? r.codex : r.totals);
 }
 
 export interface HeatGrid {
@@ -62,13 +93,16 @@ export function levelOf(v: number, max: number): HeatCell["level"] {
   return Math.min(4, Math.max(1, Math.ceil((v / max) * 4))) as HeatCell["level"];
 }
 
-/** Lays daily rows (`YYYY-MM-DD` keys) out in Monday-first week columns. */
-export function buildHeatGrid(rows: UsageRow[], from: string, to: string, metric: HeatMetric): HeatGrid {
-  const byDay = new Map(rows.map((r) => [r.key, r.totals]));
+/**
+ * Lays daily rows (`YYYY-MM-DD` keys) out in Monday-first week columns. Cells
+ * are colored by `tool`'s usage (`all` = both tools); every cell still carries
+ * the per-tool split for the tooltip.
+ */
+export function buildHeatGrid(rows: UsageRow[], from: string, to: string, metric: HeatMetric, tool: HeatTool = "all"): HeatGrid {
+  const byDay = new Map(rows.map((r) => [r.key, r]));
   const value = (k: string) => {
-    const t = byDay.get(k);
-    if (!t) return 0;
-    return metric === "cost" ? t.cost : t.total_tokens;
+    const s = pick(byDay.get(k), tool);
+    return metric === "cost" ? s.cost : s.tokens;
   };
   const start = parseLocal(from);
   const end = parseLocal(to);
@@ -88,15 +122,15 @@ export function buildHeatGrid(rows: UsageRow[], from: string, to: string, metric
         continue;
       }
       const key = localDate(d);
-      const t = byDay.get(key);
+      const r = byDay.get(key);
       if (d.getDate() === 1 || (weeks.length === 0 && months.length === 0)) {
         months.push({ week: weeks.length, month: key.slice(0, 7) });
       }
       col.push({
         date: key,
-        cost: t?.cost ?? 0,
-        tokens: t?.total_tokens ?? 0,
-        requests: t?.requests ?? 0,
+        total: pick(r, "all"),
+        claude: pick(r, "claude"),
+        codex: pick(r, "codex"),
         level: levelOf(value(key), max),
       });
     }

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { BarChart3, Download, Info, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { onUsageUpdated, setClaudeQuotaEnabled, usageExportCsv, usageQuota, usageRescan, usageSummary } from "@/api/usage";
+import { onUsageUpdated, setClaudeQuotaEnabled, setCodexQuotaEnabled, usageExportCsv, usageQuota, usageRescan, usageSummary } from "@/api/usage";
 import type { QuotaDto, Tool, UsageQuery, UsageReport, UsageView } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -143,10 +143,10 @@ export function UsagePage() {
     }
   };
 
-  const enableClaude = async () => {
+  const enableQuota = async (set: (on: boolean) => Promise<unknown>) => {
     setEnabling(true);
     try {
-      await setClaudeQuotaEnabled(true);
+      await set(true);
       await loadQuota();
     } catch (e) {
       push("error", errorMessage(e));
@@ -200,7 +200,14 @@ export function UsagePage() {
           </Button>
         </header>
 
-        <QuotaCards claude={quota?.claude ?? null} codex={quota?.codex ?? null} now={now} onEnableClaude={() => void enableClaude()} enabling={enabling} />
+        <QuotaCards
+          claude={quota?.claude ?? null}
+          codex={quota?.codex ?? null}
+          now={now}
+          onEnableClaude={() => void enableQuota(setClaudeQuotaEnabled)}
+          onEnableCodex={() => void enableQuota(setCodexQuotaEnabled)}
+          enabling={enabling}
+        />
 
         <div className="flex flex-wrap items-center gap-2">
           <Segmented

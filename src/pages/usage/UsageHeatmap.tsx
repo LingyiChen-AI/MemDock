@@ -7,14 +7,12 @@ import { htmlLang } from "@/i18n";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
 import { errorMessage } from "@/pages/skills/skillUtils";
-import { buildHeatGrid, fmtCostFull, fmtInt, heatmapRange, type HeatCell, type HeatMetric } from "./heatmapUtils";
+import { buildHeatGrid, cellStep, fmtCostFull, fmtInt, heatmapRange, MIN_STEP, type HeatCell, type HeatMetric, type HeatStat, type HeatTool } from "./heatmapUtils";
 import { fmtTokens } from "./usageUtils";
 
 const LABEL_W = 28;
 const TOP_H = 18;
 const GAP = 3;
-const MIN_STEP = 13;
-const MAX_STEP = 24;
 
 /** Level 0 is a faint track on the card; 1..4 mix the theme accent into it, so both themes and every accent work. */
 const EMPTY = "color-mix(in oklab, var(--foreground) 9%, var(--card))";
@@ -40,6 +38,39 @@ function useWidth(ref: React.RefObject<HTMLElement | null>): number {
   return w;
 }
 
+function Seg<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: { value: T; label: string; disabled?: boolean }[];
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex h-7 rounded-md border border-border bg-card p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          disabled={o.disabled}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "cursor-pointer rounded-sm px-2.5 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none",
+            value === o.value ? "bg-muted font-medium text-foreground" : "text-muted-foreground enabled:hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface Props {
   view: UsageView;
   range: { from: string; to: string };
@@ -54,11 +85,16 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
   const { t, language } = useI18n();
   const h = t.usage.heatmap;
   const [metric, setMetric] = React.useState<HeatMetric>("tokens");
+  const [pickedTool, setPickedTool] = React.useState<HeatTool>("all");
   const [report, setReport] = React.useState<UsageReport | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [hover, setHover] = React.useState<{ cell: HeatCell; x: number; y: number } | null>(null);
   const boxRef = React.useRef<HTMLDivElement>(null);
   const width = useWidth(boxRef);
+
+  // The page's tool filter locks the heatmap to that tool.
+  const lockedTool: Tool | null = tools.length === 1 ? tools[0] : null;
+  const heatTool: HeatTool = lockedTool ?? pickedTool;
 
   const span = React.useMemo(() => heatmapRange(view, range, new Date()), [view, range]);
   const toolsKey = tools.join(",");
@@ -82,13 +118,17 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [span.from, span.to, toolsKey, modelsKey, version]);
 
-  const grid = React.useMemo(() => (report ? buildHeatGrid(report.rows, span.from, span.to, metric) : null), [report, span, metric]);
-  const weeks = grid?.weeks.length ?? 26;
-  const step = Math.max(MIN_STEP, Math.min(MAX_STEP, width > 0 ? Math.floor((width - LABEL_W) / weeks) : MIN_STEP));
+  const grid = React.useMemo(
+    () => (report ? buildHeatGrid(report.rows, span.from, span.to, metric, heatTool) : null),
+    [report, span, metric, heatTool],
+  );
+  const weeks = grid?.weeks.length ?? 5;
+  const step = width > 0 ? cellStep(width - LABEL_W, weeks) : MIN_STEP;
   const cell = step - GAP;
   const svgW = LABEL_W + weeks * step;
   const svgH = TOP_H + 7 * step;
-  const activeDays = grid ? grid.weeks.flat().filter((c) => c && c.tokens > 0).length : 0;
+  const statOf = (c: HeatCell): HeatStat => (heatTool === "claude" ? c.claude : heatTool === "codex" ? c.codex : c.total);
+  const activeDays = grid ? grid.weeks.flat().filter((c) => c && statOf(c).tokens > 0).length : 0;
   const monthFmt = React.useMemo(() => new Intl.DateTimeFormat(htmlLang(language), { month: "short" }), [language]);
   const monthLabel = (m: string) => {
     const [y, mo] = m.split("-").map(Number);
@@ -102,30 +142,39 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
     setHover({ cell: c, x: r.left + r.width / 2 - (base?.left ?? 0), y: r.top - (base?.top ?? 0) });
   };
 
+  const toolName = { claude: t.memory.toolClaude, codex: t.memory.toolCodex };
+  const tipRows: { key: string; label: string; s: HeatStat; strong?: boolean }[] = hover
+    ? [
+        ...(lockedTool !== "codex" ? [{ key: "claude", label: toolName.claude, s: hover.cell.claude }] : []),
+        ...(lockedTool !== "claude" ? [{ key: "codex", label: toolName.codex, s: hover.cell.codex }] : []),
+        ...(lockedTool ? [] : [{ key: "total", label: h.total, s: hover.cell.total, strong: true }]),
+      ]
+    : [];
+
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
           <CalendarDays className="size-4 text-muted-foreground" aria-hidden="true" />
           {h.title}
-          {grid ? <span className="font-normal text-muted-foreground tabular-nums">{`${span.from} ~ ${span.to} · ${fmt(h.activeDays, { n: activeDays })}`}</span> : null}
+          <span className="font-normal text-muted-foreground tabular-nums">
+            {`${span.from} ~ ${span.to}`}
+            {view === "today" ? ` · ${h.last30}` : ""}
+            {grid ? ` · ${fmt(h.activeDays, { n: activeDays })}` : ""}
+          </span>
         </h2>
-        <div role="radiogroup" aria-label={h.metric} className="inline-flex h-7 rounded-md border border-border bg-card p-0.5">
-          {(["tokens", "cost"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={metric === m}
-              onClick={() => setMetric(m)}
-              className={cn(
-                "cursor-pointer rounded-sm px-2.5 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                metric === m ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {h[m]}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <Seg
+            label={h.tool}
+            value={heatTool}
+            onChange={setPickedTool}
+            options={(["all", "claude", "codex"] as const).map((v) => ({
+              value: v,
+              label: v === "all" ? h.allTools : toolName[v],
+              disabled: lockedTool !== null && v !== lockedTool,
+            }))}
+          />
+          <Seg label={h.metric} value={metric} onChange={setMetric} options={(["tokens", "cost"] as const).map((m) => ({ value: m, label: h[m] }))} />
         </div>
       </header>
 
@@ -151,7 +200,7 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
                 [4, h.fri],
               ] as const
             ).map(([di, label]) => (
-              <text key={di} x={0} y={TOP_H + di * step + cell - 2} fontSize={10} style={{ fill: "var(--muted-foreground)" }}>
+              <text key={di} x={0} y={TOP_H + di * step + cell / 2 + 4} fontSize={10} style={{ fill: "var(--muted-foreground)" }}>
                 {label}
               </text>
             ))}
@@ -166,7 +215,7 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
                     y={TOP_H + di * step}
                     width={cell}
                     height={cell}
-                    rx={2}
+                    rx={cell > 16 ? 3 : 2}
                     style={{ fill: LEVEL_FILL[c.level] }}
                     stroke={hover?.cell.date === c.date ? "var(--foreground)" : "none"}
                     strokeWidth={1}
@@ -187,18 +236,34 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
             style={{ left: hover.x, top: hover.y - 6 }}
           >
             <p className="mb-1 font-semibold tabular-nums">{hover.cell.date}</p>
-            <p className="flex justify-between gap-4">
-              <span className="text-muted-foreground">{h.cost}</span>
-              <span className="tabular-nums">{fmtCostFull(hover.cell.cost)}</span>
-            </p>
-            <p className="flex justify-between gap-4">
-              <span className="text-muted-foreground">{h.tokens}</span>
-              <span className="tabular-nums">{fmtTokens(hover.cell.tokens)}</span>
-            </p>
-            <p className="flex justify-between gap-4">
-              <span className="text-muted-foreground">{h.requests}</span>
-              <span className="tabular-nums">{fmtInt(hover.cell.requests)}</span>
-            </p>
+            <table className="border-separate border-spacing-x-3 border-spacing-y-0.5 -mx-3">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="text-left font-normal" />
+                  <th className="text-right font-normal">{h.cost}</th>
+                  <th className="text-right font-normal">{h.tokens}</th>
+                  <th className="text-right font-normal">{h.requests}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tipRows.map((r) => (
+                  <tr key={r.key} className={cn("tabular-nums", r.strong && "font-semibold")}>
+                    <td className={cn("text-left", !r.strong && "text-muted-foreground")}>
+                      {r.key !== "total" ? (
+                        <span
+                          className={cn("mr-1.5 inline-block size-2 rounded-full", r.key === "claude" ? "bg-tool-claude" : "bg-tool-codex")}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                      {r.label}
+                    </td>
+                    <td className="text-right">{fmtCostFull(r.s.cost)}</td>
+                    <td className="text-right">{fmtTokens(r.s.tokens)}</td>
+                    <td className="text-right">{fmtInt(r.s.requests)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : null}
       </div>

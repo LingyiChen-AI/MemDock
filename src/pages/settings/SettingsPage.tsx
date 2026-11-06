@@ -19,7 +19,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { envDetect, envInstall, onInstallDone, onInstallLog, openDataDir } from "@/api/env";
 import { getSettings } from "@/api/memory";
-import { setClaudeQuotaEnabled } from "@/api/usage";
+import { setClaudeQuotaEnabled, setCodexQuotaEnabled } from "@/api/usage";
 import type { EnvReport, EnvToolStatus } from "@/api/types";
 import { AppearanceControls } from "@/components/appearance/AppearanceControls";
 import { Button } from "@/components/ui/button";
@@ -148,6 +148,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   const [installing, setInstalling] = React.useState<string | null>(null);
   const [log, setLog] = React.useState<string[]>([]);
   const [quotaOn, setQuotaOn] = React.useState<boolean | null>(null);
+  const [codexQuotaOn, setCodexQuotaOn] = React.useState<boolean | null>(null);
   const { toasts, push, dismiss } = useToasts();
   const logRef = React.useRef<HTMLPreElement>(null);
 
@@ -173,8 +174,14 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   React.useEffect(() => {
     void detect();
     void getSettings()
-      .then((x) => setQuotaOn(Boolean(x.claude_quota_enabled)))
-      .catch(() => setQuotaOn(false));
+      .then((x) => {
+        setQuotaOn(Boolean(x.claude_quota_enabled));
+        setCodexQuotaOn(Boolean(x.codex_quota_enabled));
+      })
+      .catch(() => {
+        setQuotaOn(false);
+        setCodexQuotaOn(false);
+      });
     const offs: (() => void)[] = [];
     let alive = true;
     const keep = (p: Promise<() => void>) =>
@@ -220,6 +227,15 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
     try {
       const r = await setClaudeQuotaEnabled(next);
       setQuotaOn(Boolean(r.claude_quota_enabled));
+    } catch (e) {
+      push("error", errorMessage(e));
+    }
+  };
+
+  const toggleCodexQuota = async () => {
+    try {
+      const r = await setCodexQuotaEnabled(!codexQuotaOn);
+      setCodexQuotaOn(Boolean(r.codex_quota_enabled));
     } catch (e) {
       push("error", errorMessage(e));
     }
@@ -295,6 +311,13 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
           <label className="flex cursor-pointer items-center gap-3 text-sm">
             <Switch checked={quotaOn === true} disabled={quotaOn === null} onCheckedChange={() => void toggleQuota()} />
             {s.quota.toggle}
+          </label>
+        </Section>
+
+        <Section icon={Gauge} title={s.codexQuota.title} desc={t.usage.quota.codexExplain}>
+          <label className="flex cursor-pointer items-center gap-3 text-sm">
+            <Switch checked={codexQuotaOn === true} disabled={codexQuotaOn === null} onCheckedChange={() => void toggleCodexQuota()} />
+            {s.codexQuota.toggle}
           </label>
         </Section>
 

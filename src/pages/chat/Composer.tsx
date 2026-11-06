@@ -1,10 +1,9 @@
 import * as React from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowUp, ChevronDown, Cpu, ImagePlus, Loader2, Paperclip, Shield, Square, X } from "lucide-react";
-import { readImageDataUri, type LiveAgent, type PermissionMode } from "@/api/live";
+import { ArrowUp, Check, ChevronDown, Cpu, ImagePlus, Loader2, Paperclip, RefreshCw, Search, Shield, Square, X } from "lucide-react";
+import { liveModels, readImageDataUri, type LiveAgent, type ModelOption, type PermissionMode } from "@/api/live";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -90,20 +89,80 @@ function PermissionPicker({ value, onChange, locked, c }: { value: PermissionMod
   );
 }
 
+/** Model list per agent, fetched once from the CLI (backend caches it for an hour). */
+const modelLists: Partial<Record<LiveAgent, Promise<ModelOption[]>>> = {};
+
+function loadModels(agent: LiveAgent, force = false): Promise<ModelOption[]> {
+  if (force || !modelLists[agent]) {
+    modelLists[agent] = liveModels(agent, force).catch((e) => {
+      delete modelLists[agent];
+      throw e;
+    });
+  }
+  return modelLists[agent]!;
+}
+
+/** Rows of the picker: "" is the CLI's default model. */
+interface ModelRow {
+  value: string;
+  name: string;
+  description: string;
+}
+
+function toRows(agent: LiveAgent, models: ModelOption[] | null, c: C): ModelRow[] {
+  if (!models) return [{ value: "", name: c.modelDefault, description: "" }, ...MODEL_SUGGESTIONS[agent].map((m) => ({ value: m, name: m, description: "" }))];
+  const rows: ModelRow[] = [];
+  const def = models.find((m) => m.is_default);
+  // Claude lists its default as value "default"; Codex flags one model as the default.
+  rows.push({
+    value: "",
+    name: c.modelDefault,
+    description: def ? (agent === "claude" ? def.description : def.display_name) : "",
+  });
+  for (const m of models) if (m.value !== "default") rows.push({ value: m.value, name: m.display_name, description: m.description });
+  return rows;
+}
+
 function ModelPicker({ agent, value, onChange, locked, c }: { agent: LiveAgent; value: string; onChange: (m: string) => void; locked: boolean; c: C }) {
   const [open, setOpen] = React.useState(false);
-  const [draft, setDraft] = React.useState(value);
+  const [query, setQuery] = React.useState("");
+  const [models, setModels] = React.useState<ModelOption[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
+
+  const fetchModels = React.useCallback(
+    (force = false) => {
+      setLoading(true);
+      setFailed(false);
+      loadModels(agent, force)
+        .then((m) => setModels(m))
+        .catch(() => setFailed(true))
+        .finally(() => setLoading(false));
+    },
+    [agent],
+  );
   React.useEffect(() => {
-    if (open) setDraft(value);
-  }, [open, value]);
+    setModels(null);
+    fetchModels();
+  }, [fetchModels]);
+  React.useEffect(() => {
+    if (open) setQuery("");
+  }, [open]);
+
+  const rows = toRows(agent, models, c);
+  const label = rows.find((r) => r.value === value)?.name ?? (value || c.modelDefault);
+  const q = query.trim().toLowerCase();
+  const shown = q ? rows.filter((r) => `${r.value} ${r.name} ${r.description}`.toLowerCase().includes(q)) : rows;
+  const custom = q && !rows.some((r) => r.value.toLowerCase() === q) ? query.trim() : null;
   const pick = (m: string) => {
     onChange(m.trim());
     setOpen(false);
   };
+
   const button = (
-    <Button type="button" variant="outline" size="sm" disabled={locked} aria-label={c.composer.model} className={cn(PILL, "cursor-pointer font-mono disabled:opacity-70")}>
+    <Button type="button" variant="outline" size="sm" disabled={locked} aria-label={c.composer.model} className={cn(PILL, "cursor-pointer disabled:opacity-70")}>
       <Cpu aria-hidden="true" />
-      <span className="max-w-32 truncate">{value || c.modelDefault}</span>
+      <span className="max-w-36 truncate">{label}</span>
       <ChevronDown className="size-3 opacity-60" aria-hidden="true" />
     </Button>
   );
@@ -119,38 +178,85 @@ function ModelPicker({ agent, value, onChange, locked, c }: { agent: LiveAgent; 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{button}</PopoverTrigger>
-      <PopoverContent align="start" className="flex w-60 flex-col gap-2 p-2">
-        <Input
-          autoFocus
-          aria-label={c.composer.model}
-          value={draft}
-          placeholder={c.composer.modelPlaceholder}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      <PopoverContent align="start" side="top" className="flex w-80 flex-col gap-0 overflow-hidden p-0">
+        <div className="flex items-center gap-1.5 border-b border-border px-2.5 py-2">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <input
+            autoFocus
+            aria-label={c.composer.modelSearch}
+            value={query}
+            placeholder={c.composer.modelSearch}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
               e.preventDefault();
-              pick(draft);
-            }
-          }}
-          className="h-8 font-mono text-xs"
-        />
-        <div role="listbox" aria-label={c.composer.model} className="flex flex-col">
-          {["", ...MODEL_SUGGESTIONS[agent]].map((m) => (
+              if (custom) pick(custom);
+              else if (shown[0]) pick(shown[0].value);
+            }}
+            className="h-7 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+          <ToolbarTip tip={c.composer.modelRefresh}>
             <button
-              key={m || "default"}
+              type="button"
+              aria-label={c.composer.modelRefresh}
+              onClick={() => fetchModels(true)}
+              className="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
+            </button>
+          </ToolbarTip>
+        </div>
+        <div role="listbox" aria-label={c.composer.model} className="flex max-h-80 flex-col gap-0.5 overflow-y-auto p-1">
+          {loading && !models ? (
+            <div className="flex flex-col gap-1 p-1" aria-busy="true" aria-label={c.composer.modelLoading}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="flex flex-col gap-1 rounded-md px-2 py-1.5">
+                  <div className="h-3.5 w-28 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+                  <div className="h-3 w-44 animate-pulse rounded bg-muted/70 motion-reduce:animate-none" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            shown.map((r) => {
+              const selected = value === r.value;
+              return (
+                <button
+                  key={r.value || "default"}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => pick(r.value)}
+                  className={cn(
+                    "flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted focus-visible:bg-muted",
+                    selected && "bg-primary/8 hover:bg-primary/12",
+                  )}
+                >
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className={cn("truncate text-sm text-foreground", selected && "font-semibold text-primary")}>{r.name}</span>
+                    {r.description || (r.value && r.value !== r.name) ? (
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {r.description}
+                        {r.value && r.value !== r.name ? <span className="font-mono">{r.description ? " · " : ""}{r.value}</span> : null}
+                      </span>
+                    ) : null}
+                  </span>
+                  {selected ? <Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" /> : null}
+                </button>
+              );
+            })
+          )}
+          {custom ? (
+            <button
               type="button"
               role="option"
-              aria-selected={value === m}
-              onClick={() => pick(m)}
-              className={cn(
-                "cursor-pointer rounded-md px-2 py-1.5 text-left text-xs outline-none hover:bg-muted focus-visible:bg-muted",
-                m ? "font-mono" : "text-muted-foreground",
-                value === m && "seg-active",
-              )}
+              aria-selected={false}
+              onClick={() => pick(custom)}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-muted focus-visible:bg-muted"
             >
-              {m || c.modelDefault}
+              {fmt(c.composer.modelCustom, { model: custom })}
             </button>
-          ))}
+          ) : null}
+          {failed ? <p className="px-2 py-1.5 text-[11px] text-muted-foreground">{c.composer.modelListFailed}</p> : null}
         </div>
       </PopoverContent>
     </Popover>

@@ -1276,6 +1276,11 @@
     },
     "startingAgent": "Starting {agent}… the first message is sent once it is ready",
     "composer": {
+      "modelSearch": "Search or type a model",
+      "modelRefresh": "Reload the model list",
+      "modelLoading": "Loading models",
+      "modelCustom": "Use “{model}”",
+      "modelListFailed": "Could not read the model list; showing common models. You can also type a model name.",
       "placeholder": "Message {agent}… (paste screenshots, drop files)",
       "attachFile": "Insert file paths",
       "attachImage": "Add images",

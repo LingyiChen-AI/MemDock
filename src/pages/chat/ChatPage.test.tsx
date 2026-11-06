@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@/api/live", () => ({
   liveStart: vi.fn(),
   liveSend: vi.fn().mockResolvedValue(undefined),
+  liveModels: vi.fn().mockResolvedValue([]),
   liveRespond: vi.fn().mockResolvedValue(undefined),
   liveInterrupt: vi.fn().mockResolvedValue(undefined),
   liveStop: vi.fn().mockResolvedValue(undefined),

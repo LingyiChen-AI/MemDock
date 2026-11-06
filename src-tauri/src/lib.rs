@@ -213,6 +213,7 @@ pub fn run() {
             live::live_close,
             live::live_list,
             live::live_transcript,
+            live::live_models,
             live::read_image_data_uri,
         ])
         .build(tauri::generate_context!())

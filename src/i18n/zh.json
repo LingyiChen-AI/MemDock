@@ -1276,6 +1276,11 @@
     },
     "startingAgent": "正在启动 {agent}…首条消息会在启动完成后发送",
     "composer": {
+      "modelSearch": "搜索或输入模型名",
+      "modelRefresh": "重新读取模型列表",
+      "modelLoading": "正在读取模型列表",
+      "modelCustom": "使用「{model}」",
+      "modelListFailed": "没读到这个工具的模型列表，先列出常用模型；也可以直接输入模型名",
       "placeholder": "给 {agent} 发消息…（可粘贴截图、拖入文件）",
       "attachFile": "插入文件路径",
       "attachImage": "添加图片",

@@ -8,7 +8,14 @@ vi.mock("@/api/memory", () => ({
   updateUiPrefs: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
-vi.mock("@/api/live", () => ({ readImageDataUri: vi.fn() }));
+vi.mock("@/api/live", () => ({
+  readImageDataUri: vi.fn(),
+  liveModels: vi.fn().mockResolvedValue([
+    { value: "default", display_name: "Default (recommended)", description: "Opus 5.5", is_default: true },
+    { value: "opus", display_name: "Opus 5.5", description: "Complex work", is_default: false },
+    { value: "sonnet", display_name: "Sonnet 5.5", description: "Efficient", is_default: false },
+  ]),
+}));
 let dropHandler: ((e: { payload: DragDropEvent }) => void) | null = null;
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
@@ -119,7 +126,7 @@ describe("ChatComposer", () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderApp(<Harness onSend={onSend} />);
     await userEvent.click(screen.getByRole("button", { name: "模型" }));
-    await userEvent.click(await screen.findByRole("option", { name: "sonnet" }));
+    await userEvent.click(await screen.findByRole("option", { name: /Sonnet 5.5/ }));
     expect(JSON.parse(localStorage.getItem("memdock.chat.prefs")!)).toMatchObject({ model: { claude: "sonnet" } });
     await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "hi{Enter}");
     expect(onSend).toHaveBeenCalledWith({ text: "hi", images: [], permission: "ask", model: "sonnet" });

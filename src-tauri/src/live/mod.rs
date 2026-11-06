@@ -17,6 +17,7 @@
 //! in the history page and can be resumed in a terminal or converted.
 pub mod claude;
 pub mod codex;
+pub mod models;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -531,3 +532,15 @@ pub async fn read_image_data_uri(path: String) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[tauri::command]
+pub async fn live_models(
+    state: tauri::State<'_, Arc<crate::commands::AppState>>,
+    agent: Agent,
+    force: Option<bool>,
+) -> Result<Vec<models::ModelOption>, String> {
+    let codex_home = state.paths.codex_home.clone();
+    tauri::async_runtime::spawn_blocking(move || models::models(agent, &codex_home, force.unwrap_or(false)))
+        .await
+        .map_err(|e| e.to_string())?
+}

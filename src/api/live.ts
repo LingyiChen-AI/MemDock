@@ -113,6 +113,19 @@ export function liveClose(liveId: string): Promise<void> {
   return invoke<void>("live_close", { liveId });
 }
 
+/** A model the CLI offers (what `/model` shows). */
+export interface ModelOption {
+  value: string;
+  display_name: string;
+  description: string;
+  is_default: boolean;
+}
+
+/** Models of `agent` read from its CLI (cached by the backend for an hour; `force` asks again). */
+export function liveModels(agent: LiveAgent, force = false): Promise<ModelOption[]> {
+  return invoke<ModelOption[]>("live_models", { agent, force });
+}
+
 export function liveList(): Promise<LiveSessionInfo[]> {
   return invoke<LiveSessionInfo[]>("live_list");
 }

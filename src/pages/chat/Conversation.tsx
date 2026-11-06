@@ -3,6 +3,7 @@ import { useAccountName } from "./accountNames";
 import { Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
 import { readImageDataUri, storedImagePath, type Decision, type LiveAgent } from "@/api/live";
 import { ChatAvatar, ChatRow, ChatText } from "@/components/chat/ChatMessage";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -84,7 +85,8 @@ export function Conversation({
       ) : null}
       {blocks.length === 0 && !running && !starting && !prefix ? <p className="py-10 text-center text-sm text-muted-foreground">{c.emptyConv}</p> : null}
       <ol className="flex flex-col gap-5">
-        {blocks.map((b) => {
+        {blocks.map((b, bi) => {
+          const lastTurn = running && !waiting && bi === blocks.length - 1;
           switch (b.kind) {
             case "user":
               return (
@@ -99,6 +101,7 @@ export function Conversation({
                   {b.segments.map((seg, i) => (
                     <Segment key={i} seg={seg} onOpen={setDetail} c={c} />
                   ))}
+                  {lastTurn && !streamingTail(b.segments) ? <InlineTyping c={c} /> : null}
                 </ChatRow>
               );
             case "approval":
@@ -142,7 +145,7 @@ export function Conversation({
               );
           }
         })}
-        {running && !waiting && !starting ? <TypingRow agent={agent} c={c} /> : null}
+        {running && !waiting && !starting && blocks[blocks.length - 1]?.kind !== "turn" ? <TypingRow agent={agent} c={c} /> : null}
       </ol>
       <ToolDialog call={liveDetail} onClose={() => setDetail(null)} c={c} />
     </div>
@@ -201,6 +204,23 @@ export function LiveThumbs({ images, label }: { images: string[]; label: string 
   );
 }
 
+/** The reply's last part is text being streamed (its caret already shows activity). */
+function streamingTail(segments: TurnSegment[]): boolean {
+  const t = segments[segments.length - 1];
+  return t?.kind === "text" && !!t.streaming;
+}
+
+/** Three bouncing dots inside the reply bubble while the agent works (e.g. waiting on a tool). */
+function InlineTyping({ c }: { c: C }) {
+  return (
+    <span role="status" aria-label={c.typing} className="inline-flex h-4 items-center gap-1">
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60 motion-reduce:animate-none" style={{ animationDelay: `${i * 150}ms` }} aria-hidden="true" />
+      ))}
+    </span>
+  );
+}
+
 function TypingRow({ agent, c }: { agent: LiveAgent; c: C }) {
   return (
     <li className="flex items-center gap-2.5" role="status" aria-label={c.typing}>
@@ -224,8 +244,8 @@ function Segment({ seg, onOpen, c }: { seg: TurnSegment; onOpen: (call: LiveTool
     case "text":
       return seg.streaming ? (
         // Streaming text is re-rendered on every delta; skip the fold until it settles.
-        <div className="min-w-0 text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {seg.text}
+        <div className="min-w-0 [&>div>*:last-child]:inline">
+          <ChatMarkdown text={seg.text} />
           <span className="ml-0.5 inline-block h-4 w-1.5 translate-y-0.5 animate-pulse bg-primary/60 motion-reduce:animate-none" aria-hidden="true" />
         </div>
       ) : (

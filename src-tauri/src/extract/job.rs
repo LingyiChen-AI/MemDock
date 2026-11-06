@@ -32,7 +32,7 @@ use chrono::{Offset, TimeZone};
 use serde::Serialize;
 
 use super::prompt::{
-    build_prompt_with, chunk_turns, output_schema, parse_output_full, MemoryTarget, MAX_EXCERPT_CHARS,
+    build_prompt_full, chunk_turns, meets_recurrence, PreviousSuggestion, output_schema, parse_output_full, MemoryTarget, MAX_EXCERPT_CHARS,
 };
 use super::runner::{CliRunner, RunError};
 use super::sessions::{read_claude_turns, read_codex_turns, Turn};
@@ -249,6 +249,25 @@ fn code_of(e: &RunError) -> RunErrorCode {
         RunError::Cancelled => RunErrorCode::Cancelled,
         RunError::Failed { .. } => RunErrorCode::Other,
     }
+}
+
+/// Earlier suggestions (newest first) shown to the model so a rerun does not
+/// repeat or reword them. Stale ones are left out.
+fn previous_suggestions(all: &[super::prompt::Suggestion]) -> Vec<PreviousSuggestion> {
+    use super::prompt::SuggestionStatus as St;
+    let mut v: Vec<&super::prompt::Suggestion> = all.iter().filter(|s| s.status != St::Stale).collect();
+    v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    v.into_iter()
+        .map(|s| PreviousSuggestion {
+            file_id: s.file_id.clone(),
+            status: match s.status {
+                St::Pending => "pending",
+                St::Accepted => "accepted",
+                _ => "rejected",
+            },
+            text: s.new_text.clone().or_else(|| s.old_text.clone()).unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// Sets `error` + `error_code` unless an error is already recorded.
@@ -575,7 +594,8 @@ fn execute(
                 cancelled = true;
                 break;
             }
-            let prompt = build_prompt_with(&b.name, &targets, chunk, &lang, cfg.custom_prompt.as_deref());
+            let previous = previous_suggestions(&lock(&ctx.store).suggestions().to_vec());
+            let prompt = build_prompt_full(&b.name, &targets, chunk, &lang, cfg.custom_prompt.as_deref(), &previous);
             let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
                 Ok(r) => r,
                 Err(RunError::Cancelled) => {
@@ -605,8 +625,13 @@ fn execute(
             }
 
             // ---- store + watermark (only after this chunk succeeded)
+            let total_parsed = parsed.suggestions.len();
+            let kept: Vec<_> = parsed.suggestions.into_iter().filter(meets_recurrence).collect();
+            if kept.len() < total_parsed {
+                rec.warnings.push(format!("{}: {} suggestion(s) dropped: backed by a single mention", b.name, total_parsed - kept.len()));
+            }
             let mut st = lock(&ctx.store);
-            rec.suggestions_new += st.add_suggestions(parsed.suggestions);
+            rec.suggestions_new += st.add_suggestions(kept);
             for tool in [Tool::Claude, Tool::Codex] {
                 if let Some(m) = chunk.iter().filter(|t| t.tool == tool).map(|t| t.ts).max() {
                     if m > st.watermark(&b.key, tool) {

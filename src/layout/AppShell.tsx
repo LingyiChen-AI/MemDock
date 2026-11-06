@@ -4,7 +4,6 @@ import {
   BookOpen,
   ChevronDown,
   ListChecks,
-  History,
   MessagesSquare,
   Package,
   Palette,
@@ -43,7 +42,7 @@ import logoUrl from "@/assets/memdock-logo.svg";
 
 export const PROJECT_URL = "https://github.com/LingyiChen-AI/MemDock";
 
-export type NavKey = "chat" | "sessions" | "memory" | "review" | "extract" | "skills" | "sync" | "usage" | "settings";
+export type NavKey = "chat" | "memory" | "review" | "extract" | "skills" | "sync" | "usage" | "settings";
 
 type NavGroupKey = "work" | "memory" | "tools" | "data" | "system";
 
@@ -52,7 +51,6 @@ const NAV_GROUPS: { key: NavGroupKey; items: { key: NavKey; icon: LucideIcon }[]
     key: "work",
     items: [
       { key: "chat", icon: MessagesSquare },
-      { key: "sessions", icon: History },
     ],
   },
   {

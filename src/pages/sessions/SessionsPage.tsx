@@ -1,6 +1,12 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, MessageSquarePlus, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
+import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, TerminalSquare, TriangleAlert } from "lucide-react";
+import { liveInterrupt, liveRespond, liveSend, type LiveSessionInfo } from "@/api/live";
+import { Conversation } from "@/pages/chat/Conversation";
+import { NewChatDialog } from "@/pages/chat/NewChatDialog";
+import { HeaderButton, LiveRow, MessageComposer, StatePill } from "@/pages/chat/ChatPage";
+import { isActive, loadChatPrefs } from "@/pages/chat/chatPrefs";
+import { ensureTranscript, selectLive, startLive, useLiveStore, type LiveConv } from "@/pages/chat/liveStore";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
@@ -17,6 +23,9 @@ import { Timeline } from "./Timeline";
 import { filterSessions, formatTime, groupByProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
 
 type S = Messages["sessions"];
+type C = Messages["chat"];
+
+const LIVE_PREFIX = "live:";
 
 function sessionKey(s: { tool: Tool; path: string }): string {
   return `${s.tool}:${s.path}`;
@@ -88,7 +97,7 @@ function SessionListSkeleton({ label }: { label: string }) {
   );
 }
 
-function SessionRow({ session, selected, onSelect, s }: { session: SessionSummary; selected: boolean; onSelect: () => void; s: S }) {
+function SessionRow({ session, live, selected, onSelect, s, c }: { session: SessionSummary; live?: LiveSessionInfo; selected: boolean; onSelect: () => void; s: S; c: C }) {
   const heading = session.title?.trim() || session.first_prompt || s.untitled;
   return (
     <button
@@ -103,7 +112,8 @@ function SessionRow({ session, selected, onSelect, s }: { session: SessionSummar
       <div className="flex min-w-0 items-center gap-2">
         <ToolBadge tool={session.tool} s={s} />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{heading}</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(session.updated_at)}</span>
+        {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
+        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(live ? Math.max(live.updated_at, session.updated_at ?? 0) : session.updated_at)}</span>
       </div>
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
         {session.continued ? (
@@ -255,49 +265,103 @@ function MetaChip({ icon, title, mono, children }: { icon?: React.ReactNode; tit
   );
 }
 
-function PreviewPane({
-  session,
+/** What the right pane shows: a session file from disk, a live chat not on disk yet, or both. */
+interface Target {
+  tool: Tool;
+  cwd: string;
+  /** Claude session id / Codex thread id (resume id). */
+  nativeId: string | null;
+  title: string;
+  session: SessionSummary | null;
+  live: LiveSessionInfo | null;
+}
+
+function ChatPane({
+  target,
   preview,
   error,
   result,
   converting,
   onConvert,
-  continuing,
-  onContinue,
+  lc,
   s,
+  c,
 }: {
-  session: SessionSummary;
+  target: Target;
   preview: SessionPreview | null;
   error: string | null;
   result: ConvertResult | null;
   converting: boolean;
   onConvert: () => void;
-  continuing: boolean;
-  onContinue?: () => void;
+  lc: LiveConv | undefined;
   s: S;
+  c: C;
 }) {
-  const target = otherTool(session.tool);
+  const { session, live } = target;
+  const [actionError, setActionError] = React.useState<string | null>(null);
+  const targetTool = otherTool(target.tool);
   const stats = preview?.stats;
+  const running = live ? isActive(live.state) : false;
+  const attached = live !== null && live.state !== "exited";
+
+  // Any message continues the conversation: through the running process, or by resuming it.
+  const send = async (text: string) => {
+    if (attached && live) return liveSend(live.live_id, text);
+    const prefs = loadChatPrefs();
+    await startLive({
+      agent: target.tool,
+      cwd: target.cwd,
+      resume_id: target.nativeId,
+      permission: prefs.permission[target.tool],
+      model: prefs.model[target.tool] || null,
+      prompt: text,
+    });
+  };
+  const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
+    if (!live) return;
+    setActionError(null);
+    try {
+      await liveRespond(live.live_id, requestId, decision);
+    } catch (e) {
+      setActionError(fmt(c.actionFailed, { error: errorMessage(e) }));
+    }
+  };
+
+  const history = session ? (
+    error ? (
+      <p role="alert" className="mb-4 text-sm text-destructive">
+        {fmt(s.previewFailed, { error })}
+      </p>
+    ) : !preview ? (
+      <ChatSkeleton label={s.previewLoading} />
+    ) : (
+      <Timeline bare preview={preview} tool={session.tool} />
+    )
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-col gap-3 border-b border-border p-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-2">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
-              <ToolBadge tool={session.tool} s={s} />
-              <span className="truncate">{session.title?.trim() || session.first_prompt || s.untitled}</span>
+              <ToolBadge tool={target.tool} s={s} />
+              <span className="truncate">{target.title}</span>
+              {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
             </h2>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <MetaChip icon={<Folder aria-hidden="true" />} title={session.cwd} mono>
-                {session.cwd}
+              <MetaChip icon={<Folder aria-hidden="true" />} title={target.cwd} mono>
+                {target.cwd}
               </MetaChip>
-              <MetaChip icon={<Hash aria-hidden="true" />} title={session.id} mono>
-                {session.id.slice(0, 8)}
-              </MetaChip>
+              {target.nativeId ? (
+                <MetaChip icon={<Hash aria-hidden="true" />} title={target.nativeId} mono>
+                  {target.nativeId.slice(0, 8)}
+                </MetaChip>
+              ) : null}
+              {live?.model ? <MetaChip icon={<Cpu aria-hidden="true" />}>{live.model}</MetaChip> : null}
               {stats ? (
                 <>
                   <MetaChip icon={<MessagesSquare aria-hidden="true" />}>{fmt(s.messages, { n: stats.user_messages + stats.assistant_messages })}</MetaChip>
-                  {stats.tool_calls === 0 ? <MetaChip>{s.stats.none}</MetaChip> : null}
                   {stats.mapped_calls > 0 ? (
                     <MetaChip icon={<TerminalSquare aria-hidden="true" />}>{fmt(s.stats.mapped, { n: stats.mapped_calls })}</MetaChip>
                   ) : null}
@@ -307,33 +371,75 @@ function PreviewPane({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {onContinue ? (
-              <Button type="button" variant="outline" size="sm" className="cursor-pointer" title={s.continueChatHint} disabled={continuing} onClick={onContinue}>
-                {continuing ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <MessageSquarePlus aria-hidden="true" />}
-                {s.continueChat}
+            {running && live ? (
+              <HeaderButton
+                label={c.stop}
+                hint={c.stopHint}
+                onClick={() => {
+                  setActionError(null);
+                  liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
+                }}
+              >
+                <Square className="fill-current" aria-hidden="true" />
+                {c.stop}
+              </HeaderButton>
+            ) : null}
+            {session && session.converted_from?.tool !== targetTool ? (
+              <Button type="button" variant="outline" size="sm" className="cursor-pointer" disabled={converting || !preview || running} onClick={onConvert}>
+                {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
+                {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[targetTool] })}
               </Button>
             ) : null}
-            {session.converted_from?.tool === target ? null : (
-              <Button type="button" size="sm" className="cursor-pointer" disabled={converting || !preview} onClick={onConvert}>
-                {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
-                {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[target] })}
-              </Button>
-            )}
           </div>
         </div>
-        {result ? <ResultCard result={result} s={s} /> : <ResumeCommands session={session} s={s} />}
+        {result ? <ResultCard result={result} s={s} /> : session ? <ResumeCommands session={session} s={s} /> : null}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col">
-        {error ? (
+      {actionError ? (
+        <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      ) : null}
+      {live && lc?.loaded ? (
+        <Conversation
+          conv={lc.conv}
+          agent={live.agent}
+          running={running}
+          starting={live.state === "starting"}
+          onRespond={respond}
+          prefix={
+            history ? (
+              <>
+                {history}
+                <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  {c.continuedHere}
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              </>
+            ) : undefined
+          }
+        />
+      ) : session ? (
+        error ? (
           <p role="alert" className="p-4 text-sm text-destructive">
             {fmt(s.previewFailed, { error })}
           </p>
         ) : !preview ? (
           <ChatSkeleton label={s.previewLoading} className="px-4 py-4" />
         ) : (
-          <Timeline preview={preview} tool={session.tool} />
-        )}
-      </div>
+          <Timeline preview={preview} tool={session.tool} startAtBottom />
+        )
+      ) : (
+        <ChatSkeleton label={c.loading} className="px-4 py-4" />
+      )}
+      <MessageComposer
+        key={target.nativeId ?? live?.live_id ?? "new"}
+        c={c}
+        placeholder={running ? c.inputQueued : c.inputPlaceholder}
+        hint={!attached ? fmt(c.continueHint, { agent: s.tools[target.tool] }) : null}
+        onError={setActionError}
+        onSend={send}
+      />
     </div>
   );
 }
@@ -345,13 +451,21 @@ interface Confirm {
 }
 
 export interface SessionsPageProps {
-  /** Continues the session as a live chat; rejects with a message to show. */
-  onContinueChat?: (session: SessionSummary) => Promise<void>;
+  newChatOpen?: boolean;
+  onNewChatOpenChange?: (open: boolean) => void;
 }
 
-export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
+/** The 对话 page: every Claude Code / Codex session on disk plus live chats; any of them can be continued. */
+export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => {} }: SessionsPageProps = {}) {
   const { t } = useI18n();
   const s = t.sessions;
+  const c = t.chat;
+  const store = useLiveStore();
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
   const [sessions, setSessions] = React.useState<SessionSummary[] | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -364,24 +478,9 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
   const [converting, setConverting] = React.useState(false);
   const [convertError, setConvertError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<ConvertResult | null>(null);
-  const [continuing, setContinuing] = React.useState(false);
-  const [continueError, setContinueError] = React.useState<string | null>(null);
 
-  const continueChat = async (x: SessionSummary) => {
-    if (!onContinueChat) return;
-    setContinuing(true);
-    setContinueError(null);
-    try {
-      await onContinueChat(x);
-    } catch (e) {
-      setContinueError(errorMessage(e));
-    } finally {
-      setContinuing(false);
-    }
-  };
-
-  const load = React.useCallback(async () => {
-    setLoading(true);
+  const load = React.useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
       setSessions(await listSessions());
       setLoadError(null);
@@ -400,6 +499,52 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
     () => sessions?.find((x) => sessionKey(x) === selectedKey) ?? null,
     [sessions, selectedKey],
   );
+
+  // Newest live process per resume id; live chats whose session file is not listed yet.
+  const liveByNative = React.useMemo(() => {
+    const m = new Map<string, LiveSessionInfo>();
+    for (const x of [...store.sessions].sort((a, b) => a.created_at - b.created_at)) if (x.native_id) m.set(x.native_id, x);
+    return m;
+  }, [store.sessions]);
+  const knownIds = React.useMemo(() => new Set((sessions ?? []).map((x) => x.id)), [sessions]);
+  const liveOnly = React.useMemo(
+    () =>
+      [...store.sessions]
+        .filter((x) => !x.native_id || !knownIds.has(x.native_id))
+        .filter((x) => !x.native_id || liveByNative.get(x.native_id) === x)
+        .sort((a, b) => b.created_at - a.created_at),
+    [store.sessions, knownIds, liveByNative],
+  );
+  const selectedLive = selectedKey?.startsWith(LIVE_PREFIX)
+    ? (store.sessions.find((x) => x.live_id === selectedKey.slice(LIVE_PREFIX.length)) ?? null)
+    : selected
+      ? (liveByNative.get(selected.id) ?? null)
+      : null;
+
+  // A chat started from the new-chat dialog becomes the selection.
+  const lastLiveSel = React.useRef(store.selectedId);
+  React.useEffect(() => {
+    if (store.selectedId && store.selectedId !== lastLiveSel.current) setSelectedKey(LIVE_PREFIX + store.selectedId);
+    lastLiveSel.current = store.selectedId;
+  }, [store.selectedId]);
+
+  // Once a new chat's session file shows up in the list, select that entry instead.
+  React.useEffect(() => {
+    if (!selectedKey?.startsWith(LIVE_PREFIX) || !sessions) return;
+    const info = store.sessions.find((x) => x.live_id === selectedKey.slice(LIVE_PREFIX.length));
+    const match = info?.native_id ? sessions.find((x) => x.id === info.native_id) : undefined;
+    if (match) setSelectedKey(sessionKey(match));
+  }, [selectedKey, sessions, store.sessions]);
+
+  // Live chats not on the list yet: reload the list (quietly) when one finishes a turn.
+  const pendingFiles = liveOnly.filter((x) => x.native_id && x.state === "idle").map((x) => x.live_id).join(",");
+  React.useEffect(() => {
+    if (pendingFiles) void load(true);
+  }, [pendingFiles, load]);
+
+  React.useEffect(() => {
+    if (selectedLive) void ensureTranscript(selectedLive.live_id);
+  }, [selectedLive]);
 
   // Reload the preview whenever the selected file changes.
   const selectedPath = selected?.path;
@@ -424,8 +569,33 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
     setSelectedKey(sessionKey(x));
     setResult(null);
     setConvertError(null);
-    setContinueError(null);
   };
+  const selectLiveRow = (x: LiveSessionInfo) => {
+    selectLive(x.live_id);
+    setSelectedKey(LIVE_PREFIX + x.live_id);
+    setResult(null);
+    setConvertError(null);
+  };
+
+  const target: Target | null = selected
+    ? {
+        tool: selected.tool,
+        cwd: selected.cwd,
+        nativeId: selected.id,
+        title: selected.title?.trim() || selected.first_prompt || s.untitled,
+        session: selected,
+        live: selectedLive,
+      }
+    : selectedLive
+      ? {
+          tool: selectedLive.agent,
+          cwd: selectedLive.cwd,
+          nativeId: selectedLive.native_id,
+          title: selectedLive.title.trim() || c.untitled,
+          session: null,
+          live: selectedLive,
+        }
+      : null;
 
   const askConvert = async () => {
     if (!selected) return;
@@ -474,14 +644,20 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
         <div className="flex flex-col gap-0.5">
           <h1 className="flex items-center gap-2 text-lg font-semibold">
             <MessagesSquare className="size-5 text-muted-foreground" aria-hidden="true" />
-            {s.title}
+            {c.title}
           </h1>
-          <p className="text-xs text-muted-foreground">{s.subtitle}</p>
+          <p className="text-xs text-muted-foreground">{c.subtitle}</p>
         </div>
-        <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void load()} className="cursor-pointer">
-          <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
-          {s.refresh}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void load()} className="cursor-pointer">
+            <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
+            {s.refresh}
+          </Button>
+          <Button type="button" size="sm" className="cursor-pointer" onClick={() => onNewChatOpenChange(true)}>
+            <SquarePen aria-hidden="true" />
+            {c.newChat}
+          </Button>
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -504,6 +680,18 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {liveOnly.length > 0 ? (
+              <section aria-label={c.newChats} className="mb-2">
+                <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.newChats}</h2>
+                <ul className="flex flex-col gap-0.5">
+                  {liveOnly.map((x) => (
+                    <li key={x.live_id}>
+                      <LiveRow info={x} selected={selectedKey === LIVE_PREFIX + x.live_id} onSelect={() => selectLiveRow(x)} c={c} now={now} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
             {loadError ? (
               <p role="alert" className="p-2 text-sm text-destructive">
                 {fmt(s.loadFailed, { error: loadError })}
@@ -527,7 +715,7 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
                   <ul className="flex flex-col gap-0.5">
                     {g.sessions.map((x) => (
                       <li key={sessionKey(x)}>
-                        <SessionRow session={x} selected={sessionKey(x) === selectedKey} onSelect={() => select(x)} s={s} />
+                        <SessionRow session={x} live={liveByNative.get(x.id)} selected={sessionKey(x) === selectedKey} onSelect={() => select(x)} s={s} c={c} />
                       </li>
                     ))}
                   </ul>
@@ -543,22 +731,18 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
               {fmt(s.convertFailed, { error: convertError })}
             </p>
           ) : null}
-          {continueError ? (
-            <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
-              {fmt(s.continueFailed, { error: continueError })}
-            </p>
-          ) : null}
-          {selected ? (
-            <PreviewPane
-              session={selected}
-              preview={preview}
-              error={previewError}
+          {target ? (
+            <ChatPane
+              key={selected ? sessionKey(selected) : selectedKey}
+              target={target}
+              preview={selected ? preview : null}
+              error={selected ? previewError : null}
               result={result}
               converting={converting}
               onConvert={() => void askConvert()}
-              continuing={continuing}
-              onContinue={onContinueChat ? () => void continueChat(selected) : undefined}
+              lc={selectedLive ? store.convs[selectedLive.live_id] : undefined}
               s={s}
+              c={c}
             />
           ) : (
             <div className="grid flex-1 place-items-center p-6 text-sm text-muted-foreground">{s.selectHint}</div>
@@ -575,6 +759,7 @@ export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
         onConfirm={() => confirm && void runConvert(confirm)}
         onCancel={() => setConfirm(null)}
       />
+      <NewChatDialog open={newChatOpen} onOpenChange={onNewChatOpenChange} />
     </div>
   );
 }

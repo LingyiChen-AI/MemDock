@@ -102,8 +102,21 @@ function toBlocks(items: TimelineItem[]): Block[] {
   return out;
 }
 
-export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Tool }) {
+export function Timeline({
+  preview,
+  tool,
+  bare = false,
+  startAtBottom = false,
+}: {
+  preview: SessionPreview;
+  tool: Tool;
+  /** Only the messages: no filter bar and no scroll container (embedded above a live chat). */
+  bare?: boolean;
+  /** Open scrolled to the newest message. */
+  startAtBottom?: boolean;
+}) {
   const { t } = useI18n();
+  const scroller = React.useRef<HTMLDivElement>(null);
   const s = t.sessions;
   const [filter, setFilter] = React.useState<TimelineFilter>("all");
   const [detail, setDetail] = React.useState<ToolItem | null>(null);
@@ -117,6 +130,32 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
     { key: "errors", label: s.timeline.errors, n: c.errors },
   ];
   const blocks = toBlocks(preview.timeline.filter((it) => matches(it, filter)));
+
+  React.useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && startAtBottom) el.scrollTop = el.scrollHeight;
+  }, [preview, startAtBottom]);
+
+  const list = (
+    <>
+      {preview.timeline_total > preview.timeline.length ? (
+        <p className="mb-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
+      ) : null}
+      {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
+      <ol className="flex flex-col gap-5">
+        {blocks.map((b) =>
+          b.kind === "user" ? (
+            <UserRow key={b.key} item={b.item} s={s} />
+          ) : (
+            <TurnCard key={b.key} segments={b.segments} ts={b.ts} tool={tool} onOpen={setDetail} s={s} />
+          ),
+        )}
+      </ol>
+      <ToolDialog it={detail} onClose={() => setDetail(null)} s={s} />
+    </>
+  );
+
+  if (bare) return list;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -141,23 +180,9 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
-        <ol className="flex flex-col gap-5">
-          {blocks.map((b) =>
-            b.kind === "user" ? (
-              <UserRow key={b.key} item={b.item} s={s} />
-            ) : (
-              <TurnCard key={b.key} segments={b.segments} ts={b.ts} tool={tool} onOpen={setDetail} s={s} />
-            ),
-          )}
-        </ol>
-        {preview.timeline_total > preview.timeline.length ? (
-          <p className="mt-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
-        ) : null}
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        {list}
       </div>
-
-      <ToolDialog it={detail} onClose={() => setDetail(null)} s={s} />
     </div>
   );
 }

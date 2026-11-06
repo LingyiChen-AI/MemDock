@@ -1149,8 +1149,11 @@
   },
   "chat": {
     "title": "对话",
-    "subtitle": "直接在 MemDock 里和 Claude Code、Codex 对话，需要你批准时会在这里提醒",
+    "subtitle": "本机所有 Claude Code、Codex 会话都在这里，打开任意一个就能接着聊",
     "newChat": "新对话",
+    "newChats": "新对话",
+    "continuedHere": "以下是在 MemDock 里继续的对话",
+    "continueHint": "发送后会在这个会话上继续，使用你上次为 {agent} 选择的权限模式",
     "listLabel": "对话列表",
     "loading": "正在读取对话…",
     "listFailed": "读取对话列表失败：{error}",

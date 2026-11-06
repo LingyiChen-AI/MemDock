@@ -42,7 +42,7 @@ const STATE_TONE: Record<LiveState, string> = {
   exited: "bg-transparent text-muted-foreground/70 ring-1 ring-border",
 };
 
-function StatePill({ state, c }: { state: LiveState; c: C }) {
+export function StatePill({ state, c }: { state: LiveState; c: C }) {
   return (
     <span className={cn("inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-medium", STATE_TONE[state])}>
       {state === "running" ? <span className="size-1.5 animate-pulse rounded-full bg-emerald-500 motion-reduce:animate-none" aria-hidden="true" /> : null}
@@ -89,7 +89,7 @@ function baseName(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-function LiveRow({ info, selected, onSelect, c, now }: { info: LiveSessionInfo; selected: boolean; onSelect: () => void; c: C; now: number }) {
+export function LiveRow({ info, selected, onSelect, c, now }: { info: LiveSessionInfo; selected: boolean; onSelect: () => void; c: C; now: number }) {
   return (
     <button
       type="button"
@@ -144,7 +144,7 @@ function useNow(): number {
   return now;
 }
 
-function HeaderButton({ label, hint, onClick, disabled, variant = "outline", children }: {
+export function HeaderButton({ label, hint, onClick, disabled, variant = "outline", children }: {
   label: string;
   hint: string;
   onClick: () => void;
@@ -234,9 +234,41 @@ function ConvHeader({ info, c, onError }: { info: LiveSessionInfo; c: C; onError
 }
 
 function Composer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: (e: string | null) => void }) {
+  const exited = info.state === "exited";
+  return (
+    <MessageComposer
+      c={c}
+      disabled={exited}
+      placeholder={exited ? c.inputExited : c.inputPlaceholder}
+      hint={exited ? c.inputExited : isActive(info.state) ? c.inputQueued : null}
+      onError={onError}
+      onSend={(msg) => liveSend(info.live_id, msg)}
+    />
+  );
+}
+
+/** Message box: Enter sends, Shift+Enter breaks the line, IME-safe. */
+export function MessageComposer({
+  c,
+  disabled = false,
+  placeholder,
+  hint,
+  onSend,
+  onError,
+  extra,
+}: {
+  c: C;
+  disabled?: boolean;
+  placeholder: string;
+  hint?: React.ReactNode;
+  onSend: (text: string) => Promise<unknown>;
+  onError: (e: string | null) => void;
+  /** Controls shown under the box (e.g. the permission mode used to continue). */
+  extra?: React.ReactNode;
+}) {
   const [text, setText] = React.useState("");
   const [sending, setSending] = React.useState(false);
-  const exited = info.state === "exited";
+  const exited = disabled;
   const ref = React.useRef<HTMLTextAreaElement>(null);
   const send = async () => {
     const msg = text.trim();
@@ -244,7 +276,7 @@ function Composer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: 
     setSending(true);
     onError(null);
     try {
-      await liveSend(info.live_id, msg);
+      await onSend(msg);
       setText("");
     } catch (e) {
       onError(fmt(c.sendFailed, { error: errorMessage(e) }));
@@ -253,7 +285,6 @@ function Composer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: 
       ref.current?.focus();
     }
   };
-  const hint = exited ? c.inputExited : isActive(info.state) ? c.inputQueued : null;
   return (
     <div className="flex flex-col gap-1.5 border-t border-border px-4 py-3">
       <div className="flex items-end gap-2">
@@ -263,7 +294,7 @@ function Composer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: 
           value={text}
           disabled={exited}
           rows={1}
-          placeholder={exited ? c.inputExited : c.inputPlaceholder}
+          placeholder={placeholder}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             // IME composition (e.g. Chinese input) uses Enter to pick a candidate.
@@ -277,12 +308,17 @@ function Composer({ info, c, onError }: { info: LiveSessionInfo; c: C; onError: 
           {sending ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <SendHorizontal aria-hidden="true" />}
         </Button>
       </div>
-      {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+      {hint || extra ? (
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+          <span>{hint}</span>
+          {extra}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: LiveConv | undefined; c: C }) {
+export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: LiveConv | undefined; c: C }) {
   const [error, setError] = React.useState<string | null>(null);
   const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
     setError(null);

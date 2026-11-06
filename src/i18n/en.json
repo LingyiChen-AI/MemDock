@@ -1149,8 +1149,11 @@
   },
   "chat": {
     "title": "Chat",
-    "subtitle": "Talk to Claude Code and Codex right in MemDock; approvals they need show up here",
+    "subtitle": "Every Claude Code and Codex session on this computer; open any of them and keep talking",
     "newChat": "New chat",
+    "newChats": "New chats",
+    "continuedHere": "Continued in MemDock",
+    "continueHint": "Sending continues this session with the permission mode you last chose for {agent}",
     "listLabel": "Conversations",
     "loading": "Loading conversations…",
     "listFailed": "Failed to load conversations: {error}",

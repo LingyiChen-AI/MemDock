@@ -17,9 +17,8 @@ import { AccountSlot } from "@/components/account/AccountSlot";
 import { LoginDialog } from "@/components/account/LoginDialog";
 import { useSyncStatus } from "@/components/account/useSyncStatus";
 import { SyncPage } from "@/pages/sync/SyncPage";
-import { ChatPage } from "@/pages/chat/ChatPage";
-import { initLiveStore, startLive, useLiveStore } from "@/pages/chat/liveStore";
-import { isActive, loadChatPrefs } from "@/pages/chat/chatPrefs";
+import { initLiveStore, useLiveStore } from "@/pages/chat/liveStore";
+import { isActive } from "@/pages/chat/chatPrefs";
 
 function Shell() {
   const { t } = useI18n();
@@ -83,16 +82,7 @@ function Shell() {
               }}
             />
           ),
-          chat: <ChatPage newChatOpen={newChatOpen} onNewChatOpenChange={setNewChatOpen} />,
-          sessions: (
-            <SessionsPage
-              onContinueChat={async (x) => {
-                const prefs = loadChatPrefs();
-                await startLive({ agent: x.tool, cwd: x.cwd, resume_id: x.id, permission: prefs.permission[x.tool] });
-                navigate("chat");
-              }}
-            />
-          ),
+          chat: <SessionsPage newChatOpen={newChatOpen} onNewChatOpenChange={setNewChatOpen} />,
           usage: <UsagePage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}

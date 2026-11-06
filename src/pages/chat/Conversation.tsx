@@ -22,7 +22,10 @@ export function Conversation({
   running,
   starting,
   onRespond,
+  prefix,
 }: {
+  /** Rendered above the live messages inside the same scroll area (the session's history). */
+  prefix?: React.ReactNode;
   conv: ConvState;
   agent: LiveAgent;
   /** The process is still starting (Codex takes ~10 s): show a clear notice. */
@@ -57,13 +60,14 @@ export function Conversation({
 
   return (
     <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4" data-testid="chat-scroll">
+      {prefix}
       {starting ? (
         <div role="status" className="mb-4 flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
           {fmt(c.startingAgent, { agent: c.agents[agent] })}
         </div>
       ) : null}
-      {blocks.length === 0 && !running && !starting ? <p className="py-10 text-center text-sm text-muted-foreground">{c.emptyConv}</p> : null}
+      {blocks.length === 0 && !running && !starting && !prefix ? <p className="py-10 text-center text-sm text-muted-foreground">{c.emptyConv}</p> : null}
       <ol className="flex flex-col gap-5">
         {blocks.map((b) => {
           switch (b.kind) {

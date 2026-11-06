@@ -21,9 +21,9 @@ use crate::usage::{claude_quota, codex_log_quota, codex_quota, pricing, QuotaDto
 pub const EVENT_UPDATED: &str = "usage://updated";
 const THROTTLE: Duration = Duration::from_secs(5);
 const FALLBACK_RESCAN: Duration = Duration::from_secs(300);
-const CLAUDE_QUOTA_TTL: Duration = Duration::from_secs(60);
+const CLAUDE_QUOTA_TTL: Duration = Duration::from_secs(30 * 60);
 /// The live Codex lookup is cached a little longer (the page polls every minute).
-const CODEX_QUOTA_TTL: Duration = Duration::from_secs(180);
+const CODEX_QUOTA_TTL: Duration = Duration::from_secs(30 * 60);
 
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -172,6 +172,15 @@ fn cached_fetch(slot: &Mutex<Option<(Instant, ToolQuota)>>, ttl: Duration, fetch
 /// credentials. Both lookups are opt-in; Codex falls back to the newest log
 /// snapshot when its live lookup is off or fails (`live_error` says why).
 pub fn usage_quota_impl(us: &UsageState, fetch_claude: Fetch, fetch_codex: Fetch) -> QuotaDto {
+    usage_quota_with(us, fetch_claude, fetch_codex, false)
+}
+
+/// `force` drops the cached results first (the usage page's refresh button).
+pub fn usage_quota_with(us: &UsageState, fetch_claude: Fetch, fetch_codex: Fetch, force: bool) -> QuotaDto {
+    if force {
+        *lock(&us.claude_quota) = None;
+        *lock(&us.codex_quota) = None;
+    }
     let now = now_ms();
     let settings = load_settings(&us.app.settings_path);
     let claude = if !settings.claude_quota_enabled {
@@ -220,8 +229,8 @@ pub fn usage_summary(
 }
 
 #[tauri::command(async)]
-pub fn usage_quota(us: Us) -> QuotaDto {
-    usage_quota_impl(&us, &claude_quota::fetch, &codex_quota::fetch)
+pub fn usage_quota(us: Us, force: Option<bool>) -> QuotaDto {
+    usage_quota_with(&us, &claude_quota::fetch, &codex_quota::fetch, force.unwrap_or(false))
 }
 
 #[tauri::command(async)]

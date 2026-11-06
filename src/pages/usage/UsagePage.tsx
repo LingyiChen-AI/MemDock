@@ -81,9 +81,9 @@ export function UsagePage() {
     }
   }, [query]);
 
-  const loadQuota = React.useCallback(async () => {
+  const loadQuota = React.useCallback(async (force = false) => {
     try {
-      setQuota(await usageQuota());
+      setQuota(await usageQuota(force));
     } catch {
       // Quota cards stay in their loading / previous state; statistics are unaffected.
     }
@@ -159,7 +159,7 @@ export function UsagePage() {
     setRescanning(true);
     try {
       await usageRescan();
-      await Promise.all([loadSummary(), loadQuota()]);
+      await Promise.all([loadSummary(), loadQuota(true)]);
     } catch (e) {
       push("error", errorMessage(e));
     } finally {
@@ -194,7 +194,7 @@ export function UsagePage() {
             </h1>
             <p className="text-xs text-muted-foreground">{u.subtitle}</p>
           </div>
-          <Button type="button" variant="outline" size="sm" disabled={rescanning} onClick={() => void rescan()} className="cursor-pointer">
+          <Button type="button" variant="outline" size="sm" disabled={rescanning} onClick={() => void rescan()} title={u.refreshHint} className="cursor-pointer">
             <RefreshCw className={cn("size-3.5", rescanning && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
             {u.refresh}
           </Button>

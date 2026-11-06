@@ -7,8 +7,9 @@ export function usageSummary(q: UsageQuery): Promise<UsageReport> {
 }
 
 /** Claude and live Codex only when their opt-in switches are on; Codex falls back to local logs. */
-export function usageQuota(): Promise<QuotaDto> {
-  return invoke<QuotaDto>("usage_quota");
+/** Cached for 30 minutes; `force` asks the services again right away. */
+export function usageQuota(force = false): Promise<QuotaDto> {
+  return invoke<QuotaDto>("usage_quota", { force });
 }
 
 export function usageExportCsv(q: UsageQuery, path: string): Promise<void> {

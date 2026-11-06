@@ -735,7 +735,8 @@
   "usage": {
     "title": "用量统计",
     "subtitle": "读取本机 Claude Code 与 Codex 日志统计 token，金额按公开单价估算",
-    "refresh": "重新扫描",
+    "refresh": "立即刷新",
+    "refreshHint": "重新扫描本机日志，并重新查询额度（平时额度结果缓存 30 分钟）",
     "scanning": "正在首次扫描本机日志，数据稍后补全…",
     "quota": {
       "fiveHour": "5 小时窗口",
@@ -748,14 +749,14 @@
       "unavailableReason": "额度接口暂不可用（{reason}），token 统计不受影响",
       "noData": "暂无额度数据，使用 Codex 后会出现",
       "disabledTitle": "Claude Code 额度查询未开启",
-      "explain": "开启后，MemDock 读取 Claude Code 本机的登录凭据，向 Anthropic 的用量接口查询 5 小时和本周额度。这是非公开接口，可能随时失效；凭据只用于这次请求，不保存、不写日志。关闭时不会发出任何网络请求。",
+      "explain": "读取本机 Claude Code 的登录凭据，查询 5 小时和本周额度。凭据只用于查询，不保存。结果缓存 30 分钟，用量页点「立即刷新」可马上重查。关闭后不联网。",
       "enable": "开启查询",
       "updated": "数据时间 {time}",
       "plan": "{plan} 套餐",
       "codexLogSnapshot": "这是 {date} 日志里的快照，开启实时查询可看当前额度。",
       "codexLiveFailed": "实时查询失败：{reason}。以下是 {date} 日志里的快照。",
       "codexEnableLive": "开启实时查询",
-      "codexExplain": "开启后，MemDock 读取本机 ~/.codex/auth.json 里 Codex 的 ChatGPT 登录令牌，向 OpenAI 的用量接口（chatgpt.com）查询 5 小时和本周额度，结果缓存 3 分钟。这是非公开接口，可能随时失效；令牌只用于这次请求，不保存、不写日志，也不会刷新或改写 auth.json。关闭时只读取本机日志里的额度快照，不发出网络请求。",
+      "codexExplain": "读取本机 Codex 的登录凭据（~/.codex/auth.json），查询 5 小时和本周额度。只读不改，凭据不保存。结果缓存 30 分钟，用量页点「立即刷新」可马上重查。关闭后只显示本机日志里的额度快照。",
       "reasons": {
         "not_logged_in": "没有找到 Claude Code 的登录凭据，请先在 Claude Code 里登录",
         "codex_not_logged_in": "没有找到 Codex 的 ChatGPT 登录，请先在 Codex 里登录",

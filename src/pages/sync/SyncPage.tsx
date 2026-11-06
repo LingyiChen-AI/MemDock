@@ -389,7 +389,10 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenM
             ) : null}
             {extras ? <MissingSkills missing={extras.missing} removed={extras.removed} projects={projects} notify={push} /> : null}
             {extras && extras.absent.length > 0 ? <AbsentList items={extras.absent} /> : null}
-            {extras && extras.skipped.length > 0 ? <SkippedList items={extras.skipped} /> : null}
+            {/* Files the persistent list below already shows are not repeated here. */}
+            {extras && extras.skipped.some((x) => !records.some((r) => r.repo_path === x.repo_path)) ? (
+              <SkippedList items={extras.skipped.filter((x) => !records.some((r) => r.repo_path === x.repo_path))} />
+            ) : null}
             {records.length > 0 ? (
               <UnsyncedFiles records={records} formatTime={formatTime} onOpen={onOpenMemoryFile} />
             ) : null}

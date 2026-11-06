@@ -935,6 +935,7 @@
     "sessionId": "Session ID",
     "file": "File",
     "resumeHint": "Run this in a terminal to continue:",
+    "codexWriterHint": "A session can only be written from one place: once the Codex desktop app has opened it, the CLI says \"This conversation is open in another app\" and stays read-only. To continue in the CLI, fully quit the Codex desktop app (including its tray icon) first; to keep both, press f in the CLI to fork a new session.",
     "resumeHere": "Open this session in {tool} from a terminal:",
     "resumeConverted": "Converted to a {tool} session. Continue it from a terminal:",
     "copy": "Copy",

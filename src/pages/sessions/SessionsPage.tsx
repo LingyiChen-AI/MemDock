@@ -143,12 +143,23 @@ function ResumeCommands({ session, s }: { session: SessionSummary; s: S }) {
     lines.push({ label: fmt(s.resumeConverted, { tool: s.tools[r.tool] }), command: resumeCommand(r.tool, session.cwd, r.id) });
   }
   if (lines.length === 0) return null;
+  const hasCodex = (session.converted_from && session.tool === "codex") || session.converted_to.some((r) => r.tool === "codex");
   return (
     <div className="flex flex-col gap-2">
       {lines.map((l) => (
         <CommandLine key={l.command} label={l.label} command={l.command} s={s} />
       ))}
+      {hasCodex ? <CodexWriterHint s={s} /> : null}
     </div>
+  );
+}
+
+function CodexWriterHint({ s }: { s: S }) {
+  return (
+    <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+      <Info className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+      {s.codexWriterHint}
+    </p>
   );
 }
 
@@ -183,6 +194,7 @@ function ResultCard({ result, s }: { result: ConvertResult; s: S }) {
           {result.indexed ? s.codexIndexed : fmt(s.codexNotIndexed, { reason: reason(indexWarning ?? "state_db_missing") })}
         </p>
       ) : null}
+      {result.tool === "codex" ? <CodexWriterHint s={s} /> : null}
       {otherWarnings.map((w) => (
         <p key={w} className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
           <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />

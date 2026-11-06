@@ -261,6 +261,7 @@ mod tests {
         let r = usage_summary_impl(&us, &q).unwrap();
         assert!(!r.scanning);
         assert_eq!(r.summary.totals.total_tokens, 15);
+        assert_eq!(r.summary.totals.requests, 1);
 
         let calls = Cell::new(0);
         let fake = |_: &Path, _: i64| {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { UsageReport } from "@/api/types";
 import { chartData, fmtCost, fmtDuration, fmtPct, fmtTokens, localDate, monthRange, presetRange } from "./usageUtils";
 
-const zero = { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: 0, unpriced_tokens: 0 };
+const zero = { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, requests: 0, cost: 0, unpriced_tokens: 0 };
 
 describe("usage formatting", () => {
   it("formats cost, tokens and percentages", () => {

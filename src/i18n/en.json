@@ -731,6 +731,30 @@
       "d": "{d}d {h}h",
       "h": "{h}h {m}m",
       "m": "{m}m"
+    },
+    "kpi": {
+      "cost": "Total cost",
+      "requests": "Requests",
+      "tokens": "Total tokens",
+      "hitRate": "Cache hit rate",
+      "dailyAvg": "{value} / day",
+      "hitRateSub": "Cache reads / all input",
+      "tokensSub": "In {input} · Out {output}"
+    },
+    "heatmap": {
+      "title": "Daily activity",
+      "metric": "Color by",
+      "tokens": "Tokens",
+      "cost": "Cost",
+      "requests": "Requests",
+      "less": "Less",
+      "more": "More",
+      "mon": "Mon",
+      "wed": "Wed",
+      "fri": "Fri",
+      "aria": "Daily usage heatmap from {from} to {to}",
+      "activeDays": "{n} active days",
+      "loadFailed": "Failed to load heatmap: {error}"
     }
   },
   "settings": {

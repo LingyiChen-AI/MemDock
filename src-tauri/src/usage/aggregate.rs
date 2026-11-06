@@ -39,6 +39,8 @@ pub struct Totals {
     pub cache_read: u64,
     pub cache_write: u64,
     pub total_tokens: u64,
+    /// Billed model requests (events after deduplication).
+    pub requests: u64,
     /// Estimated USD for the priced part.
     pub cost: f64,
     /// Tokens of models without a known price (not included in `cost`).
@@ -52,6 +54,7 @@ impl Totals {
         self.cache_read += ev.cache_read;
         self.cache_write += ev.cache_write;
         self.total_tokens += ev.total_tokens();
+        self.requests += 1;
         match c {
             Some(c) => self.cost += c,
             None => self.unpriced_tokens += ev.total_tokens(),
@@ -63,6 +66,7 @@ impl Totals {
         self.cache_read += o.cache_read;
         self.cache_write += o.cache_write;
         self.total_tokens += o.total_tokens;
+        self.requests += o.requests;
         self.cost += o.cost;
         self.unpriced_tokens += o.unpriced_tokens;
     }
@@ -100,7 +104,9 @@ pub struct Summary {
     pub daily_avg_tokens: f64,
     /// Highest row (day / month / hour) by cost, by tokens when nothing is priced.
     pub peak: Option<Peak>,
-    /// cache_read / (input + cache_read); `None` without input.
+    /// cache_read / (input + cache_read + cache_write): the share of all prompt
+    /// input served from the cache. Buckets do not overlap (Codex `input` has
+    /// its cached part moved to `cache_read` at parse time). `None` without input.
     pub cache_hit_rate: Option<f64>,
 }
 
@@ -283,7 +289,7 @@ pub fn build_report<'a>(
             tokens: r.totals.total_tokens,
         });
     let days = ((to - from).num_days() + 1).max(1) as u32;
-    let denom = total.input + total.cache_read;
+    let denom = total.input + total.cache_read + total.cache_write;
     let summary = Summary {
         daily_avg_cost: total.cost / f64::from(days),
         daily_avg_tokens: total.total_tokens as f64 / f64::from(days),
@@ -406,8 +412,11 @@ mod tests {
         assert_eq!(r.summary.days, 3);
         let peak = r.summary.peak.as_ref().unwrap();
         assert_eq!(peak.key, "2026-11-04");
-        // hit rate = read / (input + read)
+        // hit rate = read / (input + read + write)
         let s = &r.summary;
+        assert_eq!(s.totals.requests, 4, "duplicate key counted once");
+        assert_eq!(d4.totals.requests, 1);
+        assert_eq!(d5.totals.requests, 3);
         let expect = 1_000_500.0 / (2_000_500.0 + 1_000_500.0);
         assert!((s.cache_hit_rate.unwrap() - expect).abs() < 1e-12);
         assert!((s.daily_avg_cost - s.totals.cost / 3.0).abs() < 1e-12);
@@ -437,6 +446,23 @@ mod tests {
         assert_eq!(r.rows.iter().map(|x| x.key.as_str()).collect::<Vec<_>>(), ["2026-10", "2026-11"]);
         assert_eq!(r.rows[1].totals.input, 2_000_500);
         assert!(build_report(evs.iter(), &q(View::Daily, "x", "y"), table(), cst).is_err());
+    }
+
+    #[test]
+    fn hit_rate_counts_cache_writes_and_requests_per_day() {
+        let mut a = ev("2026-11-05T03:00:00Z", Tool::Claude, "claude-opus-5-5", 100, 600, Some("p"));
+        a.cache_write = 300;
+        let b = ev("2026-11-05T05:00:00Z", Tool::Claude, "claude-opus-5-5", 0, 0, Some("q"));
+        let evs = vec![a.clone(), a, b];
+        let r = build_report(evs.iter(), &q(View::Daily, "2026-11-05", "2026-11-05"), table(), cst).unwrap();
+        assert_eq!(r.rows[0].totals.requests, 2);
+        assert_eq!(r.rows[0].claude.requests, 2);
+        assert_eq!(r.rows[0].breakdown[0].totals.requests, 2);
+        assert!((r.summary.cache_hit_rate.unwrap() - 0.6).abs() < 1e-12);
+        let empty: Vec<UsageEvent> = vec![];
+        let r = build_report(empty.iter(), &q(View::Daily, "2026-11-05", "2026-11-05"), table(), cst).unwrap();
+        assert_eq!(r.summary.cache_hit_rate, None);
+        assert_eq!(r.summary.totals.requests, 0);
     }
 
     #[test]

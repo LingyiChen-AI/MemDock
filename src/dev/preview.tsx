@@ -401,11 +401,11 @@ const syncCommits = [
 const syncSummary = { commit: "c4", committed: true, pulled: 2, pushed: 1, merged: 1 };
 
 // Usage page fixtures: deterministic fake numbers for any range.
-const usageTotals = (input: number, output: number, read: number, write: number, cost: number, unpriced = 0) => ({
-  input, output, cache_read: read, cache_write: write, total_tokens: input + output + read + write, cost, unpriced_tokens: unpriced,
+const usageTotals = (input: number, output: number, read: number, write: number, cost: number, unpriced = 0, requests = Math.round((input + output) / 900)) => ({
+  input, output, cache_read: read, cache_write: write, total_tokens: input + output + read + write, requests, cost, unpriced_tokens: unpriced,
 });
 const addT = (a: ReturnType<typeof usageTotals>, b: ReturnType<typeof usageTotals>) =>
-  usageTotals(a.input + b.input, a.output + b.output, a.cache_read + b.cache_read, a.cache_write + b.cache_write, a.cost + b.cost, a.unpriced_tokens + b.unpriced_tokens);
+  usageTotals(a.input + b.input, a.output + b.output, a.cache_read + b.cache_read, a.cache_write + b.cache_write, a.cost + b.cost, a.unpriced_tokens + b.unpriced_tokens, a.requests + b.requests);
 const usageRow = (key: string, seed: number, scale: number) => {
   const wave = (k: number) => Math.abs(Math.sin(seed * 1.7 + k)) * scale;
   const c = usageTotals(Math.round(wave(1) * 9000), Math.round(wave(2) * 60000), Math.round(wave(3) * 3_000_000), Math.round(wave(4) * 200000), wave(5) * 9);
@@ -446,7 +446,7 @@ const usageReport = (a: Record<string, unknown>) => {
     summary: {
       totals, days, daily_avg_cost: totals.cost / days, daily_avg_tokens: totals.total_tokens / days,
       peak: peak ? { key: peak.key, cost: peak.totals.cost, tokens: peak.totals.total_tokens } : null,
-      cache_hit_rate: totals.cache_read / Math.max(1, totals.input + totals.cache_read),
+      cache_hit_rate: totals.cache_read / Math.max(1, totals.input + totals.cache_read + totals.cache_write),
     },
     models: ["claude-opus-5-5", "gpt-5.2-codex", "gpt-6.1-sol"],
     unknown_models: ["gpt-6.1-sol"],

@@ -33,7 +33,7 @@ use crate::sync::layout::{
 };
 use crate::sync::manifest::{self, Manifest, ManifestSkill};
 use crate::sync::repo::{blob_id, Auth, CommitInfo, SyncGit, SyncGitError, TreeBlob, TreeEntry};
-use crate::sync::state::SyncedProject;
+use crate::sync::state::{SkipRecord, SyncedProject};
 
 /// Author and committer of every sync commit.
 pub const SYNC_AUTHOR: (&str, &str) = ("MemDock", "memdock@users.noreply.github.com");
@@ -80,6 +80,8 @@ pub struct SyncCtx<'a> {
     pub write_lock: &'a Mutex<()>,
     /// What to do about files that look like they hold secrets.
     pub secrets: SecretPolicy,
+    /// Download only: bring remote changes to this machine, push nothing.
+    pub download: bool,
 }
 
 /// Projects of `index` that take part in sync, as `(key, directory)`; same key
@@ -247,6 +249,18 @@ pub struct SkippedFile {
     pub reason: String,
 }
 
+/// A repository file a download could not place on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AbsentFile {
+    pub repo_path: String,
+    /// `projects/<key>/...` key (best effort for projects absent here).
+    pub project_key: String,
+    /// `no_project`: the project is not on this machine. `no_place`: the
+    /// project is here but the file has nowhere to go yet (auto memory before
+    /// the project's first Claude Code session).
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Action {
     TakeRemote,
@@ -290,8 +304,18 @@ pub struct SyncPlan {
     pub missing_skills: Vec<ManifestSkill>,
     pub removed_elsewhere: Vec<ManifestSkill>,
     pub skipped: Vec<SkippedFile>,
+    /// Built for a download (nothing is pushed).
+    pub download: bool,
+    /// Download: local changes left as they are (not uploaded).
+    pub kept_local: Vec<String>,
+    /// Download: repository files with no place on this machine.
+    pub absent: Vec<AbsentFile>,
     #[serde(skip)]
     entries: Vec<Entry>,
+    /// Download: paths whose base must stay what it was (blob id, `None` =
+    /// absent), because this download did not bring them in line.
+    #[serde(skip)]
+    base_keep: BTreeMap<String, Option<String>>,
     /// `path -> blob id` of the remote head.
     #[serde(skip)]
     remote_tree: BTreeMap<String, TreeEntry>,
@@ -626,7 +650,118 @@ pub fn finish(
     plan: &SyncPlan,
     resolutions: &BTreeMap<String, Resolution>,
 ) -> Result<SyncSummary, SyncError> {
+    if plan.download {
+        return finish_download(ctx, plan, resolutions);
+    }
     run(ctx, plan, resolutions, true, None, Counts::default())
+}
+
+/// Download: writes the remote side to local files and pushes nothing.
+///
+/// The new base is the remote head, except for paths this download left
+/// alone (local changes, files deleted remotely): those keep their old base,
+/// so a later upload still sees them as local changes / remote deletions.
+/// When such paths exist the base is a local-only commit (the remote tree
+/// with those entries put back), kept alive by `refs/memdock/base`.
+fn finish_download(
+    ctx: &SyncCtx,
+    plan: &SyncPlan,
+    resolutions: &BTreeMap<String, Resolution>,
+) -> Result<SyncSummary, SyncError> {
+    let mut outs = outcomes(plan, resolutions)?;
+    for o in &mut outs {
+        o.repo = None;
+    }
+    {
+        let _guard = ctx.write_lock.lock().unwrap_or_else(|p| p.into_inner());
+        apply_local(ctx, &outs)?;
+    }
+    let mut counts = Counts::default();
+    for o in &outs {
+        match o.entry.action {
+            Action::TakeRemote if o.local.is_some() => {
+                counts.pulled.insert(o.entry.repo_path.clone());
+            }
+            Action::Merged(_) | Action::Conflict if o.local.is_some() => {
+                counts.merged.insert(o.entry.repo_path.clone());
+            }
+            _ => {}
+        }
+    }
+    let synced_projects = current_synced(ctx);
+    let old = SyncBase::of(ctx);
+    let fallback = |e: SyncError| after_writes(e, Some(old.clone()));
+    let commit = match &plan.remote_commit {
+        None => ctx.base_commit.clone(),
+        Some(head) if plan.base_keep.is_empty() => Some(head.clone()),
+        Some(head) => {
+            let mut tree: BTreeMap<String, TreeBlob> = plan
+                .remote_tree
+                .iter()
+                .map(|(p, e)| (p.clone(), TreeBlob::Existing(e.clone())))
+                .collect();
+            for (p, sha) in &plan.base_keep {
+                match sha {
+                    Some(sha) => {
+                        tree.insert(
+                            p.clone(),
+                            TreeBlob::Existing(TreeEntry {
+                                mode: "100644".into(),
+                                kind: "blob".into(),
+                                sha: sha.clone(),
+                            }),
+                        );
+                    }
+                    None => {
+                        tree.remove(p);
+                    }
+                }
+            }
+            let c = ctx
+                .git
+                .commit_tree_blobs(ctx.repo_dir, Some(head), &tree, "memdock local base", SYNC_AUTHOR)
+                .map_err(|e| fallback(e.into()))?;
+            ctx.git
+                .keep_ref(ctx.repo_dir, "base", &c)
+                .map_err(|e| fallback(e.into()))?;
+            Some(c)
+        }
+    };
+    Ok(SyncSummary {
+        commit,
+        committed: false,
+        pulled: counts.pulled.len(),
+        pushed: 0,
+        merged: counts.merged.len(),
+        synced_projects,
+        unsynced_paths: plan.unsynced_after.clone(),
+        held_projects: plan.held_after.clone(),
+    })
+}
+
+/// Persistent skip records after `plan` was applied (`now`: ms since epoch).
+/// Paths skipped this time are (re)recorded; older records stay only while
+/// the path is still not synced (still unsynced, or kept local by a download).
+pub fn update_skip_records(
+    plan: &SyncPlan,
+    old: &BTreeMap<String, SkipRecord>,
+    now: i64,
+) -> BTreeMap<String, SkipRecord> {
+    let mut out: BTreeMap<String, SkipRecord> = old
+        .iter()
+        .filter(|(p, _)| plan.unsynced_after.contains(*p) || plan.kept_local.contains(*p))
+        .map(|(p, r)| (p.clone(), r.clone()))
+        .collect();
+    for s in &plan.skipped {
+        out.insert(
+            s.repo_path.clone(),
+            SkipRecord {
+                reason: s.reason.clone(),
+                at: now,
+            },
+        );
+    }
+    out
 }
 
 fn run(

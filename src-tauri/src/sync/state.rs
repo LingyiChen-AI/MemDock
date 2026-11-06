@@ -1,6 +1,6 @@
 //! Persistent sync state (`<appdata>/sync/state.json`). Never holds the token.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
 
@@ -19,6 +19,13 @@ fn default_repo_name() -> String {
 pub struct SyncedProject {
     pub key: String,
     pub dir: String,
+}
+
+/// Why a file was left out of a sync, and when (milliseconds since the epoch).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct SkipRecord {
+    pub reason: String,
+    pub at: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -51,6 +58,9 @@ pub struct SyncState {
     /// until the user decides (no deletion of their synced files is pushed).
     #[serde(default)]
     pub held_projects: BTreeSet<String>,
+    /// Repo paths left out of a sync and not synced since, with the reason.
+    #[serde(default)]
+    pub skipped_files: BTreeMap<String, SkipRecord>,
     /// What blocks sync until the user acts: `public_ack` / `not_ours` / `relogin`.
     #[serde(default)]
     pub needs: Option<String>,
@@ -76,6 +86,7 @@ impl Default for SyncState {
             synced_projects: Vec::new(),
             unsynced_paths: BTreeSet::new(),
             held_projects: BTreeSet::new(),
+            skipped_files: BTreeMap::new(),
             needs: None,
             clone_of: None,
             repo_private: None,
@@ -120,6 +131,13 @@ mod tests {
             }],
             unsynced_paths: BTreeSet::from(["projects/k1/claude/CLAUDE.md".to_string()]),
             held_projects: BTreeSet::from(["k1".to_string()]),
+            skipped_files: BTreeMap::from([(
+                "global/claude/CLAUDE.md".to_string(),
+                SkipRecord {
+                    reason: "secret".into(),
+                    at: 5,
+                },
+            )]),
             ..SyncState::default()
         };
         save_state(&p, &s).unwrap();

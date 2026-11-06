@@ -111,6 +111,7 @@ impl World {
             held: BTreeSet::new(),
             lock: Mutex::new(()),
             git: g,
+            download: false,
         }
     }
 }
@@ -128,6 +129,8 @@ struct Pc {
     held: BTreeSet<String>,
     lock: Mutex<()>,
     git: SyncGit,
+    /// Next prepare builds a download plan.
+    download: bool,
 }
 
 impl Pc {
@@ -183,6 +186,7 @@ impl Pc {
             snapshots: &self.snaps,
             write_lock: &self.lock,
             secrets: Default::default(),
+            download: self.download,
         }
     }
 

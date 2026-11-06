@@ -744,6 +744,7 @@ fn make_ctx<'a>(state: &'a AppState, p: &'a Parts, auth: Auth) -> SyncCtx<'a> {
         snapshots: &state.snapshots,
         write_lock: &state.write_lock,
         secrets: lock(&state.sync.secret_policy).clone(),
+        download: false,
     }
 }
 

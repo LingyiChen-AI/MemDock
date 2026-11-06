@@ -138,7 +138,8 @@ mod tests {
         // missing 1h price falls back to 2x input: gpt-5 1.25 + 10 + 0.125 + 0 + 2.5
         let c = cost(t, &ev("gpt-5-codex")).unwrap();
         assert!((c - 13.875).abs() < 1e-9, "{c}");
-        assert!(cost(t, &ev("gpt-6.1-sol")).is_none());
+        assert!(price_for(t, "gpt-6.1-sol").is_some());
+        assert!(cost(t, &ev("gpt-9-unknown")).is_none());
         // a newer minor version must not inherit an older price
         assert!(cost(t, &ev("claude-opus-4-9")).is_none());
         assert!(price_for(t, "claude-haiku-4-5-20251001").is_some());

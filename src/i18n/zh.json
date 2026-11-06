@@ -990,12 +990,6 @@
     "expand": "展开全文",
     "collapse": "收起",
     "timeline": {
-      "styleLabel": "工具调用显示方式",
-      "usedTools": "调用了 {n} 个工具",
-      "view": "查看",
-      "dialogTitle": "这一轮的工具调用（{n}）",
-      "dialogDesc": "按调用顺序列出参数和输出。",
-      "styles": { "chips": "胶囊", "summary": "摘要", "trace": "轨迹" },
       "filterLabel": "按类型筛选",
       "all": "全部",
       "chat": "对话",

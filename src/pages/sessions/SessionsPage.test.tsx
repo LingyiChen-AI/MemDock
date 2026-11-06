@@ -115,19 +115,12 @@ describe("SessionsPage", () => {
     expect(screen.getByText("没有匹配的会话")).toBeInTheDocument();
   });
 
-  it("timeline folds tool calls into the turn, opens them in a dialog and filters by type", async () => {
+  it("timeline shows typed tool rows and filters by type", async () => {
     renderApp(<SessionsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
-    expect(await screen.findByText("Fixed.")).toBeInTheDocument();
-    expect(screen.getByText(/调用了 2 个工具 · Bash · Read/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /调用了 2 个工具/ }));
-    const dialog = await screen.findByRole("dialog", { name: "这一轮的工具调用（2）" });
-    expect(within(dialog).getByText("cargo build")).toBeInTheDocument();
-    expect(within(dialog).getByText("no such file")).toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-    await userEvent.click(screen.getByRole("radio", { name: "轨迹" }));
-    expect(screen.getByText("cargo build")).toBeInTheDocument();
+    expect(await screen.findByText("cargo build")).toBeInTheDocument();
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
+    expect(screen.getByText("2 个工具调用")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("radio", { name: /出错/ }));
     expect(screen.queryByText("cargo build")).not.toBeInTheDocument();
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
@@ -137,7 +130,7 @@ describe("SessionsPage", () => {
   it("previews, confirms and shows the resume command", async () => {
     renderApp(<SessionsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
-    expect(await screen.findByText("Fixed.")).toBeInTheDocument();
+    expect(await screen.findByText("cargo build")).toBeInTheDocument();
     expect(screen.getByText("1 个 shell 命令保留为工具调用")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "转换为 Codex 会话" }));
@@ -157,7 +150,7 @@ describe("SessionsPage", () => {
       .mockResolvedValueOnce(result);
     renderApp(<SessionsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
-    await screen.findByText("Fixed.");
+    await screen.findByText("cargo build");
     await userEvent.click(screen.getByRole("button", { name: "转换为 Codex 会话" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "转换" }));
     const again = await screen.findByRole("alertdialog");

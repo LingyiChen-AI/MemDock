@@ -523,3 +523,117 @@ pub fn convert_session(
 #[cfg(test)]
 #[path = "commands_sessions_tests.rs"]
 mod tests;
+
+/// How full a session's context window is, from its last recorded model request.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SessionContext {
+    /// Tokens of the last request's prompt (what the model saw).
+    pub used: u64,
+    /// The model's context window.
+    pub window: u64,
+    pub model: Option<String>,
+}
+
+/// Bytes read from the end of a session file to find the last usage record.
+const CONTEXT_TAIL: u64 = 4 * 1024 * 1024;
+
+/// Claude 5-series models (and `[1m]` variants) have a 1M-token window; older ones 200K.
+/// The bare aliases (`opus`, `sonnet`, `haiku`, `fable`, `default`) are the current 5-series models.
+pub fn claude_context_window(model: &str) -> u64 {
+    let m = model.trim().to_ascii_lowercase();
+    if m.contains("[1m]") || matches!(m.as_str(), "opus" | "sonnet" | "haiku" | "fable" | "default") {
+        return 1_000_000;
+    }
+    // claude-<family>-<major>[-<minor>...]
+    let major = m
+        .strip_prefix("claude-")
+        .and_then(|rest| rest.split('-').nth(1))
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    if major >= 5 { 1_000_000 } else { 200_000 }
+}
+
+fn tail_lines(path: &Path) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else { return vec![] };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(CONTEXT_TAIL);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return vec![];
+    }
+    let mut buf = Vec::new();
+    let _ = f.read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0); // probably cut in the middle
+    }
+    lines
+}
+
+/// Last main-thread assistant usage of a Claude Code session (jsonl lines).
+pub fn claude_context(lines: &[String]) -> Option<SessionContext> {
+    for l in lines.iter().rev() {
+        if !l.contains("\"usage\"") || !l.contains("\"assistant\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(l) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") || v.get("isSidechain").and_then(|s| s.as_bool()) == Some(true) {
+            continue;
+        }
+        let msg = v.get("message")?;
+        let model = msg.get("model").and_then(|m| m.as_str()).filter(|m| !m.starts_with('<')).map(String::from);
+        let u = msg.get("usage")?;
+        let n = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let used = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        if used == 0 {
+            continue;
+        }
+        let window = claude_context_window(model.as_deref().unwrap_or(""));
+        return Some(SessionContext { used, window, model });
+    }
+    None
+}
+
+/// Last `token_count` event of a Codex rollout.
+pub fn codex_context(lines: &[String]) -> Option<SessionContext> {
+    let model = lines.iter().rev().find_map(|l| {
+        if !l.contains("\"turn_context\"") {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(l).ok()?;
+        v.pointer("/payload/model").and_then(|m| m.as_str()).map(String::from)
+    });
+    for l in lines.iter().rev() {
+        if !l.contains("\"token_count\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(l) else { continue };
+        let Some(info) = v.pointer("/payload/info").filter(|i| i.is_object()) else { continue };
+        let window = info.get("model_context_window").and_then(|w| w.as_u64()).unwrap_or(0);
+        let last = info.get("last_token_usage");
+        let used = last.and_then(|x| x.get("total_tokens")).and_then(|x| x.as_u64()).unwrap_or(0);
+        if window == 0 || used == 0 {
+            continue;
+        }
+        return Some(SessionContext { used, window, model });
+    }
+    None
+}
+
+pub fn session_context_impl(paths: &AgentPaths, tool: Tool, path: &str) -> Result<Option<SessionContext>, CommandError> {
+    let p = authorize(paths, tool, path)?;
+    if p.extension().and_then(|e| e.to_str()) == Some("zst") {
+        return Ok(None);
+    }
+    let lines = tail_lines(&p);
+    Ok(match tool {
+        Tool::Claude => claude_context(&lines),
+        Tool::Codex => codex_context(&lines),
+    })
+}
+
+#[tauri::command(async)]
+pub fn session_context(ss: Ss, tool: Tool, path: String) -> Result<Option<SessionContext>, CommandError> {
+    session_context_impl(&ss.app.paths, tool, &path)
+}

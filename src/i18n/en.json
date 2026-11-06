@@ -1225,6 +1225,12 @@
     "quit": "Quit MemDock"
   },
   "chat": {
+    "meters": {
+      "context": "Context",
+      "contextHint": "Context {used} / {window} ({model})",
+      "weekly": "Week",
+      "weeklyHint": "Weekly quota used (from the usage page's quota lookup, refreshed every 30 minutes)"
+    },
     "title": "Chat",
     "subtitle": "Every Claude Code and Codex session on this computer; open any of them and keep talking",
     "newChat": "New chat",

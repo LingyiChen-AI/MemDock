@@ -48,6 +48,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
 import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
 import { resolveNewChatDir } from "@/pages/chat/newChatDir";
+import { ContextMeters } from "@/pages/chat/ContextMeter";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { Pencil } from "lucide-react";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
@@ -1117,6 +1118,14 @@ function ChatPane({
             key={termKey}
             stateKey={termKey}
             c={c}
+            meters={
+              <ContextMeters
+                tool={target.tool}
+                path={session?.path ?? null}
+                refreshKey={`${session?.updated_at ?? ""}:${lc?.conv.lastUsage ? JSON.stringify(lc.conv.lastUsage) : ""}:${live?.state ?? ""}`}
+                t={c.meters}
+              />
+            }
             agent={target.tool}
             cwd={target.cwd}
             disabled={wtDeleted || creatingWt}

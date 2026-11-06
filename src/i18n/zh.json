@@ -1225,6 +1225,12 @@
     "quit": "退出 MemDock"
   },
   "chat": {
+    "meters": {
+      "context": "上下文",
+      "contextHint": "当前上下文 {used} / {window}（{model}）",
+      "weekly": "本周",
+      "weeklyHint": "本周额度已用比例（来自用量页的额度查询，30 分钟更新一次）"
+    },
     "title": "对话",
     "subtitle": "本机所有 Claude Code、Codex 会话都在这里，打开任意一个就能接着聊",
     "newChat": "新对话",

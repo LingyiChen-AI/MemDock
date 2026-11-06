@@ -273,3 +273,50 @@ fn summaries_persist_across_restarts() {
     let after = list_sessions_impl(&e.paths, &e.data, &reloaded);
     assert_eq!(after.iter().find(|s| s.tool == Tool::Claude).unwrap().title.as_deref(), Some("New name"));
 }
+
+#[test]
+fn context_window_by_model() {
+    assert_eq!(claude_context_window("claude-opus-5-5"), 1_000_000);
+    assert_eq!(claude_context_window("claude-fable-5-1"), 1_000_000);
+    assert_eq!(claude_context_window("claude-haiku-5-5"), 1_000_000);
+    assert_eq!(claude_context_window("opus"), 1_000_000);
+    assert_eq!(claude_context_window("claude-sonnet-4-5"), 200_000);
+    assert_eq!(claude_context_window("claude-haiku-4-5-20251001"), 200_000);
+    assert_eq!(claude_context_window("claude-sonnet-4-6[1m]"), 1_000_000);
+    assert_eq!(claude_context_window(""), 200_000);
+}
+
+#[test]
+fn context_from_last_usage_records() {
+    let claude = vec![
+        r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":2,"cache_read_input_tokens":100,"cache_creation_input_tokens":8}}}"#.to_string(),
+        r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-5-5","usage":{"input_tokens":9,"cache_read_input_tokens":999}}}"#.to_string(),
+        r#"{"type":"user","message":{"content":"hi"}}"#.to_string(),
+    ];
+    let c = claude_context(&claude).unwrap();
+    assert_eq!((c.used, c.window, c.model.as_deref()), (110, 1_000_000, Some("claude-opus-5-5")));
+    let codex = vec![
+        r#"{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}"#.to_string(),
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":17073},"model_context_window":475000}}}"#.to_string(),
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#.to_string(),
+    ];
+    let x = codex_context(&codex).unwrap();
+    assert_eq!((x.used, x.window, x.model.as_deref()), (17073, 475000, Some("gpt-6.1-sol")));
+    assert_eq!(claude_context(&[]), None);
+}
+
+/// `cargo test --lib real_session_context -- --ignored --nocapture`: the newest real session of each tool.
+#[test]
+#[ignore]
+fn real_session_context() {
+    let paths = AgentPaths::detect();
+    let cache = Mutex::new(HashMap::new());
+    let data = tempfile::tempdir().unwrap();
+    let list = list_sessions_impl(&paths, data.path(), &cache);
+    for tool in [Tool::Claude, Tool::Codex] {
+        if let Some(s) = list.iter().find(|s| s.tool == tool) {
+            let c = session_context_impl(&paths, tool, &s.path).unwrap();
+            println!("{tool:?} {}: {c:?} -> {:.0}%", s.title.clone().unwrap_or_default(), c.as_ref().map(|c| c.used as f64 * 100.0 / c.window as f64).unwrap_or(0.0));
+        }
+    }
+}

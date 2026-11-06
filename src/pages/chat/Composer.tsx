@@ -89,6 +89,8 @@ export interface ProjectChoice {
 
 export interface ComposerProps {
   c: C;
+  /** Shown right after the model in the toolbar (context window / weekly quota meters). */
+  meters?: React.ReactNode;
   agent: LiveAgent;
   /** Session folder: dropped files inside it are inserted as relative paths; `@` lists its files. */
   cwd: string;
@@ -541,6 +543,7 @@ function StatusItem({
  */
 export function ChatComposer({
   c,
+  meters,
   agent,
   cwd,
   disabled = false,
@@ -1183,6 +1186,7 @@ export function ChatComposer({
                   {changed.has("model") ? <span className="shrink-0 rounded bg-amber-500/12 px-1 text-[10px] text-amber-700 dark:text-amber-300">{k.nextTime}</span> : null}
                   <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden="true" />
                 </button>
+                {meters}
                 <span className="flex-1" />
                 {running && onStop ? (
                   <Tip tip={c.stopHint}>

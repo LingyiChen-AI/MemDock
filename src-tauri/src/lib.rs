@@ -217,6 +217,7 @@ pub fn run() {
             commands_sessions::list_sessions,
             commands_sessions::session_preview,
             commands_sessions::rename_session,
+            commands_sessions::session_context,
             commands_sessions::convert_target_dir,
             commands_sessions::convert_session,
             commands_ghimport::gh_import_scan,

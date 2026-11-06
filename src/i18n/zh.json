@@ -731,6 +731,30 @@
       "d": "{d} 天 {h} 小时",
       "h": "{h} 小时 {m} 分",
       "m": "{m} 分钟"
+    },
+    "kpi": {
+      "cost": "总花费",
+      "requests": "请求数",
+      "tokens": "总 Tokens",
+      "hitRate": "缓存命中率",
+      "dailyAvg": "日均 {value}",
+      "hitRateSub": "缓存读 / 全部输入",
+      "tokensSub": "输入 {input} · 输出 {output}"
+    },
+    "heatmap": {
+      "title": "每日活跃",
+      "metric": "着色依据",
+      "tokens": "Tokens",
+      "cost": "费用",
+      "requests": "请求",
+      "less": "少",
+      "more": "多",
+      "mon": "一",
+      "wed": "三",
+      "fri": "五",
+      "aria": "{from} 至 {to} 每日用量热力图",
+      "activeDays": "{n} 天有用量",
+      "loadFailed": "热力图加载失败：{error}"
     }
   },
   "settings": {

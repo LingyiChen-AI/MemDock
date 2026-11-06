@@ -585,6 +585,8 @@ export interface UsageTotals {
   cache_read: number;
   cache_write: number;
   total_tokens: number;
+  /** Billed model requests after deduplication. */
+  requests: number;
   /** Estimated USD for the priced part. */
   cost: number;
   /** Tokens of models without a known price (not in `cost`). */
@@ -612,6 +614,7 @@ export interface UsageSummary {
   daily_avg_cost: number;
   daily_avg_tokens: number;
   peak: { key: string; cost: number; tokens: number } | null;
+  /** cache_read / (input + cache_read + cache_write); null without input. */
   cache_hit_rate: number | null;
 }
 

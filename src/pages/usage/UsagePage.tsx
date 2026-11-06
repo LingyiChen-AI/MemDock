@@ -11,8 +11,10 @@ import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { errorMessage } from "@/pages/skills/skillUtils";
 import { QuotaCards } from "./QuotaCards";
 import { UsageChart } from "./UsageChart";
+import { UsageHeatmap } from "./UsageHeatmap";
+import { UsageKpis } from "./UsageKpis";
 import { UsageTable } from "./UsageTable";
-import { fmtCost, fmtPct, fmtTokens, localDate, monthRange, presetRange, PRESETS, type RangePreset } from "./usageUtils";
+import { localDate, monthRange, presetRange, PRESETS, type RangePreset } from "./usageUtils";
 
 const QUOTA_REFRESH_MS = 60_000;
 
@@ -37,16 +39,6 @@ function Segmented<T extends string>({ value, options, onChange, label }: { valu
           {o.label}
         </button>
       ))}
-    </div>
-  );
-}
-
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-card px-4 py-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="truncate text-[22px] leading-7 font-semibold tabular-nums">{value}</span>
-      {sub ? <span className="truncate text-xs text-muted-foreground tabular-nums">{sub}</span> : null}
     </div>
   );
 }
@@ -188,9 +180,6 @@ export function UsagePage() {
     }
   };
 
-  const s = report?.summary;
-  const peakLabel = view === "today" ? u.summary.peakHour : view === "monthly" ? u.summary.peakMonth : u.summary.peakDay;
-  const peakKey = s?.peak ? (view === "today" ? `${s.peak.key}:00` : s.peak.key) : null;
   const modelOptions = report ? Array.from(new Set([...report.models, ...(model === "all" ? [] : [model])])) : [];
 
   return (
@@ -294,23 +283,10 @@ export function UsagePage() {
           </p>
         ) : null}
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-          <Stat label={u.summary.cost} value={s ? fmtCost(s.totals.cost) : "—"} />
-          <Stat label={u.summary.tokens} value={s ? fmtTokens(s.totals.total_tokens) : "—"} />
-          <Stat
-            label={u.summary.dailyAvg}
-            value={s ? fmtCost(s.daily_avg_cost) : "—"}
-            sub={s ? `${fmtTokens(s.daily_avg_tokens)} tokens` : undefined}
-          />
-          <Stat
-            label={peakLabel}
-            value={s?.peak ? (s.peak.cost > 0 ? fmtCost(s.peak.cost) : fmtTokens(s.peak.tokens)) : u.summary.none}
-            sub={peakKey ?? undefined}
-          />
-          <Stat label={u.summary.hitRate} value={s ? fmtPct(s.cache_hit_rate) : "—"} />
-        </div>
+        <UsageKpis report={report} view={view} />
 
         {report ? <UsageChart report={report} onPick={pickBar} /> : <div className="h-64 animate-pulse rounded-lg bg-muted motion-reduce:animate-none" />}
+        <UsageHeatmap view={view} range={range} tools={query.tools} models={query.models} version={report} />
         {report ? <UsageTable report={report} focusKey={focusKey} /> : null}
 
         {report ? (

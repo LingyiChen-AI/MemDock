@@ -37,7 +37,7 @@ pub enum Agent {
 ///
 /// | mode        | Claude Code                                         | Codex (approvalPolicy / sandbox)       |
 /// |-------------|-----------------------------------------------------|----------------------------------------|
-/// | `ask`       | `--permission-mode default` + prompt tool `stdio`   | `untrusted` / `workspace-write`        |
+/// | `ask`       | `--permission-mode default` + prompt tool `stdio`   | `on-request` / `read-only`             |
 /// | `auto_edit` | `--permission-mode acceptEdits` + prompt tool       | `on-request` / `workspace-write`       |
 /// | `plan`      | `--permission-mode plan` + prompt tool              | `on-request` / `read-only`             |
 /// | `bypass`    | `--dangerously-skip-permissions`                    | `never` / `danger-full-access`         |

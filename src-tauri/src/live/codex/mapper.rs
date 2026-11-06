@@ -80,7 +80,8 @@ pub struct Mapper {
 /// `(approvalPolicy, sandbox)` for a permission mode (see the table in `live`).
 pub fn codex_policy(mode: PermissionMode) -> (&'static str, &'static str) {
     match mode {
-        PermissionMode::Ask => ("untrusted", "workspace-write"),
+        // Codex no longer supports "untrusted": a read-only sandbox makes every write ask.
+        PermissionMode::Ask => ("on-request", "read-only"),
         PermissionMode::AutoEdit => ("on-request", "workspace-write"),
         PermissionMode::Plan => ("on-request", "read-only"),
         PermissionMode::Bypass => ("never", "danger-full-access"),

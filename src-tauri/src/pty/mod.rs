@@ -66,7 +66,7 @@ fn clean(v: &Option<String>) -> Option<&str> {
 ///
 /// | mode        | Claude Code                          | Codex                                        |
 /// |-------------|--------------------------------------|----------------------------------------------|
-/// | `ask`       | (default)                            | `-c approval_policy=untrusted -s workspace-write` |
+/// | `ask`       | (default)                            | `-a on-request -s read-only`                 |
 /// | `auto_edit` | `--permission-mode acceptEdits`      | `-a on-request -s workspace-write`           |
 /// | `plan`      | `--permission-mode plan`             | `-a on-request -s read-only`                 |
 /// | `bypass`    | `--dangerously-skip-permissions`     | `--dangerously-bypass-approvals-and-sandbox` |
@@ -93,8 +93,8 @@ pub fn build_args(opts: &PtyOpenOptions) -> Vec<String> {
                 a.push("resume".into());
             }
             match opts.permission {
-                // `codex resume -a` only accepts on-request / never; the config key takes `untrusted`.
-                PermissionMode::Ask => s(&mut a, &["-c", "approval_policy=untrusted", "-s", "workspace-write"]),
+                // Codex no longer supports "untrusted": a read-only sandbox makes every write ask.
+                PermissionMode::Ask => s(&mut a, &["-a", "on-request", "-s", "read-only"]),
                 PermissionMode::AutoEdit => s(&mut a, &["-a", "on-request", "-s", "workspace-write"]),
                 PermissionMode::Plan => s(&mut a, &["-a", "on-request", "-s", "read-only"]),
                 PermissionMode::Bypass => s(&mut a, &["--dangerously-bypass-approvals-and-sandbox"]),

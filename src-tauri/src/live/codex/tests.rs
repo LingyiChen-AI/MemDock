@@ -32,7 +32,7 @@ fn ready() -> Mapper {
 
 #[test]
 fn policy_table() {
-    assert_eq!(codex_policy(PermissionMode::Ask), ("untrusted", "workspace-write"));
+    assert_eq!(codex_policy(PermissionMode::Ask), ("on-request", "read-only"));
     assert_eq!(codex_policy(PermissionMode::AutoEdit), ("on-request", "workspace-write"));
     assert_eq!(codex_policy(PermissionMode::Plan), ("on-request", "read-only"));
     assert_eq!(codex_policy(PermissionMode::Bypass), ("never", "danger-full-access"));

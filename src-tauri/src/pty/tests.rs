@@ -31,7 +31,7 @@ fn claude_args_per_mode() {
 #[test]
 fn codex_args_per_mode() {
     use PermissionMode::*;
-    assert_eq!(args(&opts(Agent::Codex, None, Ask, None)), "-c approval_policy=untrusted -s workspace-write");
+    assert_eq!(args(&opts(Agent::Codex, None, Ask, None)), "-a on-request -s read-only");
     assert_eq!(
         args(&opts(Agent::Codex, Some("t-1"), AutoEdit, Some("gpt-5"))),
         "resume -a on-request -s workspace-write -m gpt-5 t-1"
@@ -254,6 +254,44 @@ fn real_codex_resume_args_accepted() {
         }
         mgr.close(&id);
         eprintln!("{mode:?}: {:?}", out.chars().filter(|c| !c.is_control()).take(200).collect::<String>());
-        assert!(!out.contains("invalid value") && !out.contains("unexpected argument"), "{mode:?}: {out:?}");
+        assert!(!out.contains("invalid value") && !out.contains("unexpected argument") && !out.contains("Error loading configuration"), "{mode:?}: {out:?}");
     }
+}
+
+/// Real: opens the TUI of an existing Codex session (`MEMDOCK_CODEX_ID`, cwd `MEMDOCK_CODEX_CWD`)
+/// and prints the visible text of its first screen. Nothing is typed.
+#[test]
+#[ignore]
+fn real_codex_resume_screen() {
+    let (Ok(sid), Ok(cwd)) = (std::env::var("MEMDOCK_CODEX_ID"), std::env::var("MEMDOCK_CODEX_CWD")) else { return };
+    let Some(p) = find_program(OsStr::new("codex"), &path_dirs()) else { return };
+    let (tx, rx) = mpsc::channel::<(String, serde_json::Value)>();
+    let tx = Mutex::new(tx);
+    let mgr = PtyManager::new(Arc::new(move |name: &str, v: serde_json::Value| {
+        let _ = tx.lock().unwrap().send((name.to_string(), v));
+    }));
+    let mut o = opts(Agent::Codex, Some(&sid), PermissionMode::Ask, None);
+    o.cwd = cwd;
+    o.cols = 120;
+    o.rows = 40;
+    eprintln!("args: {:?}", build_args(&o));
+    let id = mgr.open_program(&p, &build_args(&o), &o, &path_dirs()).expect("open");
+    let mut out = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if let Ok((name, v)) = rx.recv_timeout(Duration::from_millis(200)) {
+            if name == "pty://exit" {
+                eprintln!("EXIT {v}");
+                break;
+            }
+            let d = v["data"].as_str().unwrap_or_default();
+            answer_cursor_query(&mgr, &id, d);
+            out.push_str(d);
+        }
+    }
+    mgr.close(&id);
+    let re = regex::Regex::new(r"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>78]").unwrap();
+    let text = re.replace_all(&out, " ");
+    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    eprintln!("SCREEN: {}", text.chars().take(1500).collect::<String>());
 }

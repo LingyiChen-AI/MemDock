@@ -4,6 +4,7 @@ import {
   BookOpen,
   ChevronDown,
   ListChecks,
+  History,
   MessagesSquare,
   Package,
   Palette,
@@ -12,6 +13,7 @@ import {
   RefreshCw,
   Settings,
   Sparkles,
+  SquarePen,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -41,11 +43,18 @@ import logoUrl from "@/assets/memdock-logo.svg";
 
 export const PROJECT_URL = "https://github.com/LingyiChen-AI/MemDock";
 
-export type NavKey = "memory" | "review" | "extract" | "skills" | "sessions" | "sync" | "usage" | "settings";
+export type NavKey = "chat" | "sessions" | "memory" | "review" | "extract" | "skills" | "sync" | "usage" | "settings";
 
-type NavGroupKey = "memory" | "tools" | "data" | "system";
+type NavGroupKey = "work" | "memory" | "tools" | "data" | "system";
 
 const NAV_GROUPS: { key: NavGroupKey; items: { key: NavKey; icon: LucideIcon }[] }[] = [
+  {
+    key: "work",
+    items: [
+      { key: "chat", icon: MessagesSquare },
+      { key: "sessions", icon: History },
+    ],
+  },
   {
     key: "memory",
     items: [
@@ -56,10 +65,7 @@ const NAV_GROUPS: { key: NavGroupKey; items: { key: NavKey; icon: LucideIcon }[]
   },
   {
     key: "tools",
-    items: [
-      { key: "skills", icon: Package },
-      { key: "sessions", icon: MessagesSquare },
-    ],
+    items: [{ key: "skills", icon: Package }],
   },
   {
     key: "data",
@@ -95,6 +101,29 @@ export interface AppShellProps {
   children?: React.ReactNode;
   /** Content of the other pages that already exist; the rest render the placeholder. */
   pages?: Partial<Record<NavKey, React.ReactNode>>;
+  /** The "New chat" button at the top of the sidebar; hidden when not set. */
+  onNewChat?: () => void;
+}
+
+/** Prominent "New chat" entry above the nav groups; icon-only when the sidebar is collapsed. */
+function NewChatButton({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n();
+  const label = t.shell.newChat;
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          type="button"
+          tooltip={label}
+          onClick={onClick}
+          className="h-9 cursor-pointer justify-center gap-2 rounded-md border border-primary/30 bg-primary/10 px-2.5 font-semibold text-primary transition-colors duration-150 hover:bg-primary/16 hover:text-primary motion-reduce:transition-none group-data-[collapsible=icon]:justify-center"
+        >
+          <SquarePen aria-hidden="true" />
+          <span>{label}</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
+  );
 }
 
 function CollapseToggle() {
@@ -165,7 +194,7 @@ function AppearanceButton() {
   );
 }
 
-export function AppShell({ current, onNavigate, badges, status, children, pages }: AppShellProps) {
+export function AppShell({ current, onNavigate, badges, status, children, pages, onNewChat }: AppShellProps) {
   const { t } = useI18n();
   const page = NAV.find((n) => n.key === current)!;
   const [collapsed, setCollapsed] = React.useState<NavGroupKey[]>(loadCollapsed);
@@ -190,6 +219,11 @@ export function AppShell({ current, onNavigate, badges, status, children, pages 
           </div>
         </SidebarHeader>
         <SidebarContent className="px-2">
+          {onNewChat ? (
+            <div className="pb-1">
+              <NewChatButton onClick={onNewChat} />
+            </div>
+          ) : null}
           {NAV_GROUPS.map((group) => {
             const folded = collapsed.includes(group.key) && !group.items.some((i) => i.key === current);
             return (

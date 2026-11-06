@@ -1,6 +1,6 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
+import { ArrowLeftRight, Check, MessageSquarePlus, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
@@ -14,7 +14,7 @@ import { fmt } from "@/pages/memory/paths";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
 import { Timeline } from "./Timeline";
-import { filterSessions, formatTime, groupByProject, otherTool, type ToolFilter } from "./sessionsUtils";
+import { filterSessions, formatTime, groupByProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
 
 type S = Messages["sessions"];
 
@@ -152,14 +152,6 @@ function CopyButton({ text, s, iconOnly = false }: { text: string; s: S; iconOnl
   );
 }
 
-/** Same format as `convert::resume_command` on the Rust side. */
-function resumeCommand(tool: Tool, cwd: string, id: string): string {
-  // Windows PowerShell 5 has no `&&`; `;` works in PowerShell 5 and 7.
-  const sep = /Windows/i.test(navigator.userAgent) ? ";" : " &&";
-  const cd = cwd ? `cd "${cwd}"${sep} ` : "";
-  return tool === "claude" ? `${cd}claude --resume ${id}` : `${cd}codex resume ${id}`;
-}
-
 /** Terminal-style card: label + copy in the header, the command on one scrollable line. */
 function CommandCard({ label, command, footer, s }: { label: string; command: string; footer?: React.ReactNode; s: S }) {
   return (
@@ -270,6 +262,8 @@ function PreviewPane({
   result,
   converting,
   onConvert,
+  continuing,
+  onContinue,
   s,
 }: {
   session: SessionSummary;
@@ -278,6 +272,8 @@ function PreviewPane({
   result: ConvertResult | null;
   converting: boolean;
   onConvert: () => void;
+  continuing: boolean;
+  onContinue?: () => void;
   s: S;
 }) {
   const target = otherTool(session.tool);
@@ -310,12 +306,20 @@ function PreviewPane({
               ) : null}
             </div>
           </div>
-          {session.converted_from?.tool === target ? null : (
-          <Button type="button" size="sm" className="shrink-0 cursor-pointer" disabled={converting || !preview} onClick={onConvert}>
-            {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
-            {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[target] })}
-          </Button>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {onContinue ? (
+              <Button type="button" variant="outline" size="sm" className="cursor-pointer" title={s.continueChatHint} disabled={continuing} onClick={onContinue}>
+                {continuing ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <MessageSquarePlus aria-hidden="true" />}
+                {s.continueChat}
+              </Button>
+            ) : null}
+            {session.converted_from?.tool === target ? null : (
+              <Button type="button" size="sm" className="cursor-pointer" disabled={converting || !preview} onClick={onConvert}>
+                {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
+                {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[target] })}
+              </Button>
+            )}
+          </div>
         </div>
         {result ? <ResultCard result={result} s={s} /> : <ResumeCommands session={session} s={s} />}
       </div>
@@ -340,7 +344,12 @@ interface Confirm {
   force: boolean;
 }
 
-export function SessionsPage() {
+export interface SessionsPageProps {
+  /** Continues the session as a live chat; rejects with a message to show. */
+  onContinueChat?: (session: SessionSummary) => Promise<void>;
+}
+
+export function SessionsPage({ onContinueChat }: SessionsPageProps = {}) {
   const { t } = useI18n();
   const s = t.sessions;
   const [sessions, setSessions] = React.useState<SessionSummary[] | null>(null);
@@ -355,6 +364,21 @@ export function SessionsPage() {
   const [converting, setConverting] = React.useState(false);
   const [convertError, setConvertError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<ConvertResult | null>(null);
+  const [continuing, setContinuing] = React.useState(false);
+  const [continueError, setContinueError] = React.useState<string | null>(null);
+
+  const continueChat = async (x: SessionSummary) => {
+    if (!onContinueChat) return;
+    setContinuing(true);
+    setContinueError(null);
+    try {
+      await onContinueChat(x);
+    } catch (e) {
+      setContinueError(errorMessage(e));
+    } finally {
+      setContinuing(false);
+    }
+  };
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -400,6 +424,7 @@ export function SessionsPage() {
     setSelectedKey(sessionKey(x));
     setResult(null);
     setConvertError(null);
+    setContinueError(null);
   };
 
   const askConvert = async () => {
@@ -518,6 +543,11 @@ export function SessionsPage() {
               {fmt(s.convertFailed, { error: convertError })}
             </p>
           ) : null}
+          {continueError ? (
+            <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+              {fmt(s.continueFailed, { error: continueError })}
+            </p>
+          ) : null}
           {selected ? (
             <PreviewPane
               session={selected}
@@ -526,6 +556,8 @@ export function SessionsPage() {
               result={result}
               converting={converting}
               onConvert={() => void askConvert()}
+              continuing={continuing}
+              onContinue={onContinueChat ? () => void continueChat(selected) : undefined}
               s={s}
             />
           ) : (

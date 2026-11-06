@@ -27,7 +27,7 @@ type ToolItem = Extract<TimelineItem, { type: "tool" }>;
 type TextItem = Exclude<TimelineItem, ToolItem>;
 export type TimelineFilter = "all" | "chat" | "tools" | "shell" | "files" | "errors";
 
-const KIND_ICON: Record<ToolKind, LucideIcon> = {
+export const KIND_ICON: Record<ToolKind, LucideIcon> = {
   shell: SquareTerminal,
   read: FileText,
   edit: FilePen,
@@ -39,7 +39,7 @@ const KIND_ICON: Record<ToolKind, LucideIcon> = {
   other: Wrench,
 };
 
-const KIND_TONE: Record<ToolKind, string> = {
+export const KIND_TONE: Record<ToolKind, string> = {
   shell: "text-emerald-600 dark:text-emerald-400",
   read: "text-sky-600 dark:text-sky-400",
   edit: "text-amber-600 dark:text-amber-400",
@@ -52,7 +52,7 @@ const KIND_TONE: Record<ToolKind, string> = {
 };
 
 /** Chips shown in one run before the rest fold into a "+N" chip. */
-const CHIP_FOLD = 8;
+export const CHIP_FOLD = 8;
 
 function matches(it: TimelineItem, f: TimelineFilter): boolean {
   switch (f) {
@@ -327,7 +327,7 @@ function ToolDialog({ it, onClose, s }: { it: ToolItem | null; onClose: () => vo
   );
 }
 
-function IoBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
+export function IoBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <span className={cn("text-[11px] font-medium", error ? "text-destructive" : "text-muted-foreground")}>{label}</span>

@@ -1,15 +1,17 @@
 {
   "nav": {
+    "chat": "Chat",
     "memory": "Memories",
     "review": "Memory review",
     "extract": "Memory extraction",
     "skills": "Skills",
-    "sessions": "Session convert",
+    "sessions": "History",
     "sync": "Memory sync",
     "usage": "Usage",
     "settings": "Settings"
   },
   "navGroups": {
+    "work": "Work",
     "memory": "Memory",
     "tools": "Tools",
     "data": "Data",
@@ -23,7 +25,8 @@
     "leaveTitle": "Discard unsaved changes?",
     "leaveBody": "Leaving this page loses the unsaved edits.",
     "leaveConfirm": "Discard and leave",
-    "leaveKeep": "Keep editing"
+    "leaveKeep": "Keep editing",
+    "newChat": "New chat"
   },
   "placeholder": {
     "comingSoon": "Coming soon"
@@ -1135,10 +1138,135 @@
     "tools": {
       "claude": "Claude Code",
       "codex": "Codex"
-    }
+    },
+    "continueChat": "Continue chat",
+    "continueChatHint": "Continue this session in MemDock",
+    "continueFailed": "Failed to continue: {error}"
   },
   "tray": {
     "show": "Show MemDock",
     "quit": "Quit MemDock"
+  },
+  "chat": {
+    "title": "Chat",
+    "subtitle": "Talk to Claude Code and Codex right in MemDock; approvals they need show up here",
+    "newChat": "New chat",
+    "listLabel": "Conversations",
+    "loading": "Loading conversations…",
+    "listFailed": "Failed to load conversations: {error}",
+    "emptyList": "No conversations yet",
+    "emptyTitle": "Start a new chat",
+    "emptyHint": "Pick a project folder and let Claude Code or Codex work in it, or continue an earlier session from History.",
+    "selectHint": "Select a conversation on the left",
+    "untitled": "New chat",
+    "agents": {
+      "claude": "Claude Code",
+      "codex": "Codex"
+    },
+    "states": {
+      "starting": "Starting",
+      "idle": "Idle",
+      "running": "Running",
+      "waiting_approval": "Needs approval",
+      "exited": "Ended"
+    },
+    "permissions": {
+      "ask": "Ask every time",
+      "auto_edit": "Auto-approve edits",
+      "plan": "Read-only plan",
+      "bypass": "Skip all prompts"
+    },
+    "permissionHints": {
+      "ask": "Asks before running commands or editing files",
+      "auto_edit": "File edits run without asking; commands still ask first",
+      "plan": "Read-only: reads code and plans, never changes files",
+      "bypass": "Never asks about anything"
+    },
+    "bypassWarning": "Dangerous: the agent can run any command and edit any file without asking.",
+    "bypassCodex": "For Codex this also disables the sandbox (danger-full-access): commands can reach the whole machine and network.",
+    "model": "Model",
+    "modelDefault": "Default model",
+    "stop": "Stop",
+    "stopHint": "Interrupt the current turn; the session stays open",
+    "openInTerminal": "Open in terminal",
+    "openInTerminalHint": "Copy the command that continues this session in a terminal",
+    "copied": "Command copied; paste it into a terminal",
+    "copyFailed": "Copy failed",
+    "noNativeId": "The session has not finished starting, so there is no session ID yet",
+    "end": "End session",
+    "endHint": "Ends the process; the conversation stays listed and can be continued from History",
+    "remove": "Remove from list",
+    "removeHint": "Ends the process and removes it from the list",
+    "inputLabel": "Message",
+    "inputPlaceholder": "Type a message; Enter sends, Shift+Enter adds a line",
+    "inputQueued": "Running: messages you send are queued until this turn ends",
+    "inputExited": "This session has ended; continue it from History",
+    "send": "Send",
+    "sendFailed": "Failed to send: {error}",
+    "actionFailed": "Action failed: {error}",
+    "typing": "Replying…",
+    "thinking": "Thinking",
+    "you": "You",
+    "expand": "Show all",
+    "collapse": "Collapse",
+    "more": "+{n} more",
+    "error": "Error: {message}",
+    "fatal": "Session error: {message}",
+    "exited": "Session ended",
+    "exitedCode": "Session ended (exit code {code})",
+    "transcriptFailed": "Failed to load the conversation: {error}",
+    "emptyConv": "Send a message to get started",
+    "approval": {
+      "title": "{tool} asks for approval",
+      "allow": "Allow",
+      "allowSession": "Allow for this session",
+      "deny": "Deny",
+      "showDetail": "Show details",
+      "hideDetail": "Hide details",
+      "allowed": "Allowed",
+      "allowedSession": "Allowed (no more asking this session)",
+      "denied": "Denied",
+      "expired": "Expired"
+    },
+    "tool": {
+      "input": "Input",
+      "output": "Output",
+      "error": "Error",
+      "running": "Running",
+      "emptyOutput": "(no output)",
+      "failed": "Failed",
+      "ok": "Succeeded"
+    },
+    "time": {
+      "justNow": "just now",
+      "minutes": "{n} min ago",
+      "hours": "{n} h ago"
+    },
+    "dialog": {
+      "title": "New chat",
+      "description": "Choose the agent, project folder and permission mode, then say the first thing.",
+      "agent": "Agent",
+      "project": "Project folder",
+      "projectPlaceholder": "Pick a known project, or browse / type a folder",
+      "projectPick": "Known projects",
+      "browse": "Browse…",
+      "browseTitle": "Choose the project folder",
+      "model": "Model (optional)",
+      "modelPlaceholder": "Leave empty for the default model",
+      "permission": "Permission mode",
+      "advanced": "Advanced",
+      "extraArgs": "Extra arguments",
+      "extraClaudePlaceholder": "e.g. --add-dir ../shared --max-turns 20",
+      "extraClaudeHint": "Appended to the claude command line, split on spaces; quote values that contain spaces",
+      "extraCodexPlaceholder": "e.g.\nmodel_reasoning_effort=high\nsandbox_workspace_write.network_access=true",
+      "extraCodexHint": "Codex config overrides (like -c key=value), one per line or separated by spaces",
+      "prompt": "First message (optional)",
+      "promptPlaceholder": "What should it do? Ctrl+Enter starts right away",
+      "start": "Start chat",
+      "starting": "Starting…",
+      "cancel": "Cancel",
+      "startFailed": "Failed to start: {error}"
+    },
+    "startingAgent": "Starting {agent}… the first message is sent once it is ready"
   }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppProviders } from "@/providers";
 import { AppShell, type NavKey } from "@/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -17,6 +17,9 @@ import { AccountSlot } from "@/components/account/AccountSlot";
 import { LoginDialog } from "@/components/account/LoginDialog";
 import { useSyncStatus } from "@/components/account/useSyncStatus";
 import { SyncPage } from "@/pages/sync/SyncPage";
+import { ChatPage } from "@/pages/chat/ChatPage";
+import { initLiveStore, startLive, useLiveStore } from "@/pages/chat/liveStore";
+import { isActive, loadChatPrefs } from "@/pages/chat/chatPrefs";
 
 function Shell() {
   const { t } = useI18n();
@@ -32,6 +35,11 @@ function Shell() {
   const [reviewRun, setReviewRun] = useState<RunRecord | null>(null);
   const [openRequest, setOpenRequest] = useState<{ fileId: string; nonce: number } | null>(null);
   const toasts = useToasts();
+  // Live chats keep streaming (and the badge stays right) whichever page is open.
+  useEffect(() => initLiveStore(), []);
+  const live = useLiveStore();
+  const activeChats = live.sessions.filter((x) => isActive(x.state)).length;
+  const [newChatOpen, setNewChatOpen] = useState(false);
 
   const navigate = (key: NavKey) => {
     if (key === current) return;
@@ -44,7 +52,11 @@ function Shell() {
       <AppShell
         current={current}
         onNavigate={navigate}
-        badges={{ review: pending?.total }}
+        badges={{ review: pending?.total, chat: activeChats }}
+        onNewChat={() => {
+          setNewChatOpen(true);
+          navigate("chat");
+        }}
         status={<AccountSlot status={syncStatus} onLogin={() => setLoginOpen(true)} onOpenSync={() => navigate("sync")} />}
         pages={{
           review: <ReviewPage onNavigate={navigate} runFilter={reviewRun} onClearRunFilter={() => setReviewRun(null)} />,
@@ -71,7 +83,16 @@ function Shell() {
               }}
             />
           ),
-          sessions: <SessionsPage />,
+          chat: <ChatPage newChatOpen={newChatOpen} onNewChatOpenChange={setNewChatOpen} />,
+          sessions: (
+            <SessionsPage
+              onContinueChat={async (x) => {
+                const prefs = loadChatPrefs();
+                await startLive({ agent: x.tool, cwd: x.cwd, resume_id: x.id, permission: prefs.permission[x.tool] });
+                navigate("chat");
+              }}
+            />
+          ),
           usage: <UsagePage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}
@@ -92,7 +113,10 @@ function Shell() {
           }
           setPendingNav(null);
         }}
-        onCancel={() => setPendingNav(null)}
+        onCancel={() => {
+          setPendingNav(null);
+          setNewChatOpen(false);
+        }}
       />
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} status={syncStatus} onStatus={setSyncStatus} notify={toasts.push} />
       <ToastRegion toasts={toasts.toasts} onDismiss={toasts.dismiss} />

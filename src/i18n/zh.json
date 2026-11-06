@@ -1,15 +1,17 @@
 {
   "nav": {
+    "chat": "对话",
     "memory": "记忆总览",
     "review": "待审核记忆",
     "extract": "记忆提取",
     "skills": "Skill 管理",
-    "sessions": "会话转换",
+    "sessions": "历史会话",
     "sync": "记忆同步",
     "usage": "用量统计",
     "settings": "环境与设置"
   },
   "navGroups": {
+    "work": "工作",
     "memory": "记忆",
     "tools": "工具",
     "data": "数据",
@@ -23,7 +25,8 @@
     "leaveTitle": "放弃未保存的修改？",
     "leaveBody": "离开当前页面会丢失未保存的修改。",
     "leaveConfirm": "放弃修改并离开",
-    "leaveKeep": "继续编辑"
+    "leaveKeep": "继续编辑",
+    "newChat": "新对话"
   },
   "placeholder": {
     "comingSoon": "即将推出"
@@ -1135,10 +1138,135 @@
     "tools": {
       "claude": "Claude Code",
       "codex": "Codex"
-    }
+    },
+    "continueChat": "继续对话",
+    "continueChatHint": "在 MemDock 里接着这个会话对话",
+    "continueFailed": "继续对话失败：{error}"
   },
   "tray": {
     "show": "显示 MemDock",
     "quit": "退出 MemDock"
+  },
+  "chat": {
+    "title": "对话",
+    "subtitle": "直接在 MemDock 里和 Claude Code、Codex 对话，需要你批准时会在这里提醒",
+    "newChat": "新对话",
+    "listLabel": "对话列表",
+    "loading": "正在读取对话…",
+    "listFailed": "读取对话列表失败：{error}",
+    "emptyList": "还没有对话",
+    "emptyTitle": "开始一段新对话",
+    "emptyHint": "选一个项目目录，让 Claude Code 或 Codex 在里面干活；也可以在「历史会话」里接着之前的会话继续。",
+    "selectHint": "从左侧选择一个对话",
+    "untitled": "新对话",
+    "agents": {
+      "claude": "Claude Code",
+      "codex": "Codex"
+    },
+    "states": {
+      "starting": "启动中",
+      "idle": "空闲",
+      "running": "运行中",
+      "waiting_approval": "等你批准",
+      "exited": "已结束"
+    },
+    "permissions": {
+      "ask": "每次询问",
+      "auto_edit": "自动允许改文件",
+      "plan": "只读规划",
+      "bypass": "跳过所有确认"
+    },
+    "permissionHints": {
+      "ask": "运行命令、修改文件前都先问你",
+      "auto_edit": "修改文件不再询问，运行命令仍会先问你",
+      "plan": "只读：可以查看代码、做计划，不会修改任何文件",
+      "bypass": "任何操作都不再询问"
+    },
+    "bypassWarning": "危险：智能体可以不经确认运行任意命令、修改任意文件。",
+    "bypassCodex": "对 Codex 还会关闭沙箱（danger-full-access），命令可以访问整台电脑和网络。",
+    "model": "模型",
+    "modelDefault": "默认模型",
+    "stop": "停止",
+    "stopHint": "中断当前这一轮，会话保持打开",
+    "openInTerminal": "在终端打开",
+    "openInTerminalHint": "复制在终端里继续这个会话的命令",
+    "copied": "已复制命令，粘贴到终端运行",
+    "copyFailed": "复制失败",
+    "noNativeId": "会话还没启动完成，暂时拿不到会话 ID",
+    "end": "结束会话",
+    "endHint": "结束进程；对话仍留在列表里，之后可从历史会话继续",
+    "remove": "从列表移除",
+    "removeHint": "结束进程并从列表中移除",
+    "inputLabel": "消息",
+    "inputPlaceholder": "输入消息，Enter 发送，Shift+Enter 换行",
+    "inputQueued": "正在运行，发送的消息会排队，等这一轮结束后处理",
+    "inputExited": "会话已结束，可以在「历史会话」里继续",
+    "send": "发送",
+    "sendFailed": "发送失败：{error}",
+    "actionFailed": "操作失败：{error}",
+    "typing": "正在回复…",
+    "thinking": "思考过程",
+    "you": "你",
+    "expand": "展开全文",
+    "collapse": "收起",
+    "more": "+{n} 个",
+    "error": "出错：{message}",
+    "fatal": "会话出错：{message}",
+    "exited": "会话已结束",
+    "exitedCode": "会话已结束（退出码 {code}）",
+    "transcriptFailed": "读取对话记录失败：{error}",
+    "emptyConv": "发一条消息开始吧",
+    "approval": {
+      "title": "{tool} 请求批准",
+      "allow": "允许",
+      "allowSession": "本次会话都允许",
+      "deny": "拒绝",
+      "showDetail": "查看详情",
+      "hideDetail": "收起详情",
+      "allowed": "已允许",
+      "allowedSession": "已允许（本次会话不再询问）",
+      "denied": "已拒绝",
+      "expired": "已失效"
+    },
+    "tool": {
+      "input": "参数",
+      "output": "输出",
+      "error": "错误",
+      "running": "运行中",
+      "emptyOutput": "（无输出）",
+      "failed": "执行出错",
+      "ok": "执行成功"
+    },
+    "time": {
+      "justNow": "刚刚",
+      "minutes": "{n} 分钟前",
+      "hours": "{n} 小时前"
+    },
+    "dialog": {
+      "title": "新对话",
+      "description": "选择智能体、项目目录和权限模式，再说第一句话。",
+      "agent": "智能体",
+      "project": "项目目录",
+      "projectPlaceholder": "选择已知项目，或浏览 / 输入目录",
+      "projectPick": "已知项目",
+      "browse": "浏览…",
+      "browseTitle": "选择项目目录",
+      "model": "模型（可选）",
+      "modelPlaceholder": "留空使用默认模型",
+      "permission": "权限模式",
+      "advanced": "高级选项",
+      "extraArgs": "附加参数",
+      "extraClaudePlaceholder": "例如：--add-dir ../shared --max-turns 20",
+      "extraClaudeHint": "追加到 claude 命令行的参数，按空格分隔；带空格的值用引号括起来",
+      "extraCodexPlaceholder": "例如：\nmodel_reasoning_effort=high\nsandbox_workspace_write.network_access=true",
+      "extraCodexHint": "Codex 配置覆盖（相当于 -c key=value），每行一个，或用空格分隔",
+      "prompt": "第一条消息（可选）",
+      "promptPlaceholder": "想让它做什么？Ctrl+Enter 直接开始",
+      "start": "开始对话",
+      "starting": "正在启动…",
+      "cancel": "取消",
+      "startFailed": "启动失败：{error}"
+    },
+    "startingAgent": "正在启动 {agent}…首条消息会在启动完成后发送"
   }
 }

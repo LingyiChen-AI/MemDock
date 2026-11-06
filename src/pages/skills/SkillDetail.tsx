@@ -232,13 +232,17 @@ function Overview({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-      <div className="max-w-[72ch]">
-        {entry.description ? <p className="font-content text-[14px] leading-[25px]">{entry.description}</p> : null}
+      <div className="flex w-full flex-col gap-4">
+        {entry.description ? (
+          <section className="rounded-lg border border-border bg-card px-5 py-4">
+            <p className="font-content text-[14px] leading-[25px]">{entry.description}</p>
+          </section>
+        ) : null}
         {entry.readonly ? (
-          <p className="mt-4 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{s.readOnlyBanner}</p>
+          <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{s.readOnlyBanner}</p>
         ) : null}
 
-        <dl className="mt-5 grid grid-cols-[96px_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
+        <dl className="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-x-6 gap-y-4 rounded-lg border border-border bg-card px-5 py-4 text-sm">
           <dt className="text-muted-foreground">{s.source}</dt>
           <dd className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             {src ? (
@@ -296,7 +300,7 @@ function Overview({
           <dt className="text-muted-foreground">{s.locations}</dt>
           <dd className="flex min-w-0 flex-col gap-2">
             {others.map((i) => (
-              <div key={`${i.tool}:${i.dir}`} className="flex min-w-0 flex-col gap-0.5">
+              <div key={`${i.tool}:${i.dir}`} className="flex min-w-0 flex-col gap-0.5 rounded-md bg-muted/50 px-3 py-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
                   <ToolTag tool={i.tool} />
                   <span className={tagClass}>{i.scope.type === "global" ? s.global : projectName(i.scope.project_id)}</span>

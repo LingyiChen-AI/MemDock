@@ -23,6 +23,14 @@ struct Ctx<'a> {
 /// Finds every skill directory (a directory holding a `SKILL.md`) in the global
 /// and per-project locations of Claude Code and Codex. The same physical
 /// directory reached through two locations is listed once per location.
+/// True when both paths name the same directory (canonical form, else case-insensitive text).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase(),
+    }
+}
+
 pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec<SkillEntry> {
     let mut out = Vec::new();
     let global = SkillScope::Global;
@@ -69,15 +77,28 @@ pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec
             kind: SkillKind::User,
             plugin: None,
         };
-        scan_children(&root.join(".claude").join("skills"), &[], &claude, &mut out);
+        // A project at the home directory would list the global skills again.
+        let global_claude = paths.claude_home.join("skills");
+        let global_agents = home.join(".agents").join("skills");
+        let global_codex = paths.codex_home.join("skills");
+        let pc = root.join(".claude").join("skills");
+        if !same_dir(&pc, &global_claude) {
+            scan_children(&pc, &[], &claude, &mut out);
+        }
         let codex = Ctx {
             tool: Tool::Codex,
             scope: &scope,
             kind: SkillKind::User,
             plugin: None,
         };
-        scan_children(&root.join(".agents").join("skills"), &[], &codex, &mut out);
-        scan_children(&root.join(".codex").join("skills"), &[], &codex, &mut out);
+        let pa = root.join(".agents").join("skills");
+        if !same_dir(&pa, &global_agents) {
+            scan_children(&pa, &[], &codex, &mut out);
+        }
+        let px = root.join(".codex").join("skills");
+        if !same_dir(&px, &global_codex) {
+            scan_children(&px, &[], &codex, &mut out);
+        }
     }
 
     // Plugins (deduped by installPath and scope).

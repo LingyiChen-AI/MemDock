@@ -310,3 +310,19 @@ fn interrupted_turn_is_not_an_error() {
     let ev = events(&mut p, &result_line("error_during_execution", true, 0.0));
     assert!(matches!(ev[1], LiveEvent::TurnCompleted { is_error: true, .. }));
 }
+
+
+#[test]
+fn compaction_and_local_command_output_become_notices() {
+    let mut p = Parser::default();
+    let evs = |p: &mut Parser, l: &str| p.line(l).map(|o| o.events).unwrap_or_default();
+    let a = evs(&mut p, r#"{"type":"system","subtype":"status","status":"compacting","session_id":"s"}"#);
+    assert!(matches!(&a[..], [LiveEvent::Notice { id, kind, .. }] if id == "compact-1" && kind == "compacting"));
+    let b = evs(&mut p, r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":45993,"post_tokens":9575}}"#);
+    assert!(matches!(&b[..], [LiveEvent::Notice { id, kind, before: Some(45993), after: Some(9575), .. }] if id == "compact-1" && kind == "compacted"));
+    // The summary that continues the conversation is not shown.
+    assert!(evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#).is_empty());
+    let c = evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}"#);
+    assert!(matches!(&c[..], [LiveEvent::Notice { kind, text, .. }] if kind == "command_output" && text == "Compacted"));
+    assert_eq!(local_command_output("<local-command-stdout>  </local-command-stdout>"), None);
+}

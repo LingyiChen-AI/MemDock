@@ -1225,6 +1225,11 @@
     "quit": "Quit MemDock"
   },
   "chat": {
+    "notices": {
+      "compacting": "Compacting the context…",
+      "compacted": "Context compacted: {before} → {after} tokens",
+      "compactedPlain": "Context compacted"
+    },
     "meters": {
       "context": "Context",
       "contextHint": "Context {used} / {window} ({model})",

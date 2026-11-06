@@ -573,7 +573,17 @@ fn tail_lines(path: &Path) -> Vec<String> {
 
 /// Last main-thread assistant usage of a Claude Code session (jsonl lines).
 pub fn claude_context(lines: &[String]) -> Option<SessionContext> {
+    // A compaction after the last request: the context is now its `post_tokens`.
+    let mut compacted: Option<u64> = None;
     for l in lines.iter().rev() {
+        if compacted.is_none() && l.contains("\"compact_boundary\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(l) {
+                compacted = v.pointer("/compactMetadata/postTokens").or_else(|| v.pointer("/compact_metadata/post_tokens")).and_then(|x| x.as_u64());
+                if compacted.is_some() {
+                    continue;
+                }
+            }
+        }
         if !l.contains("\"usage\"") || !l.contains("\"assistant\"") {
             continue;
         }
@@ -590,7 +600,7 @@ pub fn claude_context(lines: &[String]) -> Option<SessionContext> {
             continue;
         }
         let window = claude_context_window(model.as_deref().unwrap_or(""));
-        return Some(SessionContext { used, window, model });
+        return Some(SessionContext { used: compacted.unwrap_or(used), window, model });
     }
     None
 }

@@ -1225,6 +1225,11 @@
     "quit": "退出 MemDock"
   },
   "chat": {
+    "notices": {
+      "compacting": "正在压缩上下文…",
+      "compacted": "已压缩上下文：{before} → {after} tokens",
+      "compactedPlain": "已压缩上下文"
+    },
     "meters": {
       "context": "上下文",
       "contextHint": "当前上下文 {used} / {window}（{model}）",

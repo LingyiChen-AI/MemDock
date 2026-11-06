@@ -110,6 +110,28 @@ export function Conversation({
                   <span className="min-w-0 [overflow-wrap:anywhere] whitespace-pre-wrap">{fmt(c.fatal, { message: b.message })}</span>
                 </li>
               );
+            case "notice": {
+              const n = b.notice;
+              const tokens = (v: number | null) => (v === null ? "?" : v >= 10_000 ? `${(v / 1000).toFixed(v >= 100_000 ? 0 : 1)}k` : String(v));
+              const text =
+                n.kind === "compacting"
+                  ? c.notices.compacting
+                  : n.kind === "compacted"
+                    ? n.before !== null || n.after !== null
+                      ? fmt(c.notices.compacted, { before: tokens(n.before), after: tokens(n.after) })
+                      : c.notices.compactedPlain
+                    : n.text;
+              return (
+                <li key={b.key} className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="flex max-w-[80%] items-center gap-1.5 [overflow-wrap:anywhere] whitespace-pre-wrap">
+                    {n.kind === "compacting" ? <Loader2 className="size-3 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                    {text}
+                  </span>
+                  <span className="h-px flex-1 bg-border" />
+                </li>
+              );
+            }
             case "exited":
               return (
                 <li key={b.key} className="flex items-center gap-3 text-xs text-muted-foreground">

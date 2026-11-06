@@ -61,7 +61,9 @@ export type LiveEvent =
   | { type: "approval_resolved"; request_id: string; decision: Decision }
   | { type: "turn_completed"; usage: TurnUsage; is_error: boolean }
   | { type: "error"; message: string; fatal: boolean }
-  | { type: "exited"; code: number | null };
+  | { type: "exited"; code: number | null }
+  /** A line from the CLI itself (compaction, output of a local slash command); same id replaces. */
+  | { type: "notice"; id: string; kind: "compacting" | "compacted" | "command_output" | string; text?: string; before?: number; after?: number };
 
 export interface LiveEnvelope {
   live_id: string;

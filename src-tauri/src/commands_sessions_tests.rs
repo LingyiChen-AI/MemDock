@@ -320,3 +320,14 @@ fn real_session_context() {
         }
     }
 }
+
+
+#[test]
+fn context_after_compaction_uses_post_tokens() {
+    let lines = vec![
+        r#"{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1,"cache_read_input_tokens":810000}}}"#.to_string(),
+        r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":810001,"postTokens":9575}}"#.to_string(),
+    ];
+    let c = claude_context(&lines).unwrap();
+    assert_eq!((c.used, c.window), (9575, 1_000_000));
+}

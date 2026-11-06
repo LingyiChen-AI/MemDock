@@ -161,6 +161,10 @@ pub(crate) struct Parser {
     /// `total_cost_usd` of the last `result`: the CLI reports the process's
     /// running total, turns get the difference.
     cost_total: f64,
+    /// Compactions seen (ids of the compacting / compacted notices).
+    compactions: u32,
+    /// Local slash command outputs seen (ids of their notices).
+    notices: u32,
     /// The user interrupted the current turn: its error result is the
     /// interruption itself, not an error to show.
     interrupted: bool,
@@ -187,6 +191,29 @@ fn result_text(v: &Value) -> String {
         Value::Null => String::new(),
         v => v.to_string(),
     }
+}
+
+fn str_of_ptr<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {
+    v.pointer(ptr).and_then(Value::as_str)
+}
+
+/// The text inside `<local-command-stdout>` / `<local-command-stderr>`, trimmed; `None` when absent or empty.
+pub(crate) fn local_command_output(text: &str) -> Option<String> {
+    let mut parts = vec![];
+    for tag in ["local-command-stdout", "local-command-stderr"] {
+        let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+        let mut rest = text;
+        while let Some(i) = rest.find(&open) {
+            let after = &rest[i + open.len()..];
+            let end = after.find(&close).unwrap_or(after.len());
+            let t = after[..end].trim();
+            if !t.is_empty() {
+                parts.push(t.to_string());
+            }
+            rest = &after[end..];
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
 fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
@@ -241,6 +268,46 @@ impl Parser {
             }
             "stream_event" if !nested => self.stream_event(&v, &mut out),
             "assistant" if !nested => self.assistant(&v, &mut out),
+            "system" if str_of(&v, "subtype") == Some("status") => {
+                if str_of(&v, "status") == Some("compacting") {
+                    self.compactions += 1;
+                    out.events.push(LiveEvent::Notice {
+                        id: format!("compact-{}", self.compactions),
+                        kind: "compacting".into(),
+                        text: String::new(),
+                        before: None,
+                        after: None,
+                    });
+                }
+            }
+            "system" if str_of(&v, "subtype") == Some("compact_boundary") => {
+                if self.compactions == 0 {
+                    self.compactions = 1; // automatic compaction without a status line
+                }
+                let meta = v.get("compact_metadata");
+                let tok = |k: &str| meta.and_then(|m| m.get(k)).and_then(Value::as_u64);
+                out.events.push(LiveEvent::Notice {
+                    id: format!("compact-{}", self.compactions),
+                    kind: "compacted".into(),
+                    text: String::new(),
+                    before: tok("pre_tokens"),
+                    after: tok("post_tokens"),
+                });
+            }
+            "user" if !nested && v.pointer("/message/content").is_some_and(Value::is_string) => {
+                // Output of a local slash command (/compact, /cost...): <local-command-stdout>…</…>.
+                let text = str_of_ptr(&v, "/message/content").unwrap_or("");
+                if let Some(out_text) = local_command_output(text) {
+                    self.notices += 1;
+                    out.events.push(LiveEvent::Notice {
+                        id: format!("cmd-{}", self.notices),
+                        kind: "command_output".into(),
+                        text: out_text,
+                        before: None,
+                        after: None,
+                    });
+                }
+            }
             "user" if !nested => {
                 let content = v.pointer("/message/content").and_then(Value::as_array);
                 for b in content.into_iter().flatten() {

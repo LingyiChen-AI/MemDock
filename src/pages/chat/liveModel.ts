@@ -37,7 +37,8 @@ export type ConvItem =
   | { type: "tool"; call: LiveToolCall }
   | { type: "approval"; approval: LiveApproval }
   | { type: "error"; message: string; fatal: boolean }
-  | { type: "exited"; code: number | null };
+  | { type: "exited"; code: number | null }
+  | { type: "notice"; id: string; kind: string; text: string; before: number | null; after: number | null };
 
 export interface ConvState {
   /** Highest seq applied; envelopes at or below it are duplicates. */
@@ -217,6 +218,11 @@ function fold(state: ConvState, env: LiveEnvelope): ConvState {
       return { ...s, lastUsage: ev.usage, items: expire(settle(items)) };
     case "error":
       return { ...s, items: [...(ev.fatal ? expire(settle(items)) : items), { type: "error", message: ev.message, fatal: ev.fatal }] };
+    case "notice": {
+      const n = { type: "notice" as const, id: ev.id, kind: ev.kind, text: ev.text ?? "", before: ev.before ?? null, after: ev.after ?? null };
+      const at = items.findIndex((it) => it.type === "notice" && it.id === ev.id);
+      return { ...s, items: at >= 0 ? replaceAt(items, at, n) : [...items, n] };
+    }
     case "exited":
       // The manager dedupes exits; render one marker even if a repeat slips through.
       if (s.state === "exited" && items[items.length - 1]?.type === "exited") return s;
@@ -248,7 +254,8 @@ export type ConvBlock =
   | { kind: "turn"; key: string; segments: TurnSegment[] }
   | { kind: "approval"; key: string; approval: LiveApproval }
   | { kind: "fatal"; key: string; message: string }
-  | { kind: "exited"; key: string; code: number | null };
+  | { kind: "exited"; key: string; code: number | null }
+  | { kind: "notice"; key: string; notice: { kind: string; text: string; before: number | null; after: number | null } };
 
 export function toConvBlocks(items: ConvItem[]): ConvBlock[] {
   const out: ConvBlock[] = [];
@@ -274,6 +281,10 @@ export function toConvBlocks(items: ConvItem[]): ConvBlock[] {
       case "exited":
         turn = null;
         out.push({ kind: "exited", key: `x-${i}`, code: it.code });
+        return;
+      case "notice":
+        turn = null;
+        out.push({ kind: "notice", key: `n-${it.id}`, notice: { kind: it.kind, text: it.text, before: it.before, after: it.after } });
         return;
       case "error":
         if (it.fatal) {

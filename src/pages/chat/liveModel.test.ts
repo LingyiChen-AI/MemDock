@@ -167,3 +167,19 @@ describe("toConvBlocks", () => {
     expect(blocks.map((b) => b.kind)).toEqual(["fatal", "exited"]);
   });
 });
+
+describe("notices", () => {
+  it("a compaction notice is replaced in place; command output is shown", () => {
+    const s = run(
+      { type: "user_message", id: "u1", text: "/compact" },
+      { type: "notice", id: "compact-1", kind: "compacting" },
+      { type: "notice", id: "compact-1", kind: "compacted", before: 45993, after: 9575 },
+      { type: "notice", id: "cmd-1", kind: "command_output", text: "Compacted" },
+      { type: "turn_completed", usage: { input_tokens: 0, output_tokens: 0, cost_usd: null, duration_ms: null }, is_error: false },
+    );
+    const blocks = toConvBlocks(s.items);
+    expect(blocks.map((b) => b.kind)).toEqual(["user", "notice", "notice"]);
+    expect(blocks[1]).toMatchObject({ notice: { kind: "compacted", before: 45993, after: 9575 } });
+    expect(blocks[2]).toMatchObject({ notice: { kind: "command_output", text: "Compacted" } });
+  });
+});

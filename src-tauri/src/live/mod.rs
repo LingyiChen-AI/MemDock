@@ -162,6 +162,19 @@ pub enum LiveEvent {
     },
     ApprovalResolved { request_id: String, decision: Decision },
     TurnCompleted { usage: TurnUsage, is_error: bool },
+    /// A line from the CLI itself, shown between messages: `kind` is `compacting`, `compacted`
+    /// (with token counts before / after) or `command_output` (output of a local slash command).
+    /// A later notice with the same `id` replaces the earlier one.
+    Notice {
+        id: String,
+        kind: String,
+        #[serde(skip_serializing_if = "String::is_empty", default)]
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        before: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        after: Option<u64>,
+    },
     /// `fatal` errors end the session; others are shown inline (retries...).
     Error { message: String, fatal: bool },
     Exited { code: Option<i32> },

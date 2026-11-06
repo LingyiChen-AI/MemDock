@@ -163,6 +163,8 @@ pub(crate) struct Parser {
     cost_total: f64,
     /// Compactions seen (ids of the compacting / compacted notices).
     compactions: u32,
+    /// A compaction is under way (its notice is shown; repeats of the status are ignored).
+    compacting: bool,
     /// Local slash command outputs seen (ids of their notices).
     notices: u32,
     /// The user interrupted the current turn: its error result is the
@@ -198,7 +200,13 @@ fn str_of_ptr<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {
 }
 
 /// The text inside `<local-command-stdout>` / `<local-command-stderr>`, trimmed; `None` when absent or empty.
+/// Only a message that *is* command output counts (it starts with the tag): a compaction summary
+/// that merely mentions the tags is not output. `Compacted` (from `/compact`) is left to the
+/// compaction notice.
 pub(crate) fn local_command_output(text: &str) -> Option<String> {
+    if !text.trim_start().starts_with("<local-command-") {
+        return None;
+    }
     let mut parts = vec![];
     for tag in ["local-command-stdout", "local-command-stderr"] {
         let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
@@ -213,6 +221,7 @@ pub(crate) fn local_command_output(text: &str) -> Option<String> {
             rest = &after[end..];
         }
     }
+    parts.retain(|p| !p.eq_ignore_ascii_case("compacted"));
     (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
@@ -269,7 +278,8 @@ impl Parser {
             "stream_event" if !nested => self.stream_event(&v, &mut out),
             "assistant" if !nested => self.assistant(&v, &mut out),
             "system" if str_of(&v, "subtype") == Some("status") => {
-                if str_of(&v, "status") == Some("compacting") {
+                if str_of(&v, "status") == Some("compacting") && !self.compacting {
+                    self.compacting = true;
                     self.compactions += 1;
                     out.events.push(LiveEvent::Notice {
                         id: format!("compact-{}", self.compactions),
@@ -281,6 +291,7 @@ impl Parser {
                 }
             }
             "system" if str_of(&v, "subtype") == Some("compact_boundary") => {
+                self.compacting = false;
                 if self.compactions == 0 {
                     self.compactions = 1; // automatic compaction without a status line
                 }

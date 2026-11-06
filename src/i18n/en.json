@@ -1228,6 +1228,7 @@
   },
   "chat": {
     "notices": {
+      "commandOutput": "Command output",
       "compacting": "Compacting the context…",
       "compacted": "Context compacted: {before} → {after} tokens",
       "compactedPlain": "Context compacted"

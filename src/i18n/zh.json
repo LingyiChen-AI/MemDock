@@ -1228,6 +1228,7 @@
   },
   "chat": {
     "notices": {
+      "commandOutput": "命令输出",
       "compacting": "正在压缩上下文…",
       "compacted": "已压缩上下文：{before} → {after} tokens",
       "compactedPlain": "已压缩上下文"

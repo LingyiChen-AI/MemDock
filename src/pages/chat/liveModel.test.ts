@@ -183,3 +183,17 @@ describe("notices", () => {
     expect(blocks[2]).toMatchObject({ notice: { kind: "command_output", text: "Compacted" } });
   });
 });
+
+describe("compaction notices", () => {
+  it("a finished compaction or turn clears leftover 'compacting' notices", () => {
+    const usage = { input_tokens: 0, output_tokens: 0, cost_usd: null, duration_ms: null };
+    const a = run(
+      { type: "notice", id: "compact-1", kind: "compacting" },
+      { type: "notice", id: "compact-2", kind: "compacting" },
+      { type: "notice", id: "compact-2", kind: "compacted", before: 943000, after: 11900 },
+    );
+    expect(toConvBlocks(a.items).map((b) => (b.kind === "notice" ? b.notice.kind : b.kind))).toEqual(["compacted"]);
+    const b = run({ type: "notice", id: "compact-1", kind: "compacting" }, { type: "turn_completed", usage, is_error: false });
+    expect(toConvBlocks(b.items)).toEqual([]);
+  });
+});

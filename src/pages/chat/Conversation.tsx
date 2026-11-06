@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useAccountName } from "./accountNames";
-import { Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
+import { Archive, Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
 import { readImageDataUri, storedImagePath, type Decision, type LiveAgent } from "@/api/live";
 import { ChatAvatar, ChatRow, ChatText } from "@/components/chat/ChatMessage";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
@@ -12,7 +12,7 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { CHIP_FOLD, IoBlock, KIND_ICON, KIND_TONE, Thumbs } from "@/pages/sessions/Timeline";
 import { getConvUi, patchConvUi } from "./convUiState";
-import { toConvBlocks, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
+import { toConvBlocks, type ConvBlock, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
 
 type C = Messages["chat"];
 
@@ -116,19 +116,33 @@ export function Conversation({
             case "notice": {
               const n = b.notice;
               const tokens = (v: number | null) => (v === null ? "?" : v >= 10_000 ? `${(v / 1000).toFixed(v >= 100_000 ? 0 : 1)}k` : String(v));
-              const text =
-                n.kind === "compacting"
-                  ? c.notices.compacting
-                  : n.kind === "compacted"
-                    ? n.before !== null || n.after !== null
-                      ? fmt(c.notices.compacted, { before: tokens(n.before), after: tokens(n.after) })
-                      : c.notices.compactedPlain
-                    : n.text;
+              if (n.kind === "command_output") {
+                // Output of a local slash command (/cost...): a small card, monospace, left-aligned.
+                return (
+                  <li key={b.key} className="flex flex-col gap-1 pl-11">
+                    <span className="text-[11px] text-muted-foreground">{c.notices.commandOutput}</span>
+                    <pre className="max-w-[min(100%,48rem)] overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap text-foreground/90 [overflow-wrap:anywhere]">
+                      {n.text}
+                    </pre>
+                  </li>
+                );
+              }
+              const done = n.kind === "compacted";
+              const text = done
+                ? n.before !== null || n.after !== null
+                  ? fmt(c.notices.compacted, { before: tokens(n.before), after: tokens(n.after) })
+                  : c.notices.compactedPlain
+                : c.notices.compacting;
               return (
-                <li key={b.key} className="flex items-center gap-3 text-xs text-muted-foreground">
+                <li key={b.key} className="flex items-center gap-3" role="status">
                   <span className="h-px flex-1 bg-border" />
-                  <span className="flex max-w-[80%] items-center gap-1.5 [overflow-wrap:anywhere] whitespace-pre-wrap">
-                    {n.kind === "compacting" ? <Loader2 className="size-3 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs",
+                      done ? "border-primary/25 bg-primary/6 text-primary" : "border-border bg-muted/50 text-muted-foreground",
+                    )}
+                  >
+                    {done ? <Archive className="size-3.5 shrink-0" aria-hidden="true" /> : <Loader2 className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
                     {text}
                   </span>
                   <span className="h-px flex-1 bg-border" />
@@ -145,7 +159,7 @@ export function Conversation({
               );
           }
         })}
-        {running && !waiting && !starting && blocks[blocks.length - 1]?.kind !== "turn" ? <TypingRow agent={agent} c={c} /> : null}
+        {running && !waiting && !starting && showTyping(blocks) ? <TypingRow agent={agent} c={c} /> : null}
       </ol>
       <ToolDialog call={liveDetail} onClose={() => setDetail(null)} c={c} />
     </div>
@@ -205,6 +219,13 @@ export function LiveThumbs({ images, label }: { images: string[]; label: string 
 }
 
 /** The reply's last part is text being streamed (its caret already shows activity). */
+/** The waiting placeholder: after a plain message, not after a slash command or a notice. */
+function showTyping(blocks: ConvBlock[]): boolean {
+  const last = blocks[blocks.length - 1];
+  if (!last || last.kind === "turn" || last.kind === "notice") return false;
+  return !(last.kind === "user" && last.text.trim().startsWith("/"));
+}
+
 function streamingTail(segments: TurnSegment[]): boolean {
   const t = segments[segments.length - 1];
   return t?.kind === "text" && !!t.streaming;

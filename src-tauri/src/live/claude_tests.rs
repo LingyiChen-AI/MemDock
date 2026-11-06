@@ -322,7 +322,16 @@ fn compaction_and_local_command_output_become_notices() {
     assert!(matches!(&b[..], [LiveEvent::Notice { id, kind, before: Some(45993), after: Some(9575), .. }] if id == "compact-1" && kind == "compacted"));
     // The summary that continues the conversation is not shown.
     assert!(evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#).is_empty());
-    let c = evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}"#);
-    assert!(matches!(&c[..], [LiveEvent::Notice { kind, text, .. }] if kind == "command_output" && text == "Compacted"));
+    // `Compacted` duplicates the compacted notice; other command output is shown.
+    assert!(evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}"#).is_empty());
+    let c = evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Total cost: $0.12</local-command-stdout>"}}"#);
+    assert!(matches!(&c[..], [LiveEvent::Notice { kind, text, .. }] if kind == "command_output" && text == "Total cost: $0.12"));
+    // A summary that mentions the tags is not command output.
+    assert!(evs(&mut p, r#"{"type":"user","message":{"role":"user","content":"Summary: we parsed <local-command-stdout>x</local-command-stdout> lines"}}"#).is_empty());
+    // A second "compacting" status of the same compaction adds no notice.
+    let d = evs(&mut p, r#"{"type":"system","subtype":"status","status":"compacting"}"#);
+    let e = evs(&mut p, r#"{"type":"system","subtype":"status","status":"compacting"}"#);
+    assert_eq!(d.len(), 1);
+    assert!(e.is_empty());
     assert_eq!(local_command_output("<local-command-stdout>  </local-command-stdout>"), None);
 }

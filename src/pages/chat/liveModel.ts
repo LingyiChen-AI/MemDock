@@ -215,13 +215,21 @@ function fold(state: ConvState, env: LiveEnvelope): ConvState {
       return { ...s, items: replaceAt(items, i, { type: "approval", approval: { ...a, decision: ev.decision, expired: false } }) };
     }
     case "turn_completed":
-      return { ...s, lastUsage: ev.usage, items: expire(settle(items)) };
+      return {
+        ...s,
+        lastUsage: ev.usage,
+        // A "compacting" notice can't outlive its turn.
+        items: expire(settle(items)).filter((it) => !(it.type === "notice" && it.kind === "compacting")),
+      };
     case "error":
       return { ...s, items: [...(ev.fatal ? expire(settle(items)) : items), { type: "error", message: ev.message, fatal: ev.fatal }] };
     case "notice": {
       const n = { type: "notice" as const, id: ev.id, kind: ev.kind, text: ev.text ?? "", before: ev.before ?? null, after: ev.after ?? null };
       const at = items.findIndex((it) => it.type === "notice" && it.id === ev.id);
-      return { ...s, items: at >= 0 ? replaceAt(items, at, n) : [...items, n] };
+      let next = at >= 0 ? replaceAt(items, at, n) : [...items, n];
+      // A finished compaction settles any other "compacting" notice still on screen.
+      if (ev.kind === "compacted") next = next.filter((it) => !(it.type === "notice" && it.kind === "compacting" && it.id !== ev.id));
+      return { ...s, items: next };
     }
     case "exited":
       // The manager dedupes exits; render one marker even if a repeat slips through.

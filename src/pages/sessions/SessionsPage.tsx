@@ -48,7 +48,7 @@ function ToolFilterBar({ value, onChange, s }: { value: ToolFilter; onChange: (v
           onClick={() => onChange(o.value)}
           className={cn(
             "cursor-pointer rounded-sm px-2.5 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-            o.value === value ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+            o.value === value ? "seg-active" : "text-muted-foreground hover:text-foreground",
           )}
         >
           {o.label}
@@ -67,7 +67,7 @@ function SessionRow({ session, selected, onSelect, s }: { session: SessionSummar
       onClick={onSelect}
       className={cn(
         "flex w-full cursor-pointer flex-col gap-1 rounded-md px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-        selected ? "bg-muted" : "hover:bg-muted/60",
+        selected ? "list-active" : "hover:bg-muted/60",
       )}
     >
       <div className="flex min-w-0 items-center gap-2">

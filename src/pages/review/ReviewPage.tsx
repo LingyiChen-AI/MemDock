@@ -315,7 +315,7 @@ export function ReviewPage({ onNavigate }: ReviewPageProps) {
                   onClick={() => setKindFilter(k)}
                   className={cn(
                     "cursor-pointer px-3 text-xs leading-7 outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none",
-                    kindFilter === k ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                    kindFilter === k ? "seg-active" : "text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {label}

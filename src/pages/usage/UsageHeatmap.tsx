@@ -61,7 +61,7 @@ function Seg<T extends string>({
           onClick={() => onChange(o.value)}
           className={cn(
             "cursor-pointer rounded-sm px-2.5 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none",
-            value === o.value ? "bg-muted font-medium text-foreground" : "text-muted-foreground enabled:hover:text-foreground",
+            value === o.value ? "seg-active" : "text-muted-foreground enabled:hover:text-foreground",
           )}
         >
           {o.label}

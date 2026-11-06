@@ -306,7 +306,7 @@ export function DiffView({ oldText, newText, oldLabel, newLabel, context = 1, cl
                 onClick={() => choose(k)}
                 className={cn(
                   "cursor-pointer px-2.5 text-xs leading-6 outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none",
-                  pref === k ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                  pref === k ? "seg-active" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {k === "split" ? d.split : d.unified}

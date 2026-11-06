@@ -174,7 +174,7 @@ export function DeletedSkillDetail({ item, projectName, onRestored }: DeletedSki
                         }}
                         className={cn(
                           "relative flex h-8 w-full cursor-pointer items-center gap-4 px-3 text-left text-sm outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none",
-                          on ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                          on ? "list-active" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                         )}
                       >
                         {on ? <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" aria-hidden="true" /> : null}

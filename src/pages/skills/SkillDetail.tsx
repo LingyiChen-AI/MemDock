@@ -162,7 +162,7 @@ export function SkillDetail({
               onClick={() => showTab(k)}
               className={cn(
                 "cursor-pointer px-2.5 text-xs leading-[26px] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none",
-                tab === k ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                tab === k ? "seg-active" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {k === "overview" ? s.tabOverview : s.tabFiles}

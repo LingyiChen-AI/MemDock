@@ -34,7 +34,7 @@ function Segmented({
               onClick={() => onChange(o.value)}
               className={cn(
                 "h-6 cursor-pointer rounded-sm px-3 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                checked ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                checked ? "seg-active" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {o.label}

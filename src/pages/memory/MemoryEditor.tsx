@@ -315,7 +315,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
             onClick={toggleSync}
             className={cn(
               "grid size-7 shrink-0 cursor-pointer place-items-center rounded-md outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-              syncOn ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+              syncOn ? "seg-active" : "text-muted-foreground hover:text-foreground",
             )}
           >
             {syncOn ? <Link2 className="size-4" aria-hidden="true" /> : <Unlink2 className="size-4" aria-hidden="true" />}
@@ -335,7 +335,7 @@ function TextEditor({ file, index, removed, onOpenImport, onDirtyChange, reveal,
               onClick={() => setMode(k)}
               className={cn(
                 "cursor-pointer px-2.5 text-xs leading-[26px] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none",
-                mode === k ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                mode === k ? "seg-active" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {modeLabels[k]}

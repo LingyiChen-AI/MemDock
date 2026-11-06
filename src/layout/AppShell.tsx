@@ -196,7 +196,7 @@ export function AppShell({ current, onNavigate, badges, status, children, pages 
                           onClick={() => onNavigate(key)}
                           className={cn(
                             "h-8 cursor-pointer gap-2.5 px-2.5 text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none",
-                            "data-active:bg-muted data-active:font-medium data-active:text-foreground data-active:shadow-[inset_2px_0_0_var(--primary)]",
+                            "data-active:bg-primary/12 data-active:font-semibold data-active:text-primary data-active:shadow-[inset_2px_0_0_var(--primary)] data-active:hover:bg-primary/16 data-active:hover:text-primary",
                           )}
                         >
                           <Icon aria-hidden="true" />

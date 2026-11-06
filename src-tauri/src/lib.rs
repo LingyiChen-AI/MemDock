@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tauri::{LogicalSize, Manager, WebviewWindow};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-/// Sizes and centers the main window to 70% x 75% of its monitor's work area.
+/// Sizes and centers the main window to 80% x 75% of its monitor's work area.
 fn apply_initial_size(win: &WebviewWindow) -> tauri::Result<()> {
     let monitor = match win.current_monitor()? {
         Some(m) => m,

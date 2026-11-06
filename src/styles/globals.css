@@ -191,6 +191,21 @@ html.dark[data-accent="teal"] {
   --ring: #2dd4bf;
 }
 
+/* Selected option of a segmented control or tab strip. */
+@utility seg-active {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+}
+
+/* Selected row of a list (sessions, history, backups). */
+@utility list-active {
+  background-color: color-mix(in oklab, var(--primary) 14%, transparent);
+  color: var(--foreground);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

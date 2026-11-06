@@ -5,10 +5,10 @@ use std::path::Path;
 pub const MIN_WIDTH: f64 = 1024.0;
 pub const MIN_HEIGHT: f64 = 640.0;
 
-/// Logical size for the very first launch: 70% of the work-area width and 75% of its height,
+/// Logical size for the very first launch: 80% of the work-area width and 75% of its height,
 /// never below the minimum window size, and never larger than the work area itself.
 pub fn initial_window_size(work_w: f64, work_h: f64) -> (f64, f64) {
-    let w = (work_w * 0.70).round().max(MIN_WIDTH).min(work_w);
+    let w = (work_w * 0.80).round().max(MIN_WIDTH).min(work_w);
     let h = (work_h * 0.75).round().max(MIN_HEIGHT).min(work_h);
     (w, h)
 }
@@ -28,15 +28,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initial_window_is_70pct_width_75pct_height() {
-        assert_eq!(initial_window_size(2560.0, 1400.0), (1792.0, 1050.0));
-        assert_eq!(initial_window_size(1920.0, 1040.0), (1344.0, 780.0));
+    fn initial_window_is_80pct_width_75pct_height() {
+        assert_eq!(initial_window_size(2560.0, 1400.0), (2048.0, 1050.0));
+        assert_eq!(initial_window_size(1920.0, 1040.0), (1536.0, 780.0));
     }
 
     #[test]
     fn initial_window_respects_minimum() {
         assert_eq!(initial_window_size(1280.0, 720.0), (1024.0, 640.0));
-        assert_eq!(initial_window_size(1366.0, 728.0), (1024.0, 640.0));
+        assert_eq!(initial_window_size(1366.0, 728.0), (1093.0, 640.0));
     }
 
     #[test]

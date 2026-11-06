@@ -187,7 +187,7 @@ export function AddSkillDialog({ open, onOpenChange, projects, gitOk, onInstalle
                 }}
                 className={cn(
                   "cursor-pointer px-3 text-xs leading-7 outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none",
-                  tab === x.key ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+                  tab === x.key ? "seg-active" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {x.label}

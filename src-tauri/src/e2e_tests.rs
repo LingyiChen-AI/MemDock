@@ -941,3 +941,94 @@ fn e2e_12_models_files() {
     assert!(all.iter().any(|f| f.path == "README.md"));
     assert!(!all.iter().any(|f| f.path.starts_with(".memdock")), "managed worktrees listed");
 }
+
+/// 13: a real screenshot sent to Codex (`MEMDOCK_E2E_SHOT`, a PNG); the rollout must carry the image.
+#[test]
+#[ignore]
+fn e2e_13_codex_screenshot() {
+    println!("[S13] Codex screenshot");
+    let Ok(shot) = std::env::var("MEMDOCK_E2E_SHOT") else {
+        println!("MEMDOCK_E2E_SHOT not set, skipped");
+        return;
+    };
+    let png = std::fs::read(&shot).expect("read screenshot");
+    let h = harness();
+    let dir = test_dir();
+    let mut o = opts(
+        Agent::Codex,
+        &dir,
+        "[E2E] s13 这是一张电脑屏幕截图。请用一句话说出截图里最主要的应用或窗口是什么，再列出你能读到的 3 段文字（原样抄写）。不要运行任何命令。",
+    );
+    o.effort = Some("low".into());
+    o.prompt_images = vec![data_uri(&png)];
+    let t0 = Instant::now();
+    let id = h.mgr.start(o).unwrap().live_id;
+    let (text, usage, _) = h.rec.turn(&id, 0).unwrap();
+    log!("reply ({} KB image): {} | {}", png.len() / 1024, text.trim(), cost_line(&usage, t0.elapsed().as_millis()));
+    assert!(text.trim().chars().count() > 10, "reply too short: {text:?}");
+    let native = native_of(&h.rec, &id).expect("thread id");
+    // The rollout records the user turn with the image as a local image input.
+    let sessions = dirs::home_dir().unwrap().join(".codex").join("sessions");
+    let rollout = walkdir::WalkDir::new(&sessions)
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().contains(&native))
+        .map(|e| e.path().to_path_buf())
+        .expect("rollout file");
+    let body = std::fs::read_to_string(&rollout).unwrap();
+    let has_image = body.contains("input_image") || body.contains("local_image") || body.contains("localImage");
+    log!("rollout {} has image input: {has_image}", rollout.display());
+    assert!(has_image, "no image input recorded in {}", rollout.display());
+}
+
+/// The `output_config.effort` of every real API request Claude Code logged in a session file.
+fn claude_request_efforts(session_file: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(session_file).unwrap_or_default();
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("api-request"))
+        .filter_map(|v| v.pointer("/params/output_config/effort").and_then(|e| e.as_str()).map(String::from))
+        .collect()
+}
+
+/// 14: Claude effort actually reaches the model request (low vs max on the same question).
+#[test]
+#[ignore]
+fn e2e_14_claude_effort_levels() {
+    println!("[S14] Claude effort low vs max");
+    let h = harness();
+    let dir = test_dir();
+    let question = "[E2E] s14 A shop sells pens at 3 for 7 yuan and notebooks at 5 yuan each. Xiao Ming has 60 yuan and must buy at least 2 notebooks and spend as much as possible without going over; pens only in packs of 3. How many packs and notebooks? Answer as: packs=<n> notebooks=<m>.";
+    let mut rows = vec![];
+    for level in ["low", "max"] {
+        let mut o = opts(Agent::Claude, &dir, question);
+        o.effort = Some(level.into());
+        let t0 = Instant::now();
+        let id = h.mgr.start(o).unwrap().live_id;
+        let (text, usage, _) = h.rec.turn(&id, 0).unwrap();
+        let ms = t0.elapsed().as_millis();
+        let thinking: usize = h
+            .rec
+            .of(&id)
+            .iter()
+            .filter_map(|e| match &e.event {
+                LiveEvent::Thinking { text, .. } => Some(text.chars().count()),
+                _ => None,
+            })
+            .sum();
+        let native = native_of(&h.rec, &id).expect("session id");
+        h.mgr.stop(&id).unwrap();
+        let file = find_session(&native).path;
+        let efforts = claude_request_efforts(&file);
+        log!(
+            "{level}: requests effort={efforts:?} | output_tokens={:?} thinking_chars={thinking} | {} | answer: {}",
+            usage.output_tokens,
+            cost_line(&usage, ms),
+            text.trim().lines().last().unwrap_or("")
+        );
+        assert!(!efforts.is_empty(), "no api-request lines in {file}");
+        assert!(efforts.iter().all(|e| e == level), "{level}: requests used {efforts:?}");
+        rows.push((level, usage.output_tokens.unwrap_or(0), ms));
+    }
+    log!("summary: {rows:?}");
+}

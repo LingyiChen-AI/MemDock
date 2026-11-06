@@ -328,7 +328,7 @@ function TitleEditor({ title, onSave, s }: { title: string; onSave?: (title: str
             if (e.key === "Escape") setEditing(false);
           }}
           onBlur={() => void save()}
-          className="h-8 min-w-0 flex-1 text-sm font-semibold"
+          className="-my-0.5 h-7 min-w-0 flex-1 rounded-md border-transparent bg-muted/50 px-1.5 text-base font-semibold shadow-none focus-visible:border-ring/40 focus-visible:bg-background md:text-base"
         />
         {saving ? <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
         {error ? <span role="alert" className="shrink-0 text-xs font-normal text-destructive">{fmt(s.renameFailed, { error })}</span> : null}
@@ -536,7 +536,7 @@ function ChatPane({
               </HeaderButton>
             ) : null}
             {session && session.converted_from?.tool !== targetTool ? (
-              <Button type="button" variant="outline" size="sm" className="cursor-pointer" disabled={converting || !preview || running || mode === "terminal"} onClick={onConvert}>
+              <Button type="button" variant="outline" size="sm" className="cursor-pointer" disabled={converting || !preview || running} onClick={onConvert}>
                 {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
                 {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[targetTool] })}
               </Button>
@@ -841,7 +841,7 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[380px] min-w-[300px] shrink-0 flex-col border-r border-border">
+        <aside className="flex w-[300px] min-w-[260px] shrink-0 flex-col border-r border-border">
           <div className="flex flex-col gap-2 border-b border-border p-3">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />

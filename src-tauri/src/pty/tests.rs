@@ -31,7 +31,7 @@ fn claude_args_per_mode() {
 #[test]
 fn codex_args_per_mode() {
     use PermissionMode::*;
-    assert_eq!(args(&opts(Agent::Codex, None, Ask, None)), "-a untrusted -s workspace-write");
+    assert_eq!(args(&opts(Agent::Codex, None, Ask, None)), "-c approval_policy=untrusted -s workspace-write");
     assert_eq!(
         args(&opts(Agent::Codex, Some("t-1"), AutoEdit, Some("gpt-5"))),
         "resume -a on-request -s workspace-write -m gpt-5 t-1"
@@ -222,4 +222,38 @@ fn real_write_and_close() {
         }
     }
     assert!(!mgr.is_open(&id));
+}
+
+/// Real: `codex resume` accepts the arguments of every permission mode (an unknown
+/// session id, so nothing is sent to the model; only argument parsing is checked).
+#[test]
+#[ignore]
+fn real_codex_resume_args_accepted() {
+    let Some(p) = find_program(OsStr::new("codex"), &path_dirs()) else { return };
+    for mode in [PermissionMode::Ask, PermissionMode::AutoEdit, PermissionMode::Plan, PermissionMode::Bypass] {
+        let (tx, rx) = mpsc::channel::<(String, serde_json::Value)>();
+        let tx = Mutex::new(tx);
+        let mgr = PtyManager::new(Arc::new(move |name: &str, v: serde_json::Value| {
+            let _ = tx.lock().unwrap().send((name.to_string(), v));
+        }));
+        let dir = tempfile::tempdir().unwrap();
+        let mut o = opts(Agent::Codex, Some("00000000-0000-4000-8000-000000000000"), mode, None);
+        o.cwd = dir.path().to_string_lossy().into_owned();
+        let id = mgr.open_program(&p, &build_args(&o), &o, &path_dirs()).expect("open");
+        let mut out = String::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while std::time::Instant::now() < deadline {
+            if let Ok((name, v)) = rx.recv_timeout(Duration::from_millis(200)) {
+                if name == "pty://exit" {
+                    break;
+                }
+                let d = v["data"].as_str().unwrap_or_default();
+                answer_cursor_query(&mgr, &id, d);
+                out.push_str(d);
+            }
+        }
+        mgr.close(&id);
+        eprintln!("{mode:?}: {:?}", out.chars().filter(|c| !c.is_control()).take(200).collect::<String>());
+        assert!(!out.contains("invalid value") && !out.contains("unexpected argument"), "{mode:?}: {out:?}");
+    }
 }

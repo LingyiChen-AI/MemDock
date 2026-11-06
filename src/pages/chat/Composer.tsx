@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { errorMessage } from "@/pages/skills/skillUtils";
+import { getConvUi, patchConvUi } from "./convUiState";
 import { MODEL_SUGGESTIONS, agentSettings, loadChatPrefs, parseExtraArgs, rememberAgentSettings, rememberLast, type AgentSettings } from "./chatPrefs";
 import {
   IMAGE_EXTS,
@@ -105,6 +106,12 @@ export interface ComposerProps {
   draft?: { onAgentChange: (agent: LiveAgent) => void; onCwdChange: (cwd: string) => void } | null;
   /** Folders `/cwd` offers. */
   projects?: ProjectChoice[];
+  /**
+   * Conversation key: unsent text / images (and, once the conversation started, its settings)
+   * are kept per conversation under it and restored when the composer mounts again.
+   */
+  stateKey?: string | null;
+  /** Resolving to `false` cancels the send without an error: the text stays. */
   onSend: (msg: ComposerMessage) => Promise<unknown>;
   onError: (e: string | null) => void;
 }
@@ -519,19 +526,34 @@ export function ChatComposer({
   attached = null,
   draft = null,
   projects = [],
+  stateKey = null,
   onSend,
   onError,
 }: ComposerProps) {
   const k = c.composer;
-  const [text, setText] = React.useState("");
+  const [text, setText] = React.useState(() => getConvUi(stateKey).text);
   const [caret, setCaret] = React.useState(0);
-  const [images, setImages] = React.useState<string[]>([]);
+  const [images, setImages] = React.useState<string[]>(() => getConvUi(stateKey).images);
   const [sending, setSending] = React.useState(false);
   const [dragging, setDragging] = React.useState(false);
   const [prefs, setPrefs] = React.useState(loadChatPrefs);
   const [picker, setPicker] = React.useState<PickerKind | null>(null);
+  /** A started conversation keeps its own settings; a draft follows (and updates) the global prefs. */
+  const perConv = !!stateKey && !draft;
+  const [convSettings, setConvSettings] = React.useState<Partial<AgentSettings> | null>(() => (perConv ? getConvUi(stateKey).settings : null));
   /** Settings changed while attached to a running process: they apply next time. */
-  const [changed, setChanged] = React.useState<Set<keyof AgentSettings>>(() => new Set());
+  const [changed, setChanged] = React.useState<Set<keyof AgentSettings>>(() => {
+    const out = new Set<keyof AgentSettings>();
+    if (attached && convSettings) {
+      if (convSettings.permission !== undefined && convSettings.permission !== attached.permission) out.add("permission");
+      if (convSettings.model !== undefined && convSettings.model !== (attached.model ?? "")) out.add("model");
+    }
+    return out;
+  });
+  // Unsent text / images survive switching conversations.
+  React.useEffect(() => {
+    patchConvUi(stateKey, { text, images });
+  }, [stateKey, text, images]);
   const ref = React.useRef<HTMLTextAreaElement>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const textRef = React.useRef(text);
@@ -557,7 +579,7 @@ export function ChatComposer({
     fetchModels();
   }, [fetchModels]);
 
-  const mine = agentSettings(prefs, agent);
+  const mine: AgentSettings = { ...agentSettings(prefs, agent), ...(convSettings ?? {}) };
   const permission = attached && !changed.has("permission") ? attached.permission : mine.permission;
   const model = attached && !changed.has("model") ? (attached.model ?? "") : mine.model;
   const effort = mine.effort;
@@ -566,7 +588,13 @@ export function ChatComposer({
   const curModel = effectiveModel(models, model);
 
   const setSetting = (patch: Partial<AgentSettings>) => {
-    setPrefs(rememberAgentSettings(agent, patch));
+    if (perConv) {
+      const next = { ...(convSettings ?? {}), ...patch };
+      setConvSettings(next);
+      patchConvUi(stateKey, { settings: next });
+    } else {
+      setPrefs(rememberAgentSettings(agent, patch));
+    }
     if (attached) setChanged((s) => new Set([...s, ...(Object.keys(patch) as (keyof AgentSettings)[])]));
   };
 
@@ -831,12 +859,21 @@ export function ChatComposer({
     if (!canSend) return;
     setSending(true);
     onError(null);
+    // The key may move to the started conversation during the send: clear it first, restore on failure.
+    const snap = { text, images };
+    const settings: AgentSettings = { permission, model: model.trim(), effort, args };
+    patchConvUi(stateKey, { text: "", images: [], settings: perConv ? (convSettings ?? settings) : settings });
     try {
-      await onSend({ text: text.trim(), images, permission, model: model.trim(), effort, args: argList });
+      const r = await onSend({ text: text.trim(), images, permission, model: model.trim(), effort, args: argList });
+      if (r === false) {
+        patchConvUi(stateKey, snap);
+        return;
+      }
       setText("");
       setCaret(0);
       setImages([]);
     } catch (e) {
+      patchConvUi(stateKey, snap);
       onError(fmt(c.sendFailed, { error: errorMessage(e) }));
     } finally {
       setSending(false);

@@ -19,6 +19,10 @@ export interface PtyOpenOptions {
   rows: number;
 }
 
+/**
+ * Fails with `busy_live:<live_id>` when a GUI live process drives the same session; when another
+ * terminal already has it, that terminal's `PtyOpened` comes back (re-attach, no new process).
+ */
 export interface PtyOpened {
   pty_id: string;
   /** Shortened command line for the status bar, e.g. `claude --resume 1234abcd…`. */

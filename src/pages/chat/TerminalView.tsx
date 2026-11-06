@@ -143,7 +143,7 @@ export function TerminalView({ termKey, opts, c, keepAlive = false }: { termKey:
           <span className="shrink-0">{entry?.code != null ? fmt(c.terminalExited, { code: entry.code }) : c.terminalExitedNoCode}</span>
         ) : status === "error" ? (
           <span role="alert" className="min-w-0 shrink truncate" style={{ color: TERMINAL_CHROME.error }} title={entry?.error ?? ""}>
-            {fmt(c.terminalFailed, { error: entry?.error ?? "" })}
+            {entry?.busy?.kind === "live" ? c.busyLive : fmt(c.terminalFailed, { error: entry?.error ?? "" })}
           </span>
         ) : null}
         {status === "exited" || status === "error" ? (

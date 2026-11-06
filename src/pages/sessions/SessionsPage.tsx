@@ -2,20 +2,24 @@ import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
 import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
-import { liveInterrupt, liveRespond, liveSend, type LiveAgent, type LiveSessionInfo } from "@/api/live";
+import { liveInterrupt, liveRespond, liveSend, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
+import { ptyClose } from "@/api/pty";
 import { TerminalView } from "@/pages/chat/TerminalView";
 import {
   addShell,
   closeTerminal,
   initialMode,
-  releaseGuiProcess,
+  migrateTerminal,
+  prepareTerminal,
   removeShell,
   saveChatMode,
   shellOptions,
   terminalKey,
+  terminalKeyForPty,
   terminalOptions,
   useShells,
   useTerminal,
+  useTerminalEntries,
   type ChatMode,
   type ShellTerm,
 } from "@/pages/chat/terminalStore";
@@ -24,7 +28,8 @@ import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
 import { ChatComposer, type ComposerMessage, type ProjectChoice } from "@/pages/chat/Composer";
 import { isActive, loadChatPrefs, rememberLast } from "@/pages/chat/chatPrefs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ensureTranscript, selectLive, startLive, useLiveStore, type LiveConv } from "@/pages/chat/liveStore";
+import { ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
+import { moveConvUi, newDraftKey } from "@/pages/chat/convUiState";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { Pencil } from "lucide-react";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
@@ -45,8 +50,44 @@ type S = Messages["sessions"];
 type C = Messages["chat"];
 
 const LIVE_PREFIX = "live:";
-const DRAFT_KEY = "draft";
+const DRAFT_PREFIX = "draft:";
 const SHELL_PREFIX = "term:";
+
+/** Not exited: the process still drives (or can drive) its session. */
+function alive(x: LiveSessionInfo): boolean {
+  return x.state !== "exited";
+}
+
+/** Live processes per native id, newest first (all of them, not only the newest). */
+export function groupLiveByNative(list: LiveSessionInfo[]): Map<string, LiveSessionInfo[]> {
+  const m = new Map<string, LiveSessionInfo[]>();
+  for (const x of [...list].sort((a, b) => b.created_at - a.created_at)) {
+    if (!x.native_id) continue;
+    const arr = m.get(x.native_id);
+    if (arr) arr.push(x);
+    else m.set(x.native_id, [x]);
+  }
+  return m;
+}
+
+/** The process a conversation shows: the newest still running one, else the newest. */
+export function primaryLive(lives: LiveSessionInfo[] | undefined): LiveSessionInfo | null {
+  if (!lives?.length) return null;
+  return lives.find(alive) ?? lives[0];
+}
+
+/** Warning: more than one process drives one native session. */
+function DupBadge({ n, c }: { n: number; c: C }) {
+  return (
+    <span
+      title={fmt(c.dupProcessesHint, { n })}
+      className="inline-flex h-5 shrink-0 items-center gap-1 rounded bg-amber-500/15 px-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-300"
+    >
+      <TriangleAlert className="size-3" aria-hidden="true" />
+      {c.dupProcesses}
+    </span>
+  );
+}
 
 /** Same folder, ignoring slash style, a trailing slash and (Windows) case. */
 function samePath(a: string, b: string): boolean {
@@ -224,9 +265,31 @@ function SessionListSkeleton({ label }: { label: string }) {
   );
 }
 
-function SessionRow({ session, live, selected, onSelect, s, c }: { session: SessionSummary; live?: LiveSessionInfo; selected: boolean; onSelect: () => void; s: S; c: C }) {
+function SessionRow({
+  session,
+  lives = [],
+  selected,
+  selectedLiveId,
+  onSelect,
+  onSelectLive,
+  s,
+  c,
+}: {
+  session: SessionSummary;
+  /** Every live process of this session, newest first. */
+  lives?: LiveSessionInfo[];
+  selected: boolean;
+  /** The process selected on its own (when several run). */
+  selectedLiveId?: string | null;
+  onSelect: () => void;
+  onSelectLive?: (x: LiveSessionInfo) => void;
+  s: S;
+  c: C;
+}) {
   const heading = session.title?.trim() || session.first_prompt || s.untitled;
-  return (
+  const live = primaryLive(lives) ?? undefined;
+  const running = lives.filter(alive);
+  const row = (
     <button
       type="button"
       aria-current={selected ? "true" : undefined}
@@ -256,8 +319,34 @@ function SessionRow({ session, live, selected, onSelect, s, c }: { session: Sess
         {session.converted_to.length > 0 ? (
           <span className="text-primary">{fmt(s.convertedTo, { tool: s.tools[otherTool(session.tool)] })}</span>
         ) : null}
+        {running.length > 1 ? <DupBadge n={running.length} c={c} /> : null}
       </div>
     </button>
+  );
+  if (running.length < 2 || !onSelectLive) return row;
+  // Several processes: list each one so the extra one can be found and stopped.
+  return (
+    <div className="flex flex-col gap-0.5">
+      {row}
+      <ul className="ml-4 flex flex-col gap-0.5 border-l border-amber-500/40 pl-2">
+        {running.map((x) => (
+          <li key={x.live_id}>
+            <button
+              type="button"
+              aria-current={selectedLiveId === x.live_id ? "true" : undefined}
+              onClick={() => onSelectLive(x)}
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring",
+                selectedLiveId === x.live_id && "list-active",
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate font-mono">{fmt(c.processRow, { id: x.live_id.slice(0, 8) })}</span>
+              <StatePill state={x.state} c={c} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -403,6 +492,8 @@ interface Target {
   live: LiveSessionInfo | null;
   /** A new chat that has not started yet (no session, no process). */
   draft?: boolean;
+  /** The draft's own key (`draft:<uuid>`): its terminal and composer state live under it. */
+  draftKey?: string | null;
 }
 
 /** The session title; with `onSave`, a pencil button edits it in place (Enter saves, Esc cancels). */
@@ -523,7 +614,6 @@ function ChatPane({
   onRefresh,
   onDraftChange,
   projects,
-  lc,
   s,
   c,
 }: {
@@ -539,13 +629,15 @@ function ChatPane({
   /** Draft only: the agent / folder picked in the composer. */
   onDraftChange?: (patch: { agent?: LiveAgent; cwd?: string }) => void;
   projects: ProjectChoice[];
-  lc: LiveConv | undefined;
   s: S;
   c: C;
 }) {
   const { session, live } = target;
+  const lc = useLiveConv(live?.live_id);
   const [actionError, setActionError] = React.useState<string | null>(null);
+  // One key per conversation: its terminal, unsent text, scroll position and settings.
   const termKey = terminalKey(target);
+  const [busyPty, setBusyPty] = React.useState<((choice: "close" | "show" | "cancel") => void) | null>(null);
   const [mode, setMode] = React.useState<ChatMode>(() => (target.cwd ? initialMode(termKey, live) : "gui"));
   const [switching, setSwitching] = React.useState(false);
   const [confirmStop, setConfirmStop] = React.useState<((ok: boolean) => void) | null>(null);
@@ -557,7 +649,7 @@ function ChatPane({
     setSwitching(true);
     try {
       if (next === "terminal") {
-        const ok = await releaseGuiProcess(live, () => new Promise<boolean>((resolve) => setConfirmStop(() => resolve)));
+        const ok = await prepareTerminal(target, termKey, getLiveState().sessions, () => new Promise<boolean>((resolve) => setConfirmStop(() => resolve)));
         if (!ok) return;
         setTermOpts(terminalOptions(target));
         setMode("terminal");
@@ -582,10 +674,40 @@ function ChatPane({
   const running = live ? isActive(live.state) : false;
   const attached = live !== null && live.state !== "exited";
 
+  /** A terminal drives this session: switch to it, or close it and continue here. True = go on. */
+  const resolvePtyOwner = async (owner: NativeOwner): Promise<boolean> => {
+    const choice = await new Promise<"close" | "show" | "cancel">((resolve) => setBusyPty(() => resolve));
+    if (choice === "close") {
+      const key = terminalKeyForPty(owner.id);
+      if (key) await closeTerminal(key);
+      else await ptyClose(owner.id).catch(() => {});
+      return true;
+    }
+    if (choice === "show") {
+      const key = terminalKeyForPty(owner.id);
+      if (key && key !== termKey) migrateTerminal(key, termKey);
+      setTermOpts(terminalOptions(target));
+      setMode("terminal");
+      saveChatMode("terminal");
+    }
+    return false;
+  };
+
   // Any message continues the conversation: through the running process, or by resuming it.
-  const send = async ({ text, images, permission, model, effort, args }: ComposerMessage) => {
-    if (attached && live) return liveSend(live.live_id, text, images);
-    await startLive({
+  // Returns false when the send was given up (the composer keeps the text).
+  const send = async ({ text, images, permission, model, effort, args }: ComposerMessage): Promise<boolean | void> => {
+    if (attached && live) {
+      try {
+        return await liveSend(live.live_id, text, images);
+      } catch (e) {
+        throw parseBusy(e) ? new Error(c.busyPty) : e;
+      }
+    }
+    if (target.nativeId) {
+      const owner = await nativeOwner(target.tool, target.nativeId).catch(() => null);
+      if (owner?.kind === "pty" && !(await resolvePtyOwner(owner))) return false;
+    }
+    const opts = {
       agent: target.tool,
       cwd: target.cwd,
       resume_id: target.nativeId,
@@ -595,7 +717,27 @@ function ChatPane({
       extra_args: args,
       prompt: text,
       prompt_images: images,
-    });
+    };
+    // A draft's UI state follows it to the started conversation's key.
+    const carry = (info: LiveSessionInfo) => {
+      if (!target.draft) return;
+      const to = info.native_id ? `${info.agent}:${info.native_id}` : `${LIVE_PREFIX}${info.live_id}`;
+      moveConvUi(termKey, to);
+      migrateTerminal(termKey, to);
+    };
+    try {
+      await startLive(opts, carry);
+    } catch (e) {
+      const busy = parseBusy(e);
+      if (busy?.kind !== "pty") throw e;
+      // The terminal took the session after the check: same choice, then one retry.
+      if (!(await resolvePtyOwner(busy))) return false;
+      try {
+        await startLive(opts, carry);
+      } catch (e2) {
+        throw parseBusy(e2) ? new Error(c.busyPty) : e2;
+      }
+    }
     if (target.draft) rememberLast({ agent: target.tool, cwd: target.cwd });
   };
   const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
@@ -697,12 +839,34 @@ function ChatPane({
         onConfirm={() => answerConfirm(true)}
         onCancel={() => answerConfirm(false)}
       />
+      <ConfirmDialog
+        open={busyPty !== null}
+        title={c.busyPtyTitle}
+        body={c.busyPtyBody}
+        confirmLabel={c.busyPtyClose}
+        cancelLabel={s.cancel}
+        extraLabel={c.busyPtyShow}
+        destructive
+        onConfirm={() => {
+          busyPty?.("close");
+          setBusyPty(null);
+        }}
+        onExtra={() => {
+          busyPty?.("show");
+          setBusyPty(null);
+        }}
+        onCancel={() => {
+          busyPty?.("cancel");
+          setBusyPty(null);
+        }}
+      />
       {mode === "terminal" ? (
         <TerminalView termKey={termKey} opts={termOpts} c={c} />
       ) : (
         <>
           {live && lc?.loaded ? (
             <Conversation
+              scrollKey={termKey}
               conv={lc.conv}
               agent={live.agent}
               running={running}
@@ -743,7 +907,8 @@ function ChatPane({
             <ChatSkeleton label={c.loading} className="px-4 py-4" />
           )}
           <ChatComposer
-            key={target.nativeId ?? live?.live_id ?? "new"}
+            key={termKey}
+            stateKey={termKey}
             c={c}
             agent={target.tool}
             cwd={target.cwd}
@@ -789,7 +954,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const { t } = useI18n();
   const s = t.sessions;
   const c = t.chat;
-  const store = useLiveStore();
+  // Session infos only: streamed tokens re-render just the open conversation.
+  const store = useLiveStore(selectListSlice, shallowObjectEqual);
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -807,8 +973,17 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const [converting, setConverting] = React.useState(false);
   const [convertError, setConvertError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<ConvertResult | null>(null);
-  const [draft, setDraft] = React.useState<{ agent: LiveAgent; cwd: string } | null>(null);
+  const [draft, setDraft] = React.useState<{ key: string; agent: LiveAgent; cwd: string } | null>(null);
   const shells = useShells();
+  const terms = useTerminalEntries();
+  // Terminals of drafts (a new CLI chat typed into, then left): listed so they stay reachable.
+  const draftTerms = React.useMemo(
+    () =>
+      Object.values(terms).filter(
+        (x) => x.key.startsWith(DRAFT_PREFIX) && x.opts.tool !== "shell" && (x.status === "running" || x.status === "starting") && x.touched,
+      ),
+    [terms],
+  );
   const [pageError, setPageError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async (quiet = false) => {
@@ -832,26 +1007,34 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     [sessions, selectedKey],
   );
 
-  // Newest live process per resume id; live chats whose session file is not listed yet.
-  const liveByNative = React.useMemo(() => {
-    const m = new Map<string, LiveSessionInfo>();
-    for (const x of [...store.sessions].sort((a, b) => a.created_at - b.created_at)) if (x.native_id) m.set(x.native_id, x);
-    return m;
-  }, [store.sessions]);
+  // Every live process per resume id (newest first); live chats whose session file is not listed yet.
+  const liveByNative = React.useMemo(() => groupLiveByNative(store.sessions), [store.sessions]);
   const knownIds = React.useMemo(() => new Set((sessions ?? []).map((x) => x.id)), [sessions]);
   const liveOnly = React.useMemo(
     () =>
       [...store.sessions]
         .filter((x) => !x.native_id || !knownIds.has(x.native_id))
-        .filter((x) => !x.native_id || liveByNative.get(x.native_id) === x)
+        // An exited older process of the same session adds nothing.
+        .filter((x) => !x.native_id || alive(x) || primaryLive(liveByNative.get(x.native_id)) === x)
         .sort((a, b) => b.created_at - a.created_at),
     [store.sessions, knownIds, liveByNative],
   );
+  const dupCount = (x: LiveSessionInfo) => (x.native_id ? (liveByNative.get(x.native_id) ?? []).filter(alive).length : 0);
+
+  // A live process got its native id: its terminal / UI state move to the conversation's key.
+  React.useEffect(() => {
+    for (const x of store.sessions) {
+      if (!x.native_id) continue;
+      const to = `${x.agent}:${x.native_id}`;
+      moveConvUi(LIVE_PREFIX + x.live_id, to);
+      migrateTerminal(LIVE_PREFIX + x.live_id, to);
+    }
+  }, [store.sessions]);
   const selectedShell = selectedKey?.startsWith(SHELL_PREFIX) ? (shells.find((x) => x.key === selectedKey.slice(SHELL_PREFIX.length)) ?? null) : null;
   const selectedLive = selectedKey?.startsWith(LIVE_PREFIX)
     ? (store.sessions.find((x) => x.live_id === selectedKey.slice(LIVE_PREFIX.length)) ?? null)
     : selected
-      ? (liveByNative.get(selected.id) ?? null)
+      ? primaryLive(liveByNative.get(selected.id))
       : null;
 
   // A chat started from a draft (or elsewhere) becomes the selection.
@@ -866,8 +1049,10 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     if (!selectedKey?.startsWith(LIVE_PREFIX) || !sessions) return;
     const info = store.sessions.find((x) => x.live_id === selectedKey.slice(LIVE_PREFIX.length));
     const match = info?.native_id ? sessions.find((x) => x.id === info.native_id) : undefined;
-    if (match) setSelectedKey(sessionKey(match));
-  }, [selectedKey, sessions, store.sessions]);
+    // Not when the user picked one of several processes of that session.
+    const lives = info?.native_id ? (liveByNative.get(info.native_id) ?? []) : [];
+    if (match && lives.filter(alive).length < 2) setSelectedKey(sessionKey(match));
+  }, [selectedKey, sessions, store.sessions, liveByNative]);
 
   // Live chats not on the list yet: reload the list (quietly) when one finishes a turn.
   const pendingFiles = liveOnly.filter((x) => x.native_id && x.state === "idle").map((x) => x.live_id).join(",");
@@ -918,8 +1103,15 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   /** Opens a new, not yet started chat in the right pane. */
   const openDraft = (cwd?: string) => {
     const p = loadChatPrefs();
-    setDraft({ agent: p.agent, cwd: cwd ?? p.cwd });
-    setSelectedKey(DRAFT_KEY);
+    const key = newDraftKey();
+    setDraft({ key, agent: p.agent, cwd: cwd ?? p.cwd });
+    setSelectedKey(key);
+    resetPane();
+  };
+  /** Back to a draft whose terminal is still running. */
+  const openDraftTerminal = (key: string, opts: { tool: string; cwd: string }) => {
+    setDraft({ key, agent: opts.tool === "codex" ? "codex" : "claude", cwd: opts.cwd });
+    setSelectedKey(key);
     resetPane();
   };
   const openShell = (cwd: string) => {
@@ -977,8 +1169,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     setConvertError(null);
   };
 
-  const target: Target | null = selectedKey === DRAFT_KEY && draft
-    ? { tool: draft.agent, cwd: draft.cwd, nativeId: null, title: c.untitled, session: null, live: null, draft: true }
+  const target: Target | null = draft && selectedKey === draft.key
+    ? { tool: draft.agent, cwd: draft.cwd, nativeId: null, title: c.untitled, session: null, live: null, draft: true, draftKey: draft.key }
     : selected
     ? {
         tool: selected.tool,
@@ -1092,13 +1284,32 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                 <ul className="flex flex-col gap-0.5">{looseShells.map(shellRow)}</ul>
               </section>
             ) : null}
-            {liveOnly.length > 0 ? (
+            {liveOnly.length > 0 || draftTerms.length > 0 ? (
               <section aria-label={c.newChats} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.newChats}</h2>
                 <ul className="flex flex-col gap-0.5">
+                  {draftTerms.map((x) => (
+                    <li key={x.key}>
+                      <ShellRow
+                        shell={{ key: x.key, cwd: x.opts.cwd, created_at: 0 }}
+                        selected={selectedKey === x.key}
+                        onSelect={() => openDraftTerminal(x.key, x.opts)}
+                        onClose={() => {
+                          if (selectedKey === x.key) setSelectedKey(null);
+                          void closeTerminal(x.key);
+                        }}
+                        c={c}
+                      />
+                    </li>
+                  ))}
                   {liveOnly.map((x) => (
                     <li key={x.live_id}>
                       <LiveRow info={x} selected={selectedKey === LIVE_PREFIX + x.live_id} onSelect={() => selectLiveRow(x)} c={c} now={now} />
+                      {dupCount(x) > 1 ? (
+                        <div className="px-2.5 pb-1">
+                          <DupBadge n={dupCount(x)} c={c} />
+                        </div>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -1140,7 +1351,16 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                     {shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
                     {g.sessions.map((x) => (
                       <li key={sessionKey(x)}>
-                        <SessionRow session={x} live={liveByNative.get(x.id)} selected={sessionKey(x) === selectedKey} onSelect={() => select(x)} s={s} c={c} />
+                        <SessionRow
+                          session={x}
+                          lives={liveByNative.get(x.id)}
+                          selected={sessionKey(x) === selectedKey}
+                          selectedLiveId={selectedKey?.startsWith(LIVE_PREFIX) ? selectedKey.slice(LIVE_PREFIX.length) : null}
+                          onSelect={() => select(x)}
+                          onSelectLive={selectLiveRow}
+                          s={s}
+                          c={c}
+                        />
                       </li>
                     ))}
                   </ul>
@@ -1165,14 +1385,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
             <ShellPane key={selectedShell.key} shell={selectedShell} onClose={() => closeShell(selectedShell.key)} c={c} />
           ) : target ? (
             <ChatPane
-              key={target.draft ? DRAFT_KEY : selectedLive ? LIVE_PREFIX + selectedLive.live_id : selected ? sessionKey(selected) : selectedKey}
+              key={target.draftKey ?? (selectedLive ? LIVE_PREFIX + selectedLive.live_id : selected ? sessionKey(selected) : selectedKey)}
               target={target}
               preview={selected ? preview : null}
               error={selected ? previewError : null}
               result={result}
               converting={converting}
               onConvert={() => void askConvert()}
-              lc={selectedLive ? store.convs[selectedLive.live_id] : undefined}
               onRenamed={() => void load(true)}
               onRefresh={() => {
                 setPreviewNonce((n) => n + 1);

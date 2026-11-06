@@ -1,5 +1,5 @@
 import * as React from "react";
-import { liveStop, type LiveAgent, type LiveSessionInfo } from "@/api/live";
+import { liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
 import { onPtyData, onPtyExit, ptyClose, ptyOpen, ptyResize, ptyWrite, type PtyOpenOptions } from "@/api/pty";
 import { errorMessage } from "@/pages/skills/skillUtils";
 import { isActive, loadChatPrefs } from "./chatPrefs";
@@ -40,6 +40,8 @@ export interface TermEntry {
   status: TermStatus;
   code: number | null;
   error: string | null;
+  /** `pty_open` refused: a GUI live process drives this session (`busy_live:`). */
+  busy: NativeOwner | null;
   /** The user typed something: kept alive when the view is left. */
   touched: boolean;
   opts: PtyOpenOptions;
@@ -141,7 +143,7 @@ export async function openTerminal(key: string, opts: PtyOpenOptions, keep = fal
   if (cur && (cur.status === "starting" || cur.status === "running")) return;
   entries = {
     ...entries,
-    [key]: { key, ptyId: null, command: "", status: "starting", code: null, error: null, touched: keep, opts },
+    [key]: { key, ptyId: null, command: "", status: "starting", code: null, error: null, busy: null, touched: keep, opts },
   };
   buffers.set(key, "");
   emit();
@@ -150,7 +152,16 @@ export async function openTerminal(key: string, opts: PtyOpenOptions, keep = fal
     const { pty_id, command } = await ptyOpen(opts);
     if (entries[key]?.status !== "starting" || entries[key]?.ptyId) {
       // Closed (or replaced) while starting.
-      void ptyClose(pty_id).catch(() => {});
+      if (!keyByPty.has(pty_id)) void ptyClose(pty_id).catch(() => {});
+      return;
+    }
+    const other = keyByPty.get(pty_id);
+    if (other && other !== key && entries[other]) {
+      // The backend re-attached a terminal we already show under another key: move it here.
+      const rest = { ...entries };
+      delete rest[key];
+      entries = rest;
+      migrateTerminal(other, key);
       return;
     }
     keyByPty.set(pty_id, key);
@@ -162,8 +173,48 @@ export async function openTerminal(key: string, opts: PtyOpenOptions, keep = fal
       earlyExit.delete(pty_id);
     }
   } catch (e) {
-    patch(key, { status: "error", error: errorMessage(e) });
+    patch(key, { status: "error", error: errorMessage(e), busy: parseBusy(e) });
   }
+}
+
+/**
+ * The conversation of `from` got a new key (a draft started, its native id became known):
+ * moves the terminal with its scrollback; the process keeps running. False when nothing moved.
+ */
+export function migrateTerminal(from: string, to: string): boolean {
+  const cur = entries[from];
+  if (from === to || !cur) return false;
+  const there = entries[to];
+  if (there && (there.status === "starting" || there.status === "running")) return false;
+  const rest = { ...entries };
+  delete rest[from];
+  entries = { ...rest, [to]: { ...cur, key: to } };
+  buffers.set(to, buffers.get(from) ?? "");
+  buffers.delete(from);
+  if (cur.ptyId) keyByPty.set(cur.ptyId, to);
+  const t = closeTimers.get(from);
+  if (t) clearTimeout(t);
+  closeTimers.delete(from);
+  sinks.delete(from);
+  emit();
+  return true;
+}
+
+/** The key showing terminal `ptyId`, if any. */
+export function terminalKeyForPty(ptyId: string): string | undefined {
+  return keyByPty.get(ptyId);
+}
+
+/** Every terminal entry (re-rendered on any change). */
+export function useTerminalEntries(): Record<string, TermEntry> {
+  const sub = React.useCallback((l: () => void) => {
+    listeners.add(l);
+    return () => {
+      listeners.delete(l);
+    };
+  }, []);
+  const get = React.useCallback(() => entries, []);
+  return React.useSyncExternalStore(sub, get, get);
 }
 
 /** Kills the terminal of `key` (if any) and forgets it. */
@@ -245,9 +296,14 @@ export function resetTerminalStore(): void {
   emit();
 }
 
-/** Stable per conversation: the native id once known, else the GUI live process. */
-export function terminalKey(t: { tool: LiveAgent; nativeId: string | null; live: LiveSessionInfo | null }): string {
-  return t.nativeId ? `${t.tool}:${t.nativeId}` : `live:${t.live?.live_id ?? "new"}`;
+/**
+ * Stable per conversation: the native id once known, else the GUI live process, else the
+ * draft's own `draft:<uuid>` key (never shared between drafts).
+ */
+export function terminalKey(t: { tool: LiveAgent; nativeId: string | null; live: LiveSessionInfo | null; draftKey?: string | null }): string {
+  if (t.nativeId) return `${t.tool}:${t.nativeId}`;
+  if (t.live) return `live:${t.live.live_id}`;
+  return t.draftKey ?? "draft:none";
 }
 
 /** PTY options for a conversation, with the permission / model last used for its tool. */
@@ -273,6 +329,37 @@ export async function releaseGuiProcess(live: LiveSessionInfo | null, confirm: (
   if (!live || live.state === "exited") return true;
   if (isActive(live.state) && !(await confirm())) return false;
   await liveStop(live.live_id);
+  return true;
+}
+
+/**
+ * Before a terminal opens for a conversation: no other process may drive its native session.
+ * Stops the conversation's own GUI process and any other GUI process the backend reports as the
+ * owner (asking first when one is replying); a terminal we already show elsewhere is moved to `key`.
+ * Returns false when the user declined.
+ */
+export async function prepareTerminal(
+  t: { tool: LiveAgent; nativeId: string | null; live: LiveSessionInfo | null },
+  key: string,
+  lives: LiveSessionInfo[],
+  confirm: () => Promise<boolean>,
+): Promise<boolean> {
+  if (!(await releaseGuiProcess(t.live, confirm))) return false;
+  if (!t.nativeId) return true;
+  let owner: NativeOwner | null = null;
+  try {
+    owner = await nativeOwner(t.tool, t.nativeId);
+  } catch {
+    return true;
+  }
+  if (owner?.kind === "live" && owner.id !== t.live?.live_id) {
+    const info = lives.find((x) => x.live_id === owner.id);
+    if (info && isActive(info.state) && !(await confirm())) return false;
+    await liveStop(owner.id);
+  } else if (owner?.kind === "pty") {
+    const other = keyByPty.get(owner.id);
+    if (other && other !== key) migrateTerminal(other, key);
+  }
   return true;
 }
 

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
-import type { Decision, LiveAgent } from "@/api/live";
+import { readImageDataUri, storedImagePath, type Decision, type LiveAgent } from "@/api/live";
 import { ChatAvatar, ChatRow, ChatText } from "@/components/chat/ChatMessage";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,6 +9,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { CHIP_FOLD, IoBlock, KIND_ICON, KIND_TONE, Thumbs } from "@/pages/sessions/Timeline";
+import { getConvUi, patchConvUi } from "./convUiState";
 import { toConvBlocks, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
 
 type C = Messages["chat"];
@@ -23,7 +24,10 @@ export function Conversation({
   starting,
   onRespond,
   prefix,
+  scrollKey = null,
 }: {
+  /** Conversation key: the scroll position (and whether it follows the bottom) is kept under it. */
+  scrollKey?: string | null;
   /** Rendered above the live messages inside the same scroll area (the session's history). */
   prefix?: React.ReactNode;
   conv: ConvState;
@@ -39,14 +43,23 @@ export function Conversation({
   const [detail, setDetail] = React.useState<LiveToolCall | null>(null);
   const blocks = React.useMemo(() => toConvBlocks(conv.items), [conv.items]);
   const scroller = React.useRef<HTMLDivElement>(null);
-  const stick = React.useRef(true);
+  const saved = React.useRef(getConvUi(scrollKey));
+  const stick = React.useRef(saved.current.scrollTop === null || saved.current.stuck);
   const waiting = blocks.some((b) => b.kind === "approval" && b.approval.decision === null && !b.approval.expired);
 
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_SLACK;
+    patchConvUi(scrollKey, { scrollTop: el.scrollTop, stuck: stick.current });
   };
+
+  // Back in a conversation that was scrolled up: return to where it was.
+  React.useLayoutEffect(() => {
+    const el = scroller.current;
+    const top = saved.current.scrollTop;
+    if (el && !stick.current && top !== null) el.scrollTop = top;
+  }, []);
 
   React.useLayoutEffect(() => {
     const el = scroller.current;
@@ -75,7 +88,7 @@ export function Conversation({
               return (
                 <ChatRow key={b.key} role="user" name={c.you}>
                   {b.text ? <ChatText text={b.text} expandLabel={c.expand} collapseLabel={c.collapse} /> : null}
-                  {b.images?.length ? <Thumbs images={b.images} s={t.sessions} /> : null}
+                  {b.images?.length ? <LiveThumbs images={b.images} label={c.imageLoading} /> : null}
                 </ChatRow>
               );
             case "turn":
@@ -108,6 +121,58 @@ export function Conversation({
         {running && !waiting && !starting ? <TypingRow agent={agent} c={c} /> : null}
       </ol>
       <ToolDialog call={liveDetail} onClose={() => setDetail(null)} c={c} />
+    </div>
+  );
+}
+
+/** Loaded `memdock-image:` files (data URIs), shared by every view. */
+const imageCache = new Map<string, Promise<string>>();
+
+/** Tests. */
+export function resetImageCache(): void {
+  imageCache.clear();
+}
+
+function loadStoredImage(path: string): Promise<string> {
+  let p = imageCache.get(path);
+  if (!p) {
+    p = readImageDataUri(path).catch((e) => {
+      imageCache.delete(path);
+      throw e;
+    });
+    imageCache.set(path, p);
+  }
+  return p;
+}
+
+/** Transparent 1x1 GIF shown while a stored image loads (or when it could not be read). */
+const PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/**
+ * Message thumbnails: data URIs as they are; stored transcripts reference images as
+ * `memdock-image:<path>`, read lazily (when the message is shown) through `readImageDataUri`.
+ */
+export function LiveThumbs({ images, label }: { images: string[]; label: string }) {
+  const { t } = useI18n();
+  const [loaded, setLoaded] = React.useState<Record<string, string>>({});
+  React.useEffect(() => {
+    let alive = true;
+    for (const src of images) {
+      const path = storedImagePath(src);
+      if (!path) continue;
+      loadStoredImage(path)
+        .then((uri) => alive && setLoaded((m) => (m[src] === uri ? m : { ...m, [src]: uri })))
+        .catch(() => {});
+    }
+    return () => {
+      alive = false;
+    };
+  }, [images]);
+  const resolved = images.map((src) => (storedImagePath(src) === null ? src : (loaded[src] ?? PLACEHOLDER)));
+  const waiting = images.some((src) => storedImagePath(src) !== null && !loaded[src]);
+  return (
+    <div aria-busy={waiting || undefined} aria-label={waiting ? label : undefined}>
+      <Thumbs images={resolved} s={t.sessions} />
     </div>
   );
 }

@@ -784,3 +784,129 @@ fn finish_keeps_plan_on_pre_write_errors() {
     let sum = sync_finish_impl(&e.state, &plan.id, res()).unwrap();
     assert!(sum.committed);
 }
+
+#[test]
+fn skipped_secret_files_are_recorded_until_synced() {
+    let e = env();
+    e.login();
+    write(&e.global(), "key = AKIAIOSFODNN7EXAMPLE\n");
+    match sync_start_with(&e.state, "skip").unwrap() {
+        SyncStartDto::Done { .. } => {}
+        other => panic!("expected done, got {other:?}"),
+    }
+    let recs = sync_skipped_files_impl(&e.state).unwrap();
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    assert_eq!(recs[0].repo_path, GLOBAL);
+    assert_eq!(recs[0].reason, "secret");
+    assert!(recs[0].at > 0);
+    let local = normalize_path(&e.global().to_string_lossy());
+    assert_eq!(recs[0].local_path.as_deref().map(normalize_path), Some(local.clone()));
+    assert_eq!(recs[0].file_id.as_deref(), Some(local.as_str()));
+    // persisted
+    assert!(e.sync_state().skipped_files.contains_key(GLOBAL));
+
+    // a download does not upload it: still recorded
+    match sync_start_dir(&e.state, "block", "down").unwrap() {
+        SyncStartDto::Done { download, .. } => assert!(download),
+        other => panic!("expected done, got {other:?}"),
+    }
+    assert_eq!(sync_skipped_files_impl(&e.state).unwrap().len(), 1);
+
+    // the secret is removed and the file uploaded: the record goes away
+    write(&e.global(), "clean\n");
+    e.state.rescan();
+    e.done();
+    assert!(sync_skipped_files_impl(&e.state).unwrap().is_empty());
+    assert!(e.sync_state().skipped_files.is_empty());
+}
+
+#[test]
+fn download_to_new_machine_then_upload_is_clean() {
+    let e = env();
+    e.push_remote(&[(GLOBAL, "global from cloud\n"), (CODEX, "codex from cloud\n")]);
+    e.login();
+    let st = sync_status_impl(&e.state);
+    assert!(st.remote_has_memory, "a fresh machine with cloud memory is offered a download");
+    let head = e.head();
+    e.events.lock().unwrap().clear();
+
+    match sync_start_dir(&e.state, "block", "down").unwrap() {
+        SyncStartDto::Done {
+            summary,
+            download,
+            kept_local,
+            absent,
+            ..
+        } => {
+            assert!(download);
+            assert_eq!(summary.pulled, 2);
+            assert_eq!(summary.pushed, 0);
+            assert!(!summary.committed);
+            assert!(kept_local.is_empty());
+            assert!(absent.is_empty());
+        }
+        other => panic!("expected done, got {other:?}"),
+    }
+    assert_eq!(e.head(), head, "a download pushes nothing");
+    assert_eq!(
+        fs::read_to_string(e.global()).unwrap().replace("\r\n", "\n"),
+        "global from cloud\n"
+    );
+    let codex = e.state.paths.codex_home.join("AGENTS.md");
+    assert_eq!(fs::read_to_string(&codex).unwrap().replace("\r\n", "\n"), "codex from cloud\n");
+    let mem = e.events_named(MEMORY_EVENT);
+    let id = normalize_path(&codex.to_string_lossy());
+    assert!(mem.iter().any(|m| m["paths"].as_array().unwrap().iter().any(|p| p == &id)));
+    let st = sync_status_impl(&e.state);
+    assert!(!st.remote_has_memory);
+    assert_eq!(st.pending, 0);
+    assert_eq!(e.sync_state().last_sync_commit.as_deref(), Some(head.as_str()));
+
+    // uploading right after: nothing to push, no conflicts, nothing deleted
+    let sum = e.done();
+    assert_eq!(sum.pushed, 0);
+    assert_eq!(sum.pulled, 0);
+    assert_eq!(e.remote_file(GLOBAL).as_deref(), Some("global from cloud\n"));
+    assert_eq!(e.remote_file(CODEX).as_deref(), Some("codex from cloud\n"));
+}
+
+#[test]
+fn download_conflict_is_resolved_locally_and_not_pushed() {
+    let e = env();
+    e.push_remote(&[(GLOBAL, "cloud\n")]);
+    e.login();
+    write(&e.global(), "local\n");
+    e.state.rescan();
+    let head = e.head();
+    let plan = match sync_start_dir(&e.state, "block", "down").unwrap() {
+        SyncStartDto::NeedsResolution { plan } => plan,
+        other => panic!("expected resolution, got {other:?}"),
+    };
+    assert!(plan.download);
+    assert_eq!(plan.conflicts.len(), 1);
+    let res = HashMap::from([(
+        GLOBAL.to_string(),
+        ResolutionDto::Text {
+            text: "local and cloud\n".into(),
+        },
+    )]);
+    let sum = sync_finish_impl(&e.state, &plan.id, res).unwrap();
+    assert!(!sum.committed);
+    assert_eq!(e.head(), head);
+    assert_eq!(
+        fs::read_to_string(e.global()).unwrap().replace("\r\n", "\n"),
+        "local and cloud\n"
+    );
+    // the next upload pushes the resolved text without asking again
+    let sum = e.done();
+    assert_eq!(sum.pushed, 1);
+    assert_eq!(e.remote_file(GLOBAL).as_deref(), Some("local and cloud\n"));
+}
+
+#[test]
+fn invalid_direction_is_rejected() {
+    let e = env();
+    e.login();
+    let err = sync_start_dir(&e.state, "block", "sideways").unwrap_err();
+    assert_eq!(err.code, "invalid");
+}

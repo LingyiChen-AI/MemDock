@@ -26,7 +26,7 @@ use crate::commands::{lock, AppState, CommandError};
 use crate::memory::io::{read_memory, write_memory, WriteError};
 use crate::projects::normalize_path;
 use crate::sync::engine::{
-    self, finish, prepare, ConflictFile, FileSecretHit, Resolution, SkippedFile,
+    self, finish, prepare, AbsentFile, ConflictFile, FileSecretHit, Resolution, SkippedFile,
     SyncCtx, SyncError, SyncPlan, SyncSummary,
 };
 use crate::sync::github::{
@@ -287,6 +287,9 @@ pub struct SyncStatusDto {
     pub pending: usize,
     /// `public_ack` | `not_ours` | `relogin`
     pub needs: Option<String>,
+    /// Never synced on this machine while the cloned repository already holds
+    /// memory files (a new computer): offer a download.
+    pub remote_has_memory: bool,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -352,6 +355,12 @@ pub struct SyncPlanDto {
     pub secret_hits: Vec<FileSecretHit>,
     pub missing_skills: Vec<ManifestSkill>,
     pub removed_elsewhere: Vec<ManifestSkill>,
+    /// A download plan: resolving writes local files only.
+    pub download: bool,
+    /// Download: local changes left as they are.
+    pub kept_local: Vec<String>,
+    /// Download: repository files with no place on this machine.
+    pub absent: Vec<AbsentFile>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -385,6 +394,9 @@ pub enum SyncStartDto {
         skipped: Vec<SkippedFile>,
         missing_skills: Vec<ManifestSkill>,
         removed_elsewhere: Vec<ManifestSkill>,
+        download: bool,
+        kept_local: Vec<String>,
+        absent: Vec<AbsentFile>,
     },
     NeedsResolution { plan: SyncPlanDto },
     Blocked { secret_hits: Vec<FileSecretHit> },
@@ -802,6 +814,9 @@ fn plan_dto(state: &AppState, plan: &SyncPlan, p: &Parts) -> SyncPlanDto {
         secret_hits: plan.secret_hits.clone(),
         missing_skills: plan.missing_skills.clone(),
         removed_elsewhere: plan.removed_elsewhere.clone(),
+        download: plan.download,
+        kept_local: plan.kept_local.clone(),
+        absent: plan.absent.clone(),
     }
 }
 
@@ -871,6 +886,7 @@ fn settle(
         s.synced_projects = synced;
         s.unsynced_paths = unsynced;
         s.held_projects = held;
+        s.skipped_files = engine::update_skip_records(plan, &s.skipped_files, now_ms());
         if res.is_ok() {
             s.last_sync_at = Some(now_ms());
         }
@@ -898,8 +914,32 @@ pub fn sync_status_impl(state: &AppState) -> SyncStatusDto {
         repo,
         last_sync_at: s.last_sync_at,
         needs: s.needs.clone(),
+        remote_has_memory: logged_in && remote_has_memory(state, &s),
         pending: pending(state, s),
     }
+}
+
+/// Never synced here, and the clone's remote branch has memory files.
+/// Local only (reads the clone, no network).
+fn remote_has_memory(state: &AppState, s: &SyncState) -> bool {
+    if s.last_sync_commit.is_some() {
+        return false;
+    }
+    let dir = repo_dir(state);
+    if !dir.join(".git").exists() {
+        return false;
+    }
+    let branch = s.branch.clone().unwrap_or_else(|| "main".into());
+    state
+        .sync
+        .git
+        .list_at(&dir, &format!("origin/{branch}"))
+        .map(|files| {
+            files
+                .iter()
+                .any(|f| f.starts_with("global/") || f.starts_with("projects/"))
+        })
+        .unwrap_or(false)
 }
 
 /// Files that differ from the last synced commit; local only (no network,
@@ -1117,9 +1157,25 @@ pub fn sync_start_impl(state: &AppState) -> Result<SyncStartDto, CommandError> {
     sync_start_with(state, "block")
 }
 
+/// An upload (`direction` `up`) with the given secret policy.
+pub fn sync_start_with(state: &AppState, secrets: &str) -> Result<SyncStartDto, CommandError> {
+    sync_start_dir(state, secrets, "up")
+}
+
+/// `direction`: `up` (merge the remote, then push this machine's changes) or
+/// `down` (bring the remote to this machine; push nothing, ignore secrets).
 /// `secrets`: `block` (stop and report), `allow` (sync them anyway) or
 /// `skip` (leave the files that look like secrets out of this sync).
-pub fn sync_start_with(state: &AppState, secrets: &str) -> Result<SyncStartDto, CommandError> {
+pub fn sync_start_dir(
+    state: &AppState,
+    secrets: &str,
+    direction: &str,
+) -> Result<SyncStartDto, CommandError> {
+    let download = match direction {
+        "up" => false,
+        "down" => true,
+        _ => return Err(err("invalid", "direction must be up or down")),
+    };
     let _g = try_sync_lock(state)?;
     *lock(&state.sync.secret_policy) = SecretPolicy {
         allow: secrets == "allow",
@@ -1132,6 +1188,7 @@ pub fn sync_start_with(state: &AppState, secrets: &str) -> Result<SyncStartDto, 
         state.rescan();
         let p = gather(state, s, true)?;
         let mut ctx = make_ctx(state, &p, Some(token));
+        ctx.download = download;
         let mut plan = prepare(&ctx).map_err(sync_err)?;
         if !plan.secret_hits.is_empty() && secrets == "skip" {
             let exclude: BTreeSet<String> = plan.secret_hits.iter().map(|h| h.repo_path.clone()).collect();
@@ -1155,6 +1212,9 @@ pub fn sync_start_with(state: &AppState, secrets: &str) -> Result<SyncStartDto, 
                 skipped: plan.skipped,
                 missing_skills: plan.missing_skills,
                 removed_elsewhere: plan.removed_elsewhere,
+                download: plan.download,
+                kept_local: plan.kept_local,
+                absent: plan.absent,
             });
         }
         let dto = plan_dto(state, &plan, &p);
@@ -1238,6 +1298,42 @@ pub fn sync_projects_impl(state: &AppState) -> Result<Vec<SyncProjectDto>, Comma
                 included: key.is_some() || s.included_local.contains(&dk),
                 key,
                 dir_key: dk,
+            }
+        })
+        .collect())
+}
+
+/// A file left out of a sync and not synced since.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct SkippedRecordDto {
+    pub repo_path: String,
+    pub reason: String,
+    /// Milliseconds since the epoch.
+    pub at: i64,
+    /// The local file the repo path maps to on this machine, if any.
+    pub local_path: Option<String>,
+    /// Index id of that file when it is a known memory file.
+    pub file_id: Option<String>,
+}
+
+/// Persistent skip records with their local files (local only, no network).
+pub fn sync_skipped_files_impl(state: &AppState) -> Result<Vec<SkippedRecordDto>, CommandError> {
+    let s = load(state)?;
+    if s.skipped_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let records = s.skipped_files.clone();
+    let p = gather(state, s, false)?;
+    Ok(records
+        .into_iter()
+        .map(|(repo_path, r)| {
+            let file = p.files.iter().find(|f| f.repo_path == repo_path);
+            SkippedRecordDto {
+                local_path: local_of(state, &p, &repo_path).map(|l| l.to_string_lossy().into_owned()),
+                file_id: file.map(|f| f.file_id.clone()),
+                repo_path,
+                reason: r.reason,
+                at: r.at,
             }
         })
         .collect())
@@ -1371,8 +1467,21 @@ pub fn open_verification_url(app: AppHandle) -> Result<(), CommandError> {
 }
 
 #[tauri::command(async)]
-pub fn sync_start(state: St, secrets: Option<String>) -> Result<SyncStartDto, CommandError> {
-    sync_start_with(&state, secrets.as_deref().unwrap_or("block"))
+pub fn sync_start(
+    state: St,
+    secrets: Option<String>,
+    direction: Option<String>,
+) -> Result<SyncStartDto, CommandError> {
+    sync_start_dir(
+        &state,
+        secrets.as_deref().unwrap_or("block"),
+        direction.as_deref().unwrap_or("up"),
+    )
+}
+
+#[tauri::command(async)]
+pub fn sync_skipped_files(state: St) -> Result<Vec<SkippedRecordDto>, CommandError> {
+    sync_skipped_files_impl(&state)
 }
 
 #[tauri::command(async)]

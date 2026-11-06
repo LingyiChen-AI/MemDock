@@ -990,6 +990,7 @@
     "expand": "展开全文",
     "collapse": "收起",
     "timeline": {
+      "more": "+{n} 个",
       "filterLabel": "按类型筛选",
       "all": "全部",
       "chat": "对话",

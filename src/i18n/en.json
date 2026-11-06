@@ -990,6 +990,7 @@
     "expand": "Show all",
     "collapse": "Show less",
     "timeline": {
+      "more": "+{n} more",
       "filterLabel": "Filter by type",
       "all": "All",
       "chat": "Messages",

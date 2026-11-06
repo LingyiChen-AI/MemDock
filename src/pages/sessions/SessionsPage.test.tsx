@@ -115,16 +115,34 @@ describe("SessionsPage", () => {
     expect(screen.getByText("没有匹配的会话")).toBeInTheDocument();
   });
 
-  it("timeline shows typed tool rows and filters by type", async () => {
+  it("each assistant turn is one card with tool chips that open a dialog", async () => {
     renderApp(<SessionsPage />);
     await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
-    expect(await screen.findByText("cargo build")).toBeInTheDocument();
+    expect(await screen.findByText("Fixed.")).toBeInTheDocument();
+    expect(screen.getByText("cargo build")).toBeInTheDocument();
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
-    expect(screen.getByText("2 个工具调用")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Bash.*cargo build/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("ok")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("radio", { name: /出错/ }));
     expect(screen.queryByText("cargo build")).not.toBeInTheDocument();
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
     expect(screen.queryByText("Fixed.")).not.toBeInTheDocument();
+  });
+
+  it("folds long runs of tool chips behind +N", async () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({
+      type: "tool" as const, ts: "2026-11-01T10:00:01.000Z", name: "Read", kind: "read" as const,
+      summary: `file-${i}.rs`, input: "{}", output: "x", is_error: false, mapped: false,
+    }));
+    (sessionPreview as Mock).mockResolvedValue({ ...preview, timeline: [preview.timeline[0], ...many] });
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    expect(await screen.findByText("file-7.rs")).toBeInTheDocument();
+    expect(screen.queryByText("file-8.rs")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "+3 个" }));
+    expect(screen.getByText("file-10.rs")).toBeInTheDocument();
   });
 
   it("previews, confirms and shows the resume command", async () => {

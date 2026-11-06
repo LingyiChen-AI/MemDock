@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   Bot,
   Check,
-  ChevronRight,
   FilePen,
   FilePlus2,
   FileText,
@@ -17,6 +16,7 @@ import {
 } from "lucide-react";
 import type { SessionPreview, TimelineItem, Tool, ToolKind } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Messages } from "@/i18n";
@@ -25,6 +25,7 @@ import { formatIso } from "./sessionsUtils";
 
 type S = Messages["sessions"];
 type ToolItem = Extract<TimelineItem, { type: "tool" }>;
+type TextItem = Exclude<TimelineItem, ToolItem>;
 export type TimelineFilter = "all" | "chat" | "tools" | "shell" | "files" | "errors";
 
 const KIND_ICON: Record<ToolKind, LucideIcon> = {
@@ -39,7 +40,6 @@ const KIND_ICON: Record<ToolKind, LucideIcon> = {
   other: Wrench,
 };
 
-/** Accent per tool kind (icon tint + left rule). */
 const KIND_TONE: Record<ToolKind, string> = {
   shell: "text-emerald-600 dark:text-emerald-400",
   read: "text-sky-600 dark:text-sky-400",
@@ -53,6 +53,8 @@ const KIND_TONE: Record<ToolKind, string> = {
 };
 
 const LONG_TEXT = 700;
+/** Chips shown in one run before the rest fold into a "+N" chip. */
+const CHIP_FOLD = 8;
 
 function matches(it: TimelineItem, f: TimelineFilter): boolean {
   switch (f) {
@@ -71,18 +73,32 @@ function matches(it: TimelineItem, f: TimelineFilter): boolean {
   }
 }
 
-/** Consecutive tool calls are shown together as one group. */
-type Block = { kind: "msg"; item: Exclude<TimelineItem, ToolItem>; key: number } | { kind: "tools"; items: ToolItem[]; key: number };
+/** Inside one assistant card, in the order things happened. */
+type Segment = { kind: "text"; item: TextItem } | { kind: "tools"; items: ToolItem[] };
+type TurnBlock = { kind: "turn"; segments: Segment[]; ts: string; key: number };
+/** A user message, or one assistant turn (everything until the next user message) as one card. */
+type Block = { kind: "user"; item: TextItem; key: number } | TurnBlock;
 
 function toBlocks(items: TimelineItem[]): Block[] {
   const out: Block[] = [];
+  let turn: TurnBlock | null = null;
   items.forEach((it, i) => {
+    if (it.type === "user") {
+      turn = null;
+      out.push({ kind: "user", item: it, key: i });
+      return;
+    }
+    if (!turn) {
+      turn = { kind: "turn", segments: [], ts: it.ts, key: i };
+      out.push(turn);
+    }
+    const segs: Segment[] = turn.segments;
+    const last = segs[segs.length - 1];
     if (it.type === "tool") {
-      const last = out[out.length - 1];
       if (last?.kind === "tools") last.items.push(it);
-      else out.push({ kind: "tools", items: [it], key: i });
+      else segs.push({ kind: "tools", items: [it] });
     } else {
-      out.push({ kind: "msg", item: it, key: i });
+      segs.push({ kind: "text", item: it });
     }
   });
   return out;
@@ -92,6 +108,7 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
   const { t } = useI18n();
   const s = t.sessions;
   const [filter, setFilter] = React.useState<TimelineFilter>("all");
+  const [detail, setDetail] = React.useState<ToolItem | null>(null);
   const c = preview.counts;
   const filters: { key: TimelineFilter; label: string; n: number }[] = [
     { key: "all", label: s.timeline.all, n: preview.timeline.length },
@@ -101,8 +118,7 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
     { key: "files", label: s.timeline.files, n: c.files },
     { key: "errors", label: s.timeline.errors, n: c.errors },
   ];
-  const shown = preview.timeline.filter((it) => matches(it, filter));
-  const blocks = toBlocks(shown);
+  const blocks = toBlocks(preview.timeline.filter((it) => matches(it, filter)));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -128,145 +144,181 @@ export function Timeline({ preview, tool }: { preview: SessionPreview; tool: Too
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-      {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
-      <ol className="flex flex-col gap-4">
-        {blocks.map((b) =>
-          b.kind === "msg" ? <MessageRow key={b.key} item={b.item} tool={tool} s={s} /> : <ToolGroup key={b.key} items={b.items} s={s} />,
-        )}
-      </ol>
-      {preview.timeline_total > preview.timeline.length ? (
-        <p className="mt-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
-      ) : null}
+        {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
+        <ol className="flex flex-col gap-5">
+          {blocks.map((b) =>
+            b.kind === "user" ? (
+              <UserRow key={b.key} item={b.item} s={s} />
+            ) : (
+              <TurnCard key={b.key} segments={b.segments} ts={b.ts} tool={tool} onOpen={setDetail} s={s} />
+            ),
+          )}
+        </ol>
+        {preview.timeline_total > preview.timeline.length ? (
+          <p className="mt-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
+        ) : null}
       </div>
+
+      <ToolDialog it={detail} onClose={() => setDetail(null)} s={s} />
     </div>
   );
 }
 
-function Avatar({ who, tool }: { who: "user" | "assistant"; tool: Tool }) {
-  if (who === "user") {
-    return (
+function LongText({ text, s }: { text: string; s: S }) {
+  const [open, setOpen] = React.useState(false);
+  const long = text.length > LONG_TEXT;
+  return (
+    <div className="min-w-0">
+      <p className={cn("whitespace-pre-wrap [overflow-wrap:anywhere]", long && !open && "line-clamp-[12]")}>{text}</p>
+      {long ? (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1.5 cursor-pointer text-xs font-medium text-primary hover:underline">
+          {open ? s.collapse : s.expand}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function UserRow({ item, s }: { item: TextItem; s: S }) {
+  return (
+    <li className="flex flex-row-reverse gap-2.5">
       <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
         <User className="size-3.5" />
       </span>
-    );
-  }
-  return (
-    <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full border border-border bg-card">
-      <ToolLogo tool={tool} className="size-4" aria-hidden="true" />
-    </span>
-  );
-}
-
-function MessageRow({ item, tool, s }: { item: Exclude<TimelineItem, ToolItem>; tool: Tool; s: S }) {
-  const [open, setOpen] = React.useState(false);
-  const isUser = item.type === "user";
-  const long = item.text.length > LONG_TEXT;
-  return (
-    <li className={cn("flex gap-2.5", isUser && "flex-row-reverse")}>
-      <Avatar who={isUser ? "user" : "assistant"} tool={tool} />
-      <div className={cn("flex max-w-[82%] min-w-0 flex-col gap-1", isUser && "items-end")}>
-        <div className={cn("flex items-center gap-2 px-1 text-[11px] text-muted-foreground", isUser && "flex-row-reverse")}>
-          <span className="font-medium text-foreground/80">{isUser ? s.roles.user : s.tools[tool]}</span>
+      <div className="flex max-w-[82%] min-w-0 flex-col items-end gap-1">
+        <div className="flex flex-row-reverse items-center gap-2 px-1 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground/80">{s.roles.user}</span>
           <span className="tabular-nums">{formatIso(item.ts)}</span>
         </div>
-        <div
-          className={cn(
-            "max-w-full min-w-0 overflow-hidden px-3.5 py-2.5 text-sm leading-relaxed",
-            isUser ? "rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 text-foreground" : "rounded-2xl rounded-tl-md border border-border bg-card",
-          )}
-        >
-          <p className={cn("whitespace-pre-wrap [overflow-wrap:anywhere]", long && !open && "line-clamp-[12]")}>{item.text}</p>
-          {long ? (
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              className="mt-1.5 cursor-pointer text-xs font-medium text-primary hover:underline"
-            >
-              {open ? s.collapse : s.expand}
-            </button>
-          ) : null}
+        <div className="max-w-full min-w-0 overflow-hidden rounded-2xl rounded-tr-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm leading-relaxed">
+          <LongText text={item.text} s={s} />
         </div>
       </div>
     </li>
   );
 }
 
-function ToolGroup({ items, s }: { items: ToolItem[]; s: S }) {
-  const errors = items.filter((i) => i.is_error).length;
+function TurnCard({ segments, ts, tool, onOpen, s }: { segments: Segment[]; ts: string; tool: Tool; onOpen: (it: ToolItem) => void; s: S }) {
   return (
-    <li className="ml-9.5">
-      <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
-        {items.length > 1 ? (
-          <div className="flex items-center gap-2 border-b border-border/70 px-3 py-1.5 text-[11px] text-muted-foreground">
-            <Wrench className="size-3" aria-hidden="true" />
-            {fmt(s.timeline.group, { n: items.length })}
-            {errors > 0 ? <span className="text-destructive">{fmt(s.timeline.groupErrors, { n: errors })}</span> : null}
-          </div>
-        ) : null}
-        <ul className="divide-y divide-border/60">
-          {items.map((it, i) => (
-            <ToolRow key={i} it={it} s={s} />
-          ))}
-        </ul>
+    <li className="flex gap-2.5">
+      <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full border border-border bg-card">
+        <ToolLogo tool={tool} className="size-4" aria-hidden="true" />
+      </span>
+      <div className="flex max-w-[86%] min-w-0 flex-1 flex-col gap-1">
+        <div className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground/80">{s.tools[tool]}</span>
+          <span className="tabular-nums">{formatIso(ts)}</span>
+        </div>
+        <div className="flex max-w-full min-w-0 flex-col gap-2.5 self-start overflow-hidden rounded-2xl rounded-tl-md border border-border bg-card px-3.5 py-2.5 text-sm leading-relaxed">
+          {segments.map((seg, i) =>
+            seg.kind === "text" ? <LongText key={i} text={seg.item.text} s={s} /> : <ChipRun key={i} items={seg.items} onOpen={onOpen} s={s} />,
+          )}
+        </div>
       </div>
     </li>
   );
 }
 
-function ToolRow({ it, s }: { it: ToolItem; s: S }) {
-  const [open, setOpen] = React.useState(false);
-  const Icon = KIND_ICON[it.kind];
-  const pending = it.output === null;
+function StatusMark({ it, s }: { it: ToolItem; s: S }) {
+  if (it.output === null) return <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40" title={s.timeline.noResult} />;
+  return it.is_error ? (
+    <X className="size-3 shrink-0 text-destructive" aria-label={s.timeline.failed} />
+  ) : (
+    <Check className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label={s.timeline.ok} />
+  );
+}
+
+/** Consecutive calls as chips that wrap inside the card; long runs fold behind "+N". */
+function ChipRun({ items, onOpen, s }: { items: ToolItem[]; onOpen: (it: ToolItem) => void; s: S }) {
+  const [all, setAll] = React.useState(false);
+  const shown = all || items.length <= CHIP_FOLD ? items : items.slice(0, CHIP_FOLD);
+  const rest = items.length - shown.length;
   return (
-    <li>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left outline-none hover:bg-muted/60 focus-visible:bg-muted/60"
-      >
-        <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} aria-hidden="true" />
-        <Icon className={cn("size-4 shrink-0", KIND_TONE[it.kind])} aria-hidden="true" />
-        <span className="shrink-0 font-mono text-xs font-semibold">{it.name}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={it.summary}>
-          {it.summary}
-        </span>
-        <span
-          className={cn(
-            "hidden shrink-0 rounded px-1.5 py-0.5 text-[10px] sm:inline",
-            it.mapped ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300" : "bg-muted text-muted-foreground",
-          )}
-          title={it.mapped ? s.timeline.mappedHint : s.timeline.textHint}
+    <div className="flex max-w-full min-w-0 flex-wrap gap-1.5">
+      {shown.map((it, i) => {
+        const Icon = KIND_ICON[it.kind];
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onOpen(it)}
+            title={`${it.name}  ${it.summary}`}
+            className={cn(
+              "inline-flex h-6 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full border bg-background px-2.5 text-xs outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring",
+              it.is_error ? "border-destructive/40" : "border-border",
+            )}
+          >
+            <StatusMark it={it} s={s} />
+            <Icon className={cn("size-3 shrink-0", KIND_TONE[it.kind])} aria-hidden="true" />
+            <span className="shrink-0 font-medium">{it.name}</span>
+            {it.summary ? <span className="max-w-60 min-w-0 truncate font-mono text-[11px] text-muted-foreground">{it.summary}</span> : null}
+          </button>
+        );
+      })}
+      {rest > 0 ? (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          className="inline-flex h-6 shrink-0 cursor-pointer items-center rounded-full border border-dashed border-border px-2.5 text-xs text-muted-foreground outline-none hover:border-primary/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {it.mapped ? s.timeline.mapped : s.timeline.asText}
-        </span>
-        {pending ? (
-          <span className="size-2 shrink-0 rounded-full bg-muted-foreground/40" title={s.timeline.noResult} />
-        ) : it.is_error ? (
-          <X className="size-3.5 shrink-0 text-destructive" aria-label={s.timeline.failed} />
-        ) : (
-          <Check className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label={s.timeline.ok} />
-        )}
-        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatIso(it.ts).slice(-8)}</span>
-      </button>
-      {open ? (
-        <div className="flex flex-col gap-2 px-3 pt-1 pb-3 pl-9">
-          <IoBlock label={s.timeline.input} text={it.input} />
-          {it.output !== null ? <IoBlock label={it.is_error ? s.timeline.error : s.timeline.output} text={it.output || s.timeline.emptyOutput} error={it.is_error} /> : null}
-        </div>
+          {fmt(s.timeline.more, { n: rest })}
+        </button>
       ) : null}
-    </li>
+      {all && items.length > CHIP_FOLD ? (
+        <button
+          type="button"
+          onClick={() => setAll(false)}
+          className="inline-flex h-6 shrink-0 cursor-pointer items-center rounded-full px-2 text-xs text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {s.collapse}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolDialog({ it, onClose, s }: { it: ToolItem | null; onClose: () => void; s: S }) {
+  const Icon = it ? KIND_ICON[it.kind] : Wrench;
+  return (
+    <Dialog open={!!it} onOpenChange={(o) => (!o ? onClose() : undefined)}>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-3 sm:max-w-3xl">
+        {it ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex min-w-0 flex-wrap items-center gap-2">
+                <Icon className={cn("size-4 shrink-0", KIND_TONE[it.kind])} aria-hidden="true" />
+                <span className="font-mono">{it.name}</span>
+                <StatusMark it={it} s={s} />
+              </DialogTitle>
+              <DialogDescription className="flex flex-wrap items-center gap-2">
+                <span className="tabular-nums">{formatIso(it.ts)}</span>
+                <span
+                  className={cn("rounded px-1.5 py-0.5 text-[11px]", it.mapped ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300" : "bg-muted text-muted-foreground")}
+                  title={it.mapped ? s.timeline.mappedHint : s.timeline.textHint}
+                >
+                  {it.mapped ? s.timeline.mapped : s.timeline.asText}
+                </span>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto px-1">
+              <IoBlock label={s.timeline.input} text={it.input} />
+              {it.output !== null ? <IoBlock label={it.is_error ? s.timeline.error : s.timeline.output} text={it.output || s.timeline.emptyOutput} error={it.is_error} /> : null}
+            </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
 function IoBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1">
       <span className={cn("text-[11px] font-medium", error ? "text-destructive" : "text-muted-foreground")}>{label}</span>
       <pre
         className={cn(
-          "max-h-72 overflow-auto rounded-md border px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all",
-          error ? "border-destructive/30 bg-destructive/5" : "border-border bg-background",
+          "max-h-72 overflow-auto rounded-md border px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]",
+          error ? "border-destructive/30 bg-destructive/5" : "border-border bg-muted/40",
         )}
       >
         {text}

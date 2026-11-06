@@ -31,6 +31,7 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-tool-claude: var(--tool-claude);
+  --color-brand-claude: var(--brand-claude);
   --color-tool-codex: var(--tool-codex);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
@@ -98,6 +99,8 @@
   --swatch-orange: #c2410c;
   --swatch-teal: #0f766e;
   --tool-claude: #d97706;
+  /* Claude's brand orange for its logo (same in both themes). */
+  --brand-claude: #d97757;
   --tool-codex: #0284c7;
 }
 

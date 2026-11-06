@@ -14,7 +14,7 @@ export function ToolLogo({ tool, className, ...rest }: { tool: Tool; className?:
       viewBox="0 0 24 24"
       role="img"
       aria-label={tool === "claude" ? "Claude Code" : "Codex"}
-      className={cn("shrink-0", tool === "claude" ? "text-[#D97757]" : "text-foreground", className)}
+      className={cn("shrink-0", tool === "claude" ? "text-brand-claude" : "text-foreground", className)}
       fill="currentColor"
       {...rest}
     >

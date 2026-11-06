@@ -1364,3 +1364,226 @@ fn memory_dir_wiped_and_recreated_pulls_not_deletes() {
     assert_eq!(w.file(&foo).as_deref(), Some("memory\n"));
     assert_eq!(read(&mem.join("foo.md")), "memory\n");
 }
+
+// --------------------------------------------------------------- download
+
+impl Pc {
+    fn prepare_download(&mut self) -> SyncPlan {
+        self.download = true;
+        let plan = self.prepare();
+        self.download = false;
+        plan
+    }
+
+    /// A download that must not need user input.
+    fn download(&mut self) -> (SyncPlan, SyncSummary) {
+        let plan = self.prepare_download();
+        assert!(plan.conflicts.is_empty(), "conflicts: {:?}", plan.conflicts);
+        let s = self.finish(&plan, &BTreeMap::new()).unwrap();
+        (plan, s)
+    }
+}
+
+#[test]
+fn download_to_new_machine_writes_everything_and_pushes_nothing() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&a.global(), "global\n");
+    write(&a.codex(), "codex\n");
+    write(&pa.join("CLAUDE.md"), "project\n");
+    a.sync();
+    let head = w.head();
+
+    let mut b = w.machine("B");
+    let pb = b.add_project();
+    // a file only this machine has
+    write(&pb.join("AGENTS.md"), "only on B\n");
+    let (plan, s) = b.download();
+    assert!(plan.download);
+    assert_eq!(plan.kept_local, vec![p_path("codex/AGENTS.md")]);
+    assert!(plan.secret_hits.is_empty());
+    assert_eq!(s.pulled, 3);
+    assert_eq!(s.pushed, 0);
+    assert!(!s.committed);
+    assert_eq!(w.head(), head, "a download never pushes");
+    assert_eq!(read(&b.global()), "global\n");
+    assert_eq!(read(&b.codex()), "codex\n");
+    assert_eq!(read(&pb.join("CLAUDE.md")), "project\n");
+    assert_eq!(read(&pb.join("AGENTS.md")), "only on B\n");
+    assert_eq!(keys(&s.synced_projects), vec![P_KEY.to_string()]);
+
+    // a later upload pushes the local-only file and nothing else changes
+    let up = b.sync();
+    assert!(up.committed);
+    assert_eq!(up.pushed, 1);
+    assert_eq!(up.pulled, 0);
+    assert_eq!(w.file(&p_path("codex/AGENTS.md")).as_deref(), Some("only on B\n"));
+    assert_eq!(w.file(GLOBAL).as_deref(), Some("global\n"));
+}
+
+#[test]
+fn download_secrets_do_not_block() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), "global\n");
+    a.sync();
+    let mut b = w.machine("B");
+    write(&b.codex(), &format!("token ghp_{}\n", "a1B2c3D4e5".repeat(4)));
+    let (plan, _) = b.download();
+    assert!(plan.secret_hits.is_empty());
+    assert_eq!(read(&b.global()), "global\n");
+    assert_eq!(w.file(CODEX), None);
+}
+
+#[test]
+fn download_keeps_local_edits_and_remote_deletions_for_upload() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&a.global(), FIVE);
+    write(&pa.join("CLAUDE.md"), "p1\n");
+    write(&pa.join("AGENTS.md"), "agents\n");
+    a.sync();
+    let mut b = w.machine("B");
+    let pb = b.add_project();
+    b.sync();
+
+    // A: edits the project file, deletes AGENTS.md. B: edits the global file.
+    write(&pa.join("CLAUDE.md"), "p2\n");
+    fs::remove_file(pa.join("AGENTS.md")).unwrap();
+    a.sync();
+    write(&b.global(), "l1\nl2\nl3\nl4\nB5\n");
+    let head = w.head();
+
+    let (plan, s) = b.download();
+    assert_eq!(s.pulled, 1);
+    assert_eq!(w.head(), head);
+    assert_eq!(read(&pb.join("CLAUDE.md")), "p2\n");
+    assert_eq!(read(&pb.join("AGENTS.md")), "agents\n", "remote deletion not applied");
+    assert_eq!(read(&b.global()), "l1\nl2\nl3\nl4\nB5\n", "local edit kept");
+    let mut kept = plan.kept_local.clone();
+    kept.sort();
+    assert_eq!(kept, vec![GLOBAL.to_string(), p_path("codex/AGENTS.md")]);
+    // the base is a local-only commit, never pushed
+    let base = s.commit.clone().unwrap();
+    assert_ne!(base, head);
+    assert_eq!(git(&b.repo, &["rev-parse", "refs/memdock/base"]), base);
+
+    // downloading again changes nothing
+    let (again, s2) = b.download();
+    assert!(again.entries.is_empty(), "{:?}", again.entries);
+    assert_eq!(s2.pulled, 0);
+
+    // upload: the local edit is pushed, the remote deletion still asks
+    let plan = b.prepare();
+    assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+    assert!(plan.take_remote.is_empty());
+    assert_eq!(plan.push_local, vec![GLOBAL.to_string()]);
+    assert_eq!(plan.remote_deleted, vec![p_path("codex/AGENTS.md")]);
+    let res = BTreeMap::from([(p_path("codex/AGENTS.md"), Resolution::DeleteLocal)]);
+    b.finish(&plan, &res).unwrap();
+    assert!(!pb.join("AGENTS.md").exists());
+    assert_eq!(w.file(GLOBAL).as_deref(), Some("l1\nl2\nl3\nl4\nB5\n"));
+    assert_eq!(w.file(&p_path("claude/CLAUDE.md")).as_deref(), Some("p2\n"));
+}
+
+#[test]
+fn download_merges_and_resolves_conflicts_locally_only() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), FIVE);
+    write(&a.codex(), FIVE);
+    a.sync();
+    let mut b = w.machine("B");
+    b.sync();
+
+    write(&a.global(), "L1\nl2\nl3\nl4\nl5\n");
+    write(&a.codex(), "from A\nl2\nl3\nl4\nl5\n");
+    a.sync();
+    write(&b.global(), "l1\nl2\nl3\nl4\nL5\n");
+    write(&b.codex(), "from B\nl2\nl3\nl4\nl5\n");
+    let head = w.head();
+
+    let plan = b.prepare_download();
+    assert_eq!(plan.merged, vec![GLOBAL.to_string()]);
+    assert_eq!(plan.conflicts.len(), 1);
+    assert_eq!(plan.conflicts[0].repo_path, CODEX);
+    // unresolved conflicts are rejected like in an upload
+    assert!(matches!(
+        b.finish(&plan, &BTreeMap::new()),
+        Err(SyncError::Unresolved { .. })
+    ));
+    let resolved = "from A and B\nl2\nl3\nl4\nl5\n";
+    let s = b.finish(&plan, &text_res(CODEX, resolved)).unwrap();
+    assert_eq!(s.merged, 2);
+    assert!(!s.committed);
+    assert_eq!(w.head(), head);
+    assert_eq!(read(&b.global()), "L1\nl2\nl3\nl4\nL5\n");
+    assert_eq!(read(&b.codex()), resolved);
+
+    // the next upload pushes both results without asking again
+    let up = b.sync();
+    assert_eq!(up.pushed, 2);
+    assert_eq!(w.file(CODEX).as_deref(), Some(resolved));
+    assert_eq!(w.file(GLOBAL).as_deref(), Some("L1\nl2\nl3\nl4\nL5\n"));
+}
+
+#[test]
+fn download_lists_projects_absent_here() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    let pa = a.add_project();
+    write(&pa.join("CLAUDE.md"), "only on A\n");
+    write(&a.global(), "g\n");
+    a.sync();
+    let mut b = w.machine("B");
+    let (plan, _) = b.download();
+    assert_eq!(read(&b.global()), "g\n");
+    assert_eq!(
+        plan.absent,
+        vec![AbsentFile {
+            repo_path: p_path("claude/CLAUDE.md"),
+            project_key: P_KEY.to_string(),
+            reason: "no_project".into(),
+        }]
+    );
+    // the project shows up later: an upload pulls it, never deletes it
+    let pb = b.add_project();
+    b.sync();
+    assert_eq!(read(&pb.join("CLAUDE.md")), "only on A\n");
+    assert_eq!(w.file(&p_path("claude/CLAUDE.md")).as_deref(), Some("only on A\n"));
+}
+
+#[test]
+fn skip_records_persist_until_synced() {
+    let w = World::new();
+    let mut a = w.machine("A");
+    write(&a.global(), "g\n");
+    write(&a.codex(), &format!("token ghp_{}\n", "a1B2c3D4e5".repeat(4)));
+    let (plan, s) = {
+        let mut ctx = a.ctx();
+        ctx.secrets.exclude = BTreeSet::from([CODEX.to_string()]);
+        let plan = prepare(&ctx).unwrap();
+        let s = finish(&ctx, &plan, &BTreeMap::new()).unwrap();
+        (plan, s)
+    };
+    assert_eq!(plan.skipped.len(), 1);
+    let recs = update_skip_records(&plan, &BTreeMap::new(), 7);
+    assert_eq!(recs[CODEX], SkipRecord { reason: "secret".into(), at: 7 });
+    a.base = s.commit;
+    a.synced = s.synced_projects;
+    a.unsynced = s.unsynced_paths;
+    assert_eq!(w.file(CODEX), None);
+
+    // still not synced (a download leaves it local): record kept
+    let plan = a.prepare_download();
+    assert_eq!(plan.kept_local, vec![CODEX.to_string()]);
+    assert_eq!(update_skip_records(&plan, &recs, 9), recs);
+
+    // secret removed and uploaded: record cleared
+    write(&a.codex(), "clean\n");
+    let plan = a.prepare();
+    assert_eq!(plan.push_local, vec![CODEX.to_string()]);
+    assert!(update_skip_records(&plan, &recs, 9).is_empty());
+}

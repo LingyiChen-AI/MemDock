@@ -114,7 +114,8 @@ pub enum Decision {
 pub struct TurnUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    /// Claude only (`total_cost_usd` of the result line).
+    /// Claude only: this turn's share of `total_cost_usd` (the CLI reports the
+    /// process's running total).
     pub cost_usd: Option<f64>,
     pub duration_ms: Option<u64>,
 }

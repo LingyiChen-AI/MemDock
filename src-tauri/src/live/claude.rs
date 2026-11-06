@@ -158,6 +158,12 @@ pub(crate) struct Parser {
     blocks_seen: HashMap<String, usize>,
     /// request_id → permission prompt awaiting an answer.
     pending: HashMap<String, Pending>,
+    /// `total_cost_usd` of the last `result`: the CLI reports the process's
+    /// running total, turns get the difference.
+    cost_total: f64,
+    /// The user interrupted the current turn: its error result is the
+    /// interruption itself, not an error to show.
+    interrupted: bool,
 }
 
 fn pretty(v: &Value, max: usize) -> String {
@@ -199,6 +205,16 @@ impl Parser {
     pub fn announce(&mut self, native_id: &str, model: Option<String>) -> LiveEvent {
         self.announced = Some((native_id.to_string(), model.clone()));
         LiveEvent::Started { native_id: native_id.to_string(), model }
+    }
+
+    /// A new user message starts a turn (clears a stale interrupt).
+    pub fn on_send(&mut self) {
+        self.interrupted = false;
+    }
+
+    /// The user asked to interrupt the running turn.
+    pub fn on_interrupt(&mut self) {
+        self.interrupted = true;
     }
 
     /// Removes and returns the pending prompt `request_id`.
@@ -247,7 +263,16 @@ impl Parser {
                 }
             }
             "result" => {
-                let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                // An interrupted turn ends as `error_during_execution`; like Codex's
+                // `interrupted` status it is not an error.
+                let interrupted = std::mem::take(&mut self.interrupted)
+                    && str_of(&v, "subtype") == Some("error_during_execution");
+                let is_error = !interrupted && v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                let cost = v.get("total_cost_usd").and_then(Value::as_f64).map(|total| {
+                    let turn = (total - self.cost_total).max(0.0);
+                    self.cost_total = total.max(self.cost_total);
+                    turn
+                });
                 let u = v.get("usage").cloned().unwrap_or(Value::Null);
                 let n = |k: &str| u.get(k).and_then(Value::as_u64);
                 // Cached prompt tokens are most of the input; count them too.
@@ -268,7 +293,7 @@ impl Parser {
                     usage: TurnUsage {
                         input_tokens: input,
                         output_tokens: n("output_tokens"),
-                        cost_usd: v.get("total_cost_usd").and_then(Value::as_f64),
+                        cost_usd: cost,
                         duration_ms: v.get("duration_ms").and_then(Value::as_u64),
                     },
                     is_error,
@@ -419,6 +444,7 @@ struct ClaudeDriver {
 
 impl Driver for ClaudeDriver {
     fn send(&mut self, text: &str, images: &[String]) -> Result<(), String> {
+        self.parser.lock().unwrap().on_send();
         write_line(&self.stdin, &user_message(text, images))
     }
 
@@ -429,6 +455,7 @@ impl Driver for ClaudeDriver {
 
     fn interrupt(&mut self) -> Result<(), String> {
         let id = format!("int-{}", uuid::Uuid::new_v4());
+        self.parser.lock().unwrap().on_interrupt();
         write_line(&self.stdin, &control_request(&id, "interrupt"))
     }
 

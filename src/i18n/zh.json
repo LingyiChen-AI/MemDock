@@ -1299,6 +1299,20 @@
       "modelPlaceholder": "输入模型名，留空用默认",
       "lockedHint": "会话正在运行，使用的是这里显示的设置；修改在下次重新连接时生效",
       "nextHint": "这条消息重新连接会话时使用"
-    }
+    },
+    "modeLabel": "视图",
+    "modeGui": "GUI",
+    "modeTerminal": "终端",
+    "modeGuiHint": "气泡视图：在 MemDock 里查看和继续对话",
+    "modeTerminalHint": "终端视图：在这里运行真正的命令行（claude / codex），和在系统终端里一样",
+    "terminalStatus": "终端 · {command}",
+    "terminalStarting": "正在启动…",
+    "terminalExited": "已退出（{code}）",
+    "terminalExitedNoCode": "已退出",
+    "terminalRestart": "重新启动",
+    "terminalFailed": "终端启动失败：{error}",
+    "switchConfirmTitle": "切换到终端？",
+    "switchConfirmBody": "这个对话正在回复中。切换到终端会停止当前这一轮（已生成的内容会保留在会话里），然后在终端里接着这个对话。",
+    "switchConfirm": "停止并切换"
   }
 }

@@ -41,6 +41,7 @@ base64 = "0.23"
 sha1 = "0.10"
 ureq = { version = "3", features = ["json", "socks-proxy"] }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+portable-pty = "0.9.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

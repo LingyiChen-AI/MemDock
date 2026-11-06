@@ -17,6 +17,7 @@ pub mod memory;
 pub mod model;
 pub mod paths;
 pub mod proc;
+pub mod pty;
 pub mod projects;
 pub mod secrets;
 pub mod settings;
@@ -113,6 +114,7 @@ pub fn run() {
             let gh_import = Arc::new(commands_ghimport::GhImportState::production(state.clone()));
             app.manage(gh_import);
             app.manage(Arc::new(live::LiveManager::production(app.handle().clone())));
+            app.manage(Arc::new(pty::PtyManager::production(app.handle().clone())));
             app.manage(usage);
             app.manage(env_state);
             app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
@@ -215,6 +217,10 @@ pub fn run() {
             live::live_transcript,
             live::live_models,
             live::read_image_data_uri,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -230,6 +236,9 @@ pub fn run() {
                 }
                 if let Some(live) = app.try_state::<Arc<live::LiveManager>>() {
                     live.stop_all();
+                }
+                if let Some(pty) = app.try_state::<Arc<pty::PtyManager>>() {
+                    pty.close_all();
                 }
             }
         });

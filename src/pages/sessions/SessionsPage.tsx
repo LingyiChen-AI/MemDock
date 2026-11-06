@@ -1,7 +1,17 @@
 import * as React from "react";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, TerminalSquare, TriangleAlert } from "lucide-react";
+import { ArrowLeftRight, Check, Copy, Cpu, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, Square, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert } from "lucide-react";
 import { liveInterrupt, liveRespond, liveSend, type LiveSessionInfo } from "@/api/live";
+import { TerminalView } from "@/pages/chat/TerminalView";
+import {
+  closeTerminal,
+  initialMode,
+  releaseGuiProcess,
+  saveChatMode,
+  terminalKey,
+  terminalOptions,
+  type ChatMode,
+} from "@/pages/chat/terminalStore";
 import { Conversation } from "@/pages/chat/Conversation";
 import { NewChatDialog } from "@/pages/chat/NewChatDialog";
 import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
@@ -345,6 +355,36 @@ function TitleEditor({ title, onSave, s }: { title: string; onSave?: (title: str
   );
 }
 
+/** GUI (bubbles) / terminal (the real CLI) switch. */
+function ModeSwitch({ value, onChange, disabled, c }: { value: ChatMode; onChange: (m: ChatMode) => void; disabled?: boolean; c: C }) {
+  const options: { value: ChatMode; label: string; hint: string; icon: React.ReactNode }[] = [
+    { value: "gui", label: c.modeGui, hint: c.modeGuiHint, icon: <MessagesSquare aria-hidden="true" /> },
+    { value: "terminal", label: c.modeTerminal, hint: c.modeTerminalHint, icon: <SquareTerminal aria-hidden="true" /> },
+  ];
+  return (
+    <div role="radiogroup" aria-label={c.modeLabel} className="inline-flex h-8 shrink-0 rounded-md border border-border bg-card p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={o.value === value}
+          title={o.hint}
+          disabled={disabled}
+          onClick={() => o.value !== value && onChange(o.value)}
+          className={cn(
+            "inline-flex cursor-pointer items-center gap-1.5 rounded-sm px-2.5 text-xs outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none [&_svg]:size-3.5",
+            o.value === value ? "seg-active" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.icon}
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ChatPane({
   target,
   preview,
@@ -353,6 +393,7 @@ function ChatPane({
   converting,
   onConvert,
   onRenamed,
+  onRefresh,
   lc,
   s,
   c,
@@ -364,12 +405,46 @@ function ChatPane({
   converting: boolean;
   onConvert: () => void;
   onRenamed: () => void;
+  /** Re-read the session file (preview + list), after the terminal wrote to it. */
+  onRefresh: () => void;
   lc: LiveConv | undefined;
   s: S;
   c: C;
 }) {
   const { session, live } = target;
   const [actionError, setActionError] = React.useState<string | null>(null);
+  const termKey = terminalKey(target);
+  const [mode, setMode] = React.useState<ChatMode>(() => initialMode(termKey, live));
+  const [switching, setSwitching] = React.useState(false);
+  const [confirmStop, setConfirmStop] = React.useState<((ok: boolean) => void) | null>(null);
+  // Options are fixed when the terminal opens; later list refreshes must not restart it.
+  const [termOpts, setTermOpts] = React.useState(() => terminalOptions(target));
+
+  const switchMode = async (next: ChatMode) => {
+    setActionError(null);
+    setSwitching(true);
+    try {
+      if (next === "terminal") {
+        const ok = await releaseGuiProcess(live, () => new Promise<boolean>((resolve) => setConfirmStop(() => resolve)));
+        if (!ok) return;
+        setTermOpts(terminalOptions(target));
+        setMode("terminal");
+      } else {
+        await closeTerminal(termKey);
+        setMode("gui");
+        onRefresh();
+      }
+      saveChatMode(next);
+    } catch (e) {
+      setActionError(fmt(c.actionFailed, { error: errorMessage(e) }));
+    } finally {
+      setSwitching(false);
+    }
+  };
+  const answerConfirm = (ok: boolean) => {
+    confirmStop?.(ok);
+    setConfirmStop(null);
+  };
   const targetTool = otherTool(target.tool);
   const stats = preview?.stats;
   const running = live ? isActive(live.state) : false;
@@ -446,7 +521,8 @@ function ChatPane({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {running && live ? (
+            <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching} c={c} />
+            {mode === "gui" && running && live ? (
               <HeaderButton
                 label={c.stop}
                 hint={c.stopHint}
@@ -460,70 +536,86 @@ function ChatPane({
               </HeaderButton>
             ) : null}
             {session && session.converted_from?.tool !== targetTool ? (
-              <Button type="button" variant="outline" size="sm" className="cursor-pointer" disabled={converting || !preview || running} onClick={onConvert}>
+              <Button type="button" variant="outline" size="sm" className="cursor-pointer" disabled={converting || !preview || running || mode === "terminal"} onClick={onConvert}>
                 {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
                 {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[targetTool] })}
               </Button>
             ) : null}
           </div>
         </div>
-        {result ? <ResultCard result={result} s={s} /> : session ? <ResumeCommands session={session} s={s} /> : null}
+        {result ? <ResultCard result={result} s={s} /> : session && mode === "gui" ? <ResumeCommands session={session} s={s} /> : null}
       </div>
       {actionError ? (
         <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
           {actionError}
         </p>
       ) : null}
-      {live && lc?.loaded ? (
-        <Conversation
-          conv={lc.conv}
-          agent={live.agent}
-          running={running}
-          starting={live.state === "starting"}
-          onRespond={respond}
-          prefix={
-            history ? (
-              <>
-                {history}
-                <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
-                  <span className="h-px flex-1 bg-border" />
-                  {c.continuedHere}
-                  <span className="h-px flex-1 bg-border" />
-                </div>
-              </>
-            ) : undefined
-          }
-        />
-      ) : session ? (
-        error ? (
-          <p role="alert" className="p-4 text-sm text-destructive">
-            {fmt(s.previewFailed, { error })}
-          </p>
-        ) : !preview ? (
-          <ChatSkeleton label={s.previewLoading} className="px-4 py-4" />
-        ) : (
-          <Timeline preview={preview} tool={session.tool} startAtBottom />
-        )
-      ) : (
-        <ChatSkeleton label={c.loading} className="px-4 py-4" />
-      )}
-      <ChatComposer
-        key={target.nativeId ?? live?.live_id ?? "new"}
-        c={c}
-        agent={target.tool}
-        cwd={target.cwd}
-        placeholder={running ? c.inputQueued : undefined}
-        hint={!attached ? fmt(c.continueHint, { agent: s.tools[target.tool] }) : null}
-        running={running}
-        onStop={() => {
-          if (!live) return;
-          setActionError(null);
-          liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
-        }}
-        attached={attached && live ? { permission: live.permission, model: live.model } : null}
-        onError={setActionError}
-        onSend={send}
+      <ConfirmDialog
+        open={confirmStop !== null}
+        title={c.switchConfirmTitle}
+        body={c.switchConfirmBody}
+        confirmLabel={c.switchConfirm}
+        cancelLabel={s.cancel}
+        destructive
+        onConfirm={() => answerConfirm(true)}
+        onCancel={() => answerConfirm(false)}
       />
+      {mode === "terminal" ? (
+        <TerminalView termKey={termKey} opts={termOpts} c={c} />
+      ) : (
+        <>
+          {live && lc?.loaded ? (
+            <Conversation
+              conv={lc.conv}
+              agent={live.agent}
+              running={running}
+              starting={live.state === "starting"}
+              onRespond={respond}
+              prefix={
+                history ? (
+                  <>
+                    {history}
+                    <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+                      <span className="h-px flex-1 bg-border" />
+                      {c.continuedHere}
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
+                  </>
+                ) : undefined
+              }
+            />
+          ) : session ? (
+            error ? (
+              <p role="alert" className="p-4 text-sm text-destructive">
+                {fmt(s.previewFailed, { error })}
+              </p>
+            ) : !preview ? (
+              <ChatSkeleton label={s.previewLoading} className="px-4 py-4" />
+            ) : (
+              <Timeline preview={preview} tool={session.tool} startAtBottom />
+            )
+          ) : (
+            <ChatSkeleton label={c.loading} className="px-4 py-4" />
+          )}
+          <ChatComposer
+            key={target.nativeId ?? live?.live_id ?? "new"}
+            c={c}
+            agent={target.tool}
+            cwd={target.cwd}
+            placeholder={running ? c.inputQueued : undefined}
+            hint={!attached ? fmt(c.continueHint, { agent: s.tools[target.tool] }) : null}
+            running={running}
+            onStop={() => {
+              if (!live) return;
+              setActionError(null);
+              liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
+            }}
+            attached={attached && live ? { permission: live.permission, model: live.model } : null}
+            onError={setActionError}
+            onSend={send}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -633,10 +725,14 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
   // Reload the preview whenever the selected file changes.
   const selectedPath = selected?.path;
   const selectedTool = selected?.tool;
+  // Bumped to re-read the same file (it grew while the terminal had it); keeps the old preview meanwhile.
+  const [previewNonce, setPreviewNonce] = React.useState(0);
+  const shownPath = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
     if (!selectedPath || !selectedTool) return;
     let alive = true;
-    setPreview(null);
+    if (shownPath.current !== selectedPath) setPreview(null);
+    shownPath.current = selectedPath;
     setPreviewError(null);
     sessionPreview(selectedTool, selectedPath)
       .then((p) => alive && setPreview(p))
@@ -644,7 +740,7 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
     return () => {
       alive = false;
     };
-  }, [selectedPath, selectedTool]);
+  }, [selectedPath, selectedTool, previewNonce]);
 
   const visible = React.useMemo(() => filterSessions(sessions ?? [], tool, query), [sessions, tool, query]);
   const groups = React.useMemo(() => groupByProject(visible), [visible]);
@@ -826,6 +922,10 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
               onConvert={() => void askConvert()}
               lc={selectedLive ? store.convs[selectedLive.live_id] : undefined}
               onRenamed={() => void load(true)}
+              onRefresh={() => {
+                setPreviewNonce((n) => n + 1);
+                void load(true);
+              }}
               s={s}
               c={c}
             />

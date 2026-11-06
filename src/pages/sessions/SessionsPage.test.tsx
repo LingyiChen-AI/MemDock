@@ -60,6 +60,14 @@ const preview: SessionPreview = {
   ],
   total_messages: 2,
   stats: { user_messages: 1, assistant_messages: 1, tool_calls: 2, mapped_calls: 1, degraded_calls: 1 },
+  timeline: [
+    { type: "user", ts: "2026-11-01T10:00:00.000Z", text: "Fix the build" },
+    { type: "tool", ts: "2026-11-01T10:00:01.000Z", name: "Bash", kind: "shell", summary: "cargo build", input: "cargo build", output: "ok", is_error: false, mapped: true },
+    { type: "tool", ts: "2026-11-01T10:00:02.000Z", name: "Read", kind: "read", summary: "src/main.rs", input: "{}", output: "no such file", is_error: true, mapped: false },
+    { type: "assistant", ts: "2026-11-01T10:00:03.000Z", text: "Fixed." },
+  ],
+  counts: { user: 1, assistant: 1, tools: 2, shell: 1, files: 1, errors: 1 },
+  timeline_total: 4,
 };
 
 const result: ConvertResult = {
@@ -105,6 +113,18 @@ describe("SessionsPage", () => {
     expect(screen.queryByRole("region", { name: "api" })).toBeNull();
     await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
     expect(screen.getByText("没有匹配的会话")).toBeInTheDocument();
+  });
+
+  it("timeline shows typed tool rows and filters by type", async () => {
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    expect(await screen.findByText("cargo build")).toBeInTheDocument();
+    expect(screen.getByText("src/main.rs")).toBeInTheDocument();
+    expect(screen.getByText("2 个工具调用")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: /出错/ }));
+    expect(screen.queryByText("cargo build")).not.toBeInTheDocument();
+    expect(screen.getByText("src/main.rs")).toBeInTheDocument();
+    expect(screen.queryByText("Fixed.")).not.toBeInTheDocument();
   });
 
   it("previews, confirms and shows the resume command", async () => {

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ArrowLeftRight, Check, Copy, Folder, Hash, Info, Loader2, MessagesSquare, RefreshCw, Search, TerminalSquare, TriangleAlert } from "lucide-react";
 import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
-import type { ConvertResult, PreviewMessage, SessionPreview, SessionSummary, Tool } from "@/api/types";
+import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,8 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
-import { filterSessions, formatIso, formatTime, groupByProject, otherTool, type ToolFilter } from "./sessionsUtils";
+import { Timeline } from "./Timeline";
+import { filterSessions, formatTime, groupByProject, otherTool, type ToolFilter } from "./sessionsUtils";
 
 type S = Messages["sessions"];
 
@@ -231,60 +232,6 @@ function MetaChip({ icon, title, mono, children }: { icon?: React.ReactNode; tit
   );
 }
 
-const LONG_TEXT = 600;
-
-/** Chat-style preview row: user on the right, assistant and shell on the left. */
-function MessageBubble({ m, s }: { m: PreviewMessage; s: S }) {
-  const [open, setOpen] = React.useState(false);
-  const isUser = m.role === "user";
-  const isShell = m.role === "shell";
-  const long = m.text.length > LONG_TEXT;
-  return (
-    <li className={cn("flex w-full flex-col gap-1", isUser ? "items-end" : "items-start")}>
-      <div className={cn("flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground", isUser && "flex-row-reverse")}>
-        {isShell ? <TerminalSquare className="size-3.5" aria-hidden="true" /> : null}
-        <span className="font-medium">{s.roles[m.role]}</span>
-        <span className="tabular-nums">{formatIso(m.ts)}</span>
-      </div>
-      <div
-        className={cn(
-          "max-w-[85%] min-w-0 px-3.5 py-2.5",
-          isUser && "rounded-2xl rounded-tr-sm bg-primary text-primary-foreground",
-          m.role === "assistant" && "rounded-2xl rounded-tl-sm border border-border bg-card",
-          isShell && "rounded-lg border border-border bg-muted/60",
-        )}
-      >
-        <p
-          className={cn(
-            "text-sm leading-relaxed break-words whitespace-pre-wrap",
-            isShell && "font-mono text-xs",
-            long && !open && "line-clamp-[10]",
-          )}
-        >
-          {isShell ? (
-            <span className="mr-1.5 text-primary select-none" aria-hidden="true">
-              $
-            </span>
-          ) : null}
-          {m.text}
-        </p>
-        {long ? (
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className={cn(
-              "mt-1.5 cursor-pointer text-xs font-medium underline-offset-2 hover:underline",
-              isUser ? "text-primary-foreground/80" : "text-primary",
-            )}
-          >
-            {open ? s.collapse : s.expand}
-          </button>
-        ) : null}
-      </div>
-    </li>
-  );
-}
-
 function PreviewPane({
   session,
   preview,
@@ -352,19 +299,7 @@ function PreviewPane({
             {s.previewLoading}
           </p>
         ) : (
-          <div className="flex flex-col gap-2.5">
-            <h3 className="text-xs font-medium text-muted-foreground">{s.previewTitle}</h3>
-            <ol className="flex flex-col gap-3">
-              {preview.messages.map((m, i) => (
-                <MessageBubble key={i} m={m} s={s} />
-              ))}
-            </ol>
-            {preview.total_messages > preview.messages.length ? (
-              <p className="text-xs text-muted-foreground">
-                {fmt(s.previewMore, { shown: preview.messages.length, total: preview.total_messages })}
-              </p>
-            ) : null}
-          </div>
+          <Timeline preview={preview} tool={session.tool} />
         )}
       </div>
     </div>

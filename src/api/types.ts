@@ -807,11 +807,42 @@ export interface PreviewMessage {
   text: string;
 }
 
+export type ToolKind = "shell" | "read" | "edit" | "write" | "search" | "web" | "agent" | "todo" | "other";
+
+/** The original conversation for the viewer (convert/timeline.rs). */
+export type TimelineItem =
+  | { type: "user"; ts: string; text: string }
+  | { type: "assistant"; ts: string; text: string }
+  | {
+      type: "tool";
+      ts: string;
+      name: string;
+      kind: ToolKind;
+      summary: string;
+      input: string;
+      output: string | null;
+      is_error: boolean;
+      /** Converting keeps it as a real shell call; otherwise it becomes text. */
+      mapped: boolean;
+    };
+
+export interface TimelineCounts {
+  user: number;
+  assistant: number;
+  tools: number;
+  shell: number;
+  files: number;
+  errors: number;
+}
+
 export interface SessionPreview {
   summary: SessionSummary;
   messages: PreviewMessage[];
   total_messages: number;
   stats: PlanStats;
+  timeline: TimelineItem[];
+  counts: TimelineCounts;
+  timeline_total: number;
 }
 
 export interface ConvertResult {

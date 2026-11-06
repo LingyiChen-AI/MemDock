@@ -18,6 +18,8 @@ use crate::paths::AgentPaths;
 const PREVIEW_LIMIT: usize = 400;
 /// Max characters per preview message.
 const PREVIEW_CHARS: usize = 1200;
+/// Tool input / output kept per call in the preview timeline.
+const TIMELINE_IO_CHARS: usize = 4000;
 
 type CacheEntry = (u64, i64, SessionSummary);
 
@@ -129,6 +131,10 @@ pub struct SessionPreview {
     pub summary: SessionSummary,
     /// The planned (converted) messages, capped.
     pub messages: Vec<PreviewMessage>,
+    /// The original conversation, tool calls paired with results (capped).
+    pub timeline: Vec<convert::timeline::TimelineItem>,
+    pub counts: convert::timeline::TimelineCounts,
+    pub timeline_total: usize,
     pub total_messages: usize,
     pub stats: PlanStats,
 }
@@ -168,7 +174,10 @@ pub fn session_preview_impl(
             },
         })
         .collect();
-    Ok(SessionPreview { summary, messages, total_messages: out.len(), stats })
+    let (mut timeline, counts) = convert::timeline::build(&conv.items, PREVIEW_CHARS, TIMELINE_IO_CHARS);
+    let timeline_total = timeline.len();
+    timeline.truncate(PREVIEW_LIMIT);
+    Ok(SessionPreview { summary, messages, total_messages: out.len(), stats, timeline, counts, timeline_total })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

@@ -7,6 +7,7 @@
 //! so the written file never contains an unpaired tool call.
 
 pub mod claude;
+pub mod timeline;
 pub mod codex;
 pub mod store;
 

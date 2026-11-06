@@ -307,6 +307,7 @@ describe("ReviewPage", () => {
         ],
       },
     ]);
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
     await userEvent.click(within((await cards())[0]).getByRole("button", { name: "查看原对话" }));
     const drawer = await screen.findByRole("dialog");
     expect(suggestionContext).toHaveBeenCalledWith("s-mod");
@@ -317,6 +318,7 @@ describe("ReviewPage", () => {
       return li as HTMLElement;
     });
     expect(hit).toHaveTextContent("请把从库延迟调小到 1 秒，缩短测试耗时");
+    await waitFor(() => expect(scrollSpy.mock.contexts).toContain(hit));
     expect(within(drawer).getByText("好的，需要调整吗")).toBeInTheDocument();
     expect(within(drawer).getAllByText("Claude Code").length).toBeGreaterThan(0);
     expect(within(drawer).getByText(/sess-012/)).toBeInTheDocument();

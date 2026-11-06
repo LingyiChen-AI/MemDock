@@ -135,6 +135,16 @@ export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawe
     };
   }, [open, id]);
 
+  // Once the turns render, bring the quoted message into view.
+  const bodyRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!data?.length) return;
+    const id = window.setTimeout(() => {
+      bodyRef.current?.querySelector('[data-hit="true"]')?.scrollIntoView({ block: "center" });
+    }, 80);
+    return () => window.clearTimeout(id);
+  }, [data]);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-[min(640px,92vw)] gap-0 data-[side=right]:w-[min(640px,92vw)] data-[side=right]:sm:max-w-none">
@@ -142,7 +152,7 @@ export function EvidenceDrawer({ open, onOpenChange, suggestion }: EvidenceDrawe
           <SheetTitle className="text-base font-semibold">{r.drawerTitle}</SheetTitle>
           <SheetDescription className="text-xs">{r.drawerDesc}</SheetDescription>
         </SheetHeader>
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+        <div ref={bodyRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
           {error ? (
             <p role="alert" className="text-sm text-destructive">
               {fmt(r.drawerFailed, { message: error })}

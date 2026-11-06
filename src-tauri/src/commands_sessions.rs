@@ -246,6 +246,18 @@ pub fn session_preview_impl(
     tool: Tool,
     path: &str,
 ) -> Result<SessionPreview, CommandError> {
+    session_preview_limited_impl(paths, data_dir, tool, path, PREVIEW_LIMIT)
+}
+
+/// The preview with the newest `limit` timeline entries / messages ("load more" asks for more).
+pub fn session_preview_limited_impl(
+    paths: &AgentPaths,
+    data_dir: &Path,
+    tool: Tool,
+    path: &str,
+    limit: usize,
+) -> Result<SessionPreview, CommandError> {
+    let limit = limit.max(1);
     let p = authorize(paths, tool, path)?;
     let conv = convert::parse(tool, &p);
     let mut summary = convert::summarize(&conv, &p);
@@ -255,7 +267,7 @@ pub fn session_preview_impl(
     summary.converted_to = store.targets_of(&me);
     let (out, stats) = convert::plan(&conv.items);
     // Long sessions keep the newest PREVIEW_LIMIT entries: the latest turns are what people open a session for.
-    let messages = out[out.len().saturating_sub(PREVIEW_LIMIT)..]
+    let messages = out[out.len().saturating_sub(limit)..]
         .iter()
         .map(|o| match o {
             Out::User { ts, text } => PreviewMessage {
@@ -277,7 +289,7 @@ pub fn session_preview_impl(
         .collect();
     let (mut timeline, counts) = convert::timeline::build_with_images(&conv.items, &conv.images, PREVIEW_CHARS, TIMELINE_IO_CHARS);
     let timeline_total = timeline.len();
-    timeline.drain(..timeline_total.saturating_sub(PREVIEW_LIMIT));
+    timeline.drain(..timeline_total.saturating_sub(limit));
     Ok(SessionPreview { summary, messages, total_messages: out.len(), stats, timeline, counts, timeline_total })
 }
 
@@ -426,7 +438,12 @@ pub fn list_sessions(ss: Ss) -> Vec<SessionSummary> {
 }
 
 #[tauri::command(async)]
-pub fn session_preview(ss: Ss, tool: Tool, path: String) -> Result<SessionPreview, CommandError> {
+pub fn session_preview(ss: Ss, tool: Tool, path: String, limit: Option<usize>) -> Result<SessionPreview, CommandError> {
+    // "Load more" (a larger limit) is user-triggered and rare: read without the cache.
+    if let Some(n) = limit.filter(|n| *n > PREVIEW_LIMIT) {
+        let pv = session_preview_limited_impl(&ss.app.paths, &ss.app.data_dir, tool, &path, n)?;
+        return Ok(with_title(pv, &ss.app.data_dir));
+    }
     let key = std::fs::canonicalize(&path).ok().and_then(|p| file_key(&p).map(|k| (p, k)));
     if let Some((p, (len, mtime))) = &key {
         if let Some((_, _, _, pv)) = lock(&ss.previews).iter().find(|(q, l, m, _)| q == p && l == len && m == mtime) {

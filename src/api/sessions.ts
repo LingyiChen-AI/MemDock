@@ -7,8 +7,9 @@ export function listSessions(): Promise<SessionSummary[]> {
 }
 
 /** The converted messages (capped) and mapping stats for one session. */
-export function sessionPreview(tool: Tool, path: string): Promise<SessionPreview> {
-  return invoke<SessionPreview>("session_preview", { tool, path });
+/** `limit`: how many of the newest entries to load (default 400; "load more" asks for more). */
+export function sessionPreview(tool: Tool, path: string, limit?: number): Promise<SessionPreview> {
+  return invoke<SessionPreview>("session_preview", { tool, path, limit: limit ?? null });
 }
 
 /** Renames a session (also where Claude Code / Codex keep the name, so their history shows it). */

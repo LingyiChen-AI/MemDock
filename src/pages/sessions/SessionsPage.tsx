@@ -62,7 +62,7 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
-import { Timeline, TimelineFilterBar, type TimelineFilter } from "./Timeline";
+import { LOAD_MORE_STEP, Timeline, TimelineFilterBar, type TimelineFilter } from "./Timeline";
 import { EMPTY_CONV } from "@/pages/chat/liveModel";
 import { filterSessions, formatTime, groupByProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
 
@@ -742,6 +742,8 @@ function ChatPane({
   converting,
   onConvert,
   onRenamed,
+  onLoadMore,
+  loadingMore = false,
   onRefresh,
   onDraftChange,
   onOpenShell,
@@ -758,6 +760,9 @@ function ChatPane({
   converting: boolean;
   onConvert: () => void;
   onRenamed: () => void;
+  /** Loads earlier history entries. */
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
   /** Re-read the session file (preview + list), after the terminal wrote to it. */
   onRefresh: () => void;
   /** Draft only: the agent / folder picked in the composer. */
@@ -960,7 +965,7 @@ function ChatPane({
     ) : !before ? (
       live ? null : <ChatSkeleton label={s.previewLoading} />
     ) : before.timeline.length === 0 ? null : (
-      <Timeline bare preview={before} tool={session.tool} filter={historyFilter} />
+      <Timeline bare preview={before} tool={session.tool} filter={historyFilter} onLoadMore={onLoadMore} loadingMore={loadingMore} />
     )
   ) : null;
 
@@ -1321,20 +1326,31 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const selectedTool = selected?.tool;
   // Bumped to re-read the same file (it grew while the terminal had it); keeps the old preview meanwhile.
   const [previewNonce, setPreviewNonce] = React.useState(0);
+  // How many of the newest entries the open session shows ("load more" raises it).
+  const [previewLimit, setPreviewLimit] = React.useState(LOAD_MORE_STEP);
+  const [loadingMore, setLoadingMore] = React.useState(false);
   const shownPath = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
     if (!selectedPath || !selectedTool) return;
     let alive = true;
-    if (shownPath.current !== selectedPath) setPreview(null);
+    if (shownPath.current !== selectedPath) {
+      setPreview(null);
+      if (previewLimit !== LOAD_MORE_STEP) {
+        setPreviewLimit(LOAD_MORE_STEP); // a new session starts with the newest page; this effect runs again
+        shownPath.current = selectedPath;
+        return;
+      }
+    }
     shownPath.current = selectedPath;
     setPreviewError(null);
-    sessionPreview(selectedTool, selectedPath)
+    sessionPreview(selectedTool, selectedPath, previewLimit)
       .then((p) => alive && setPreview(p))
-      .catch((e) => alive && setPreviewError(errorMessage(e)));
+      .catch((e) => alive && setPreviewError(errorMessage(e)))
+      .finally(() => alive && setLoadingMore(false));
     return () => {
       alive = false;
     };
-  }, [selectedPath, selectedTool, previewNonce]);
+  }, [selectedPath, selectedTool, previewNonce, previewLimit]);
 
   const selectedUpdated = selected?.updated_at ?? null;
   const seenUpdated = React.useRef<{ path?: string; at: number | null }>({ at: null });
@@ -1727,6 +1743,11 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
               converting={converting}
               onConvert={() => void askConvert()}
               onRenamed={() => void load(true)}
+              loadingMore={loadingMore}
+              onLoadMore={() => {
+                setLoadingMore(true);
+                setPreviewLimit((n) => n + LOAD_MORE_STEP);
+              }}
               onRefresh={() => {
                 setPreviewNonce((n) => n + 1);
                 void load(true);

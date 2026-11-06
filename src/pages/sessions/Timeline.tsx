@@ -26,6 +26,9 @@ import { formatIso } from "./sessionsUtils";
 type S = Messages["sessions"];
 type ToolItem = Extract<TimelineItem, { type: "tool" }>;
 type TextItem = Exclude<TimelineItem, ToolItem>;
+/** Entries added by each "load more". */
+export const LOAD_MORE_STEP = 400;
+
 export type TimelineFilter = "all" | "chat" | "tools" | "shell" | "files" | "errors";
 
 export const KIND_ICON: Record<ToolKind, LucideIcon> = {
@@ -109,9 +112,14 @@ export function Timeline({
   bare = false,
   startAtBottom = false,
   filter: controlledFilter,
+  onLoadMore,
+  loadingMore = false,
 }: {
   preview: SessionPreview;
   tool: Tool;
+  /** Loads earlier entries (shown as a link next to the "latest N of M" note). */
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
   /** Filter chosen outside (with `TimelineFilterBar`); the built-in bar is used otherwise. */
   filter?: TimelineFilter;
   /** Only the messages: no filter bar and no scroll container (embedded above a live chat). */
@@ -135,7 +143,19 @@ export function Timeline({
   const list = (
     <>
       {preview.timeline_total > preview.timeline.length ? (
-        <p className="mb-4 text-center text-xs text-muted-foreground">{fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}</p>
+        <p className="mb-4 flex flex-wrap items-center justify-center gap-x-2 text-center text-xs text-muted-foreground">
+          {fmt(s.previewMore, { shown: preview.timeline.length, total: preview.timeline_total })}
+          {onLoadMore ? (
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={onLoadMore}
+              className="cursor-pointer font-medium text-primary underline-offset-2 outline-none hover:underline focus-visible:underline disabled:cursor-wait disabled:opacity-60"
+            >
+              {loadingMore ? s.loadingMore : fmt(s.loadMore, { n: Math.min(LOAD_MORE_STEP, preview.timeline_total - preview.timeline.length) })}
+            </button>
+          ) : null}
+        </p>
       ) : null}
       {blocks.length === 0 ? <p className="py-6 text-center text-sm text-muted-foreground">{s.timeline.empty}</p> : null}
       <ol className="flex flex-col gap-5">

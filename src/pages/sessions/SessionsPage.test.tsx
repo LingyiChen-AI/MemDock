@@ -189,6 +189,16 @@ describe("SessionsPage", () => {
     await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(3));
   });
 
+  it("loads earlier history entries on demand", async () => {
+    (sessionPreview as Mock).mockResolvedValue({ ...preview, timeline_total: 900 });
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    const more = await screen.findByRole("button", { name: "查看更早的 400 条" });
+    expect(sessionPreview).toHaveBeenLastCalledWith("claude", claudeSession.path, 400);
+    await userEvent.click(more);
+    await waitFor(() => expect(sessionPreview).toHaveBeenLastCalledWith("claude", claudeSession.path, 800));
+  });
+
   it("renames the open session in place", async () => {
     (renameSession as Mock).mockResolvedValue(undefined);
     renderApp(<SessionsPage />);

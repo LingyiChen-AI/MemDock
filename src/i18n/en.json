@@ -1146,6 +1146,8 @@
     "previewFailed": "Failed to read the session: {error}",
     "previewTitle": "Conversion preview",
     "previewMore": "Showing the latest {shown} of {total}; earlier entries not loaded",
+    "loadMore": "Show {n} earlier",
+    "loadingMore": "Loading…",
     "expand": "Show all",
     "collapse": "Show less",
     "continued": "Continued",

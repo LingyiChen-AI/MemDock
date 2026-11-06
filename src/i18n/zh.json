@@ -1146,6 +1146,8 @@
     "previewFailed": "读取会话失败：{error}",
     "previewTitle": "转换预览",
     "previewMore": "仅显示最近 {shown} 条，共 {total} 条，更早的未加载",
+    "loadMore": "查看更早的 {n} 条",
+    "loadingMore": "正在加载…",
     "expand": "展开全文",
     "collapse": "收起",
     "continued": "接续",

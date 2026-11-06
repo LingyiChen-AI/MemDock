@@ -346,3 +346,14 @@ fn real_preview_tail() {
         println!("  {}", s.chars().take(160).collect::<String>());
     }
 }
+
+#[test]
+fn preview_limit_keeps_the_newest_entries() {
+    let e = env();
+    let src = e.claude_src.to_string_lossy().into_owned();
+    let all = session_preview_limited_impl(&e.paths, &e.data, Tool::Claude, &src, 10_000).unwrap();
+    let two = session_preview_limited_impl(&e.paths, &e.data, Tool::Claude, &src, 2).unwrap();
+    assert_eq!(two.timeline_total, all.timeline.len());
+    assert_eq!(two.timeline.len(), 2);
+    assert_eq!(two.timeline, all.timeline[all.timeline.len() - 2..]);
+}

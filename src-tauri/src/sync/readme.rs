@@ -21,7 +21,8 @@ This is the sync repository of [MemDock]({PROJECT_URL}): your Claude Code / Code
 项目地址 / Project: {PROJECT_URL}\n\n\
 ---\n\n\
 {}",
-        PROJECT_README.trim_start_matches('\u{feff}')
+        // Same bytes whatever line endings the checkout used (keeps the blob id stable).
+        PROJECT_README.trim_start_matches('\u{feff}').replace("\r\n", "\n")
     )
 }
 

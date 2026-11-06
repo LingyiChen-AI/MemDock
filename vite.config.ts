@@ -20,7 +20,7 @@ export default defineConfig(() => ({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    watch: { ignored: ["**/src-tauri/**", "**/.claude/**"] },
   },
 
   test: {
@@ -28,5 +28,6 @@ export default defineConfig(() => ({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 }));

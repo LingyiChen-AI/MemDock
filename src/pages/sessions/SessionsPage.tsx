@@ -8,7 +8,8 @@ import { HeaderButton, LiveRow, StatePill } from "@/pages/chat/ChatPage";
 import { ChatComposer, type ComposerMessage } from "@/pages/chat/Composer";
 import { isActive } from "@/pages/chat/chatPrefs";
 import { ensureTranscript, selectLive, startLive, useLiveStore, type LiveConv } from "@/pages/chat/liveStore";
-import { convertSession, convertTargetDir, listSessions, sessionPreview } from "@/api/sessions";
+import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
+import { Pencil } from "lucide-react";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
 import { Button } from "@/components/ui/button";
@@ -277,6 +278,73 @@ interface Target {
   live: LiveSessionInfo | null;
 }
 
+/** The session title; with `onSave`, a pencil button edits it in place (Enter saves, Esc cancels). */
+function TitleEditor({ title, onSave, s }: { title: string; onSave?: (title: string) => Promise<unknown>; s: S }) {
+  const [editing, setEditing] = React.useState(false);
+  const [value, setValue] = React.useState(title);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const start = () => {
+    setValue(title);
+    setError(null);
+    setEditing(true);
+  };
+  const save = async () => {
+    const v = value.trim();
+    if (!onSave || !v || v === title) return setEditing(false);
+    setSaving(true);
+    try {
+      await onSave(v);
+      setEditing(false);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  if (editing) {
+    return (
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <Input
+          autoFocus
+          aria-label={s.renameLabel}
+          value={value}
+          disabled={saving}
+          maxLength={200}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === "Enter") void save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={() => void save()}
+          className="h-8 min-w-0 flex-1 text-sm font-semibold"
+        />
+        {saving ? <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+        {error ? <span role="alert" className="shrink-0 text-xs font-normal text-destructive">{fmt(s.renameFailed, { error })}</span> : null}
+      </span>
+    );
+  }
+  return (
+    <span className="group/title flex min-w-0 items-center gap-1">
+      <span className="truncate">{title}</span>
+      {onSave ? (
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={s.rename}
+          title={s.renameHint}
+          onClick={start}
+          className="size-7 shrink-0 cursor-pointer text-muted-foreground opacity-60 group-hover/title:opacity-100 focus-visible:opacity-100"
+        >
+          <Pencil className="size-3.5" aria-hidden="true" />
+        </Button>
+      ) : null}
+    </span>
+  );
+}
+
 function ChatPane({
   target,
   preview,
@@ -284,6 +352,7 @@ function ChatPane({
   result,
   converting,
   onConvert,
+  onRenamed,
   lc,
   s,
   c,
@@ -294,6 +363,7 @@ function ChatPane({
   result: ConvertResult | null;
   converting: boolean;
   onConvert: () => void;
+  onRenamed: () => void;
   lc: LiveConv | undefined;
   s: S;
   c: C;
@@ -347,7 +417,11 @@ function ChatPane({
           <div className="flex min-w-0 flex-col gap-2">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
               <ToolBadge tool={target.tool} s={s} />
-              <span className="truncate">{target.title}</span>
+              <TitleEditor
+                title={target.title}
+                onSave={session ? (title) => renameSession(session.tool, session.path, title).then(onRenamed) : undefined}
+                s={s}
+              />
               {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
             </h2>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -751,6 +825,7 @@ export function SessionsPage({ newChatOpen = false, onNewChatOpenChange = () => 
               converting={converting}
               onConvert={() => void askConvert()}
               lc={selectedLive ? store.convs[selectedLive.live_id] : undefined}
+              onRenamed={() => void load(true)}
               s={s}
               c={c}
             />

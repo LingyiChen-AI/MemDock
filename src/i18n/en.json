@@ -1048,6 +1048,10 @@
     }
   },
   "sessions": {
+    "rename": "Rename",
+    "renameHint": "Rename this session; Claude Code / Codex history shows the new name too",
+    "renameLabel": "Session name",
+    "renameFailed": "Rename failed: {error}",
     "title": "Sessions",
     "subtitle": "Convert sessions between Claude Code and Codex to continue the same work in the other tool",
     "refresh": "Refresh",

@@ -11,6 +11,11 @@ export function sessionPreview(tool: Tool, path: string): Promise<SessionPreview
   return invoke<SessionPreview>("session_preview", { tool, path });
 }
 
+/** Renames a session (also where Claude Code / Codex keep the name, so their history shows it). */
+export function renameSession(tool: Tool, path: string, title: string): Promise<void> {
+  return invoke<void>("rename_session", { tool, path, title });
+}
+
 /** The folder a conversion of this session would be written to. */
 export function convertTargetDir(tool: Tool, path: string): Promise<string> {
   return invoke<string>("convert_target_dir", { tool, path });

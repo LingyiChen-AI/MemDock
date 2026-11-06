@@ -1048,6 +1048,10 @@
     }
   },
   "sessions": {
+    "rename": "重命名",
+    "renameHint": "重命名这个会话，Claude Code / Codex 的历史里也会显示新名字",
+    "renameLabel": "会话名称",
+    "renameFailed": "重命名失败：{error}",
     "title": "会话",
     "subtitle": "在 Claude Code 与 Codex 之间转换会话，同一份工作换个工具接着做",
     "refresh": "刷新",

@@ -1,8 +1,8 @@
 # MemDock
 
-MemDock 是一款开源桌面应用（Windows / macOS，基于 Tauri 2 + React + TypeScript），把 **Claude Code** 和 **Codex** 的记忆、Skill、会话和用量放在一个地方管理。所有数据都在本机处理，只有你主动开启的功能（GitHub 同步、额度查询）才会联网。
+MemDock 是一款源码公开的桌面应用（Windows / macOS，基于 Tauri 2 + React + TypeScript），把 **Claude Code** 和 **Codex** 的记忆、Skill、会话和用量放在一个地方管理。所有数据都在本机处理，只有你主动开启的功能（GitHub 同步、额度查询）才会联网。
 
-> MemDock is an open-source desktop app (Windows / macOS, Tauri 2 + React + TypeScript) that manages Claude Code and Codex memories, skills, sessions and usage in one place. Everything runs locally; only the features you turn on (GitHub sync, quota lookup) go online.
+> MemDock is a source-available desktop app (Windows / macOS, Tauri 2 + React + TypeScript) that manages Claude Code and Codex memories, skills, sessions and usage in one place. Everything runs locally; only the features you turn on (GitHub sync, quota lookup) go online.
 
 ## 功能
 
@@ -65,6 +65,12 @@ src-tauri/src/       后端（Rust）
 - GitHub 同步只推送到你自己账号下的私有仓库；令牌只存在系统钥匙串里。
 - 额度查询默认关闭，开启后才会读取本机 CLI 的登录凭据去查询。
 
-## License
+## 许可协议 / License
 
-MIT
+本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，**源码公开，但不允许商业使用**：
+
+- ✅ 个人学习、研究、自用，以及学校、公益组织、政府机构等非营利用途，可以免费使用、修改和分发（需保留 LICENSE 及其中的 `Required Notice`）。
+- ❌ 任何商业用途（包括在公司内部用于营利业务、集成进收费产品或服务、二次打包销售等）都需要事先取得作者的书面授权。
+- 商业授权请联系作者：https://github.com/LingyiChen-AI
+
+> Licensed under the PolyForm Noncommercial License 1.0.0. Source-available; noncommercial use only. Commercial use requires a separate written license from the author — contact https://github.com/LingyiChen-AI.

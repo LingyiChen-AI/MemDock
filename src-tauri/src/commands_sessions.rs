@@ -1,6 +1,6 @@
 //! Session list / preview / conversion commands (Claude Code <-> Codex).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -165,6 +165,7 @@ fn load_store(data_dir: &Path) -> ConvertStore {
 
 /// Lists sessions of both tools, newest first. Parsed summaries are cached by
 /// (path, size, mtime). Codex subagents and sessions without a user message are skipped.
+/// A Codex thread spanning multiple rollouts appears once, using its latest summary.
 pub fn list_sessions_impl(
     paths: &AgentPaths,
     data_dir: &Path,
@@ -215,7 +216,13 @@ pub fn list_sessions_impl(
         })
         .collect();
     *lock(cache) = fresh;
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+    out.sort_by(|a, b| {
+        b.updated_at.cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| b.path.cmp(&a.path))
+    });
+    let mut codex_ids = HashSet::new();
+    out.retain(|session| session.tool != Tool::Codex || codex_ids.insert(session.id.clone()));
     out
 }
 

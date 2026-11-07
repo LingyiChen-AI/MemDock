@@ -106,7 +106,7 @@ export function FeishuPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
+      <div className="mx-auto flex min-h-full w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="flex items-center gap-2 text-lg font-semibold"><Link2 className="size-5 text-muted-foreground" aria-hidden="true" />{l.title}</h1>
@@ -120,7 +120,7 @@ export function FeishuPage() {
 
         {error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>}
         {notice && <p role="status" className="rounded-md bg-primary/10 px-3 py-2 text-sm text-primary">{notice}</p>}
-        <section aria-labelledby="feishu-connections" className="space-y-3">
+        <section aria-labelledby="feishu-connections" className="flex flex-1 flex-col gap-3">
           <div className="flex items-center gap-2">
             <h2 id="feishu-connections" className="text-sm font-semibold">{l.connections}</h2>
             {loaded && <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground tabular-nums">{bots.length}</span>}
@@ -131,10 +131,12 @@ export function FeishuPage() {
             </p>
           )}
           {loaded && !bots.length && (
-            <div className="flex w-[22rem] max-w-full flex-col items-center gap-2 rounded-lg border border-dashed border-border px-4 py-8 text-center">
-              <span className="grid size-9 place-items-center rounded-md bg-muted text-muted-foreground"><Bot className="size-4" aria-hidden="true" /></span>
-              <p className="text-sm font-semibold">{l.emptyTitle}</p>
-              <p className="text-sm text-muted-foreground">{l.empty}</p>
+            <div className="grid flex-1 place-items-center">
+              <div className="flex w-[22rem] max-w-full flex-col items-center gap-2 rounded-lg border border-dashed border-border px-4 py-8 text-center">
+                <span className="grid size-9 place-items-center rounded-md bg-muted text-muted-foreground"><Bot className="size-4" aria-hidden="true" /></span>
+                <p className="text-sm font-semibold">{l.emptyTitle}</p>
+                <p className="text-sm text-muted-foreground">{l.empty}</p>
+              </div>
             </div>
           )}
           {bots.length > 0 && (

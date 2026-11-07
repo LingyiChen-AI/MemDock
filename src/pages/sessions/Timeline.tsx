@@ -1,4 +1,5 @@
 import * as React from "react";
+import { toolCodeLocation, WorkspaceCodeContext } from "@/pages/chat/workspaceCodeLinks";
 import { useAccountName } from "@/pages/chat/accountNames";
 import {
   Bot,
@@ -306,6 +307,8 @@ function StatusMark({ it, s }: { it: ToolItem; s: S }) {
 
 /** Consecutive calls as chips that wrap inside the card; long runs fold behind "+N". */
 function ChipRun({ items, onOpen, s }: { items: ToolItem[]; onOpen: (it: ToolItem) => void; s: S }) {
+  const openCode = React.useContext(WorkspaceCodeContext);
+  const { t: { workspaceCode } } = useI18n();
   const [all, setAll] = React.useState(false);
   const shown = all || items.length <= CHIP_FOLD ? items : items.slice(0, CHIP_FOLD);
   const rest = items.length - shown.length;
@@ -313,12 +316,15 @@ function ChipRun({ items, onOpen, s }: { items: ToolItem[]; onOpen: (it: ToolIte
     <div className="flex max-w-full min-w-0 flex-wrap gap-1.5">
       {shown.map((it, i) => {
         const Icon = KIND_ICON[it.kind];
+        const location = openCode && toolCodeLocation(it);
         return (
           <button
             key={i}
             type="button"
-            onClick={() => onOpen(it)}
-            title={`${it.name}  ${it.summary}`}
+            onClick={(event) => {
+              if (event.altKey || !location || !openCode?.(location)) onOpen(it);
+            }}
+            title={`${it.name}  ${it.summary}${location ? "\n" + workspaceCode.toolDetails : ""}`}
             className={cn(
               "inline-flex h-6 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full border bg-background px-2.5 text-xs outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring",
               it.is_error ? "border-destructive/40" : "border-border",

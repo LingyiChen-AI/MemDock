@@ -42,6 +42,8 @@ sha1 = "0.10"
 ureq = { version = "3", features = ["json", "socks-proxy"] }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
 portable-pty = "0.9.0"
+trash = "5.3.0"
+tempfile = "3.27.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -51,9 +53,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
-
-[dev-dependencies]
-tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

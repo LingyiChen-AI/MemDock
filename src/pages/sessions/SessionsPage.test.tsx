@@ -16,6 +16,13 @@ vi.mock("@/api/sessions", () => ({
   renameSession: vi.fn(),
 }));
 
+vi.mock("@/api/workspaceCode", () => ({
+  codeEntries: vi.fn().mockResolvedValue([]),
+  codeStatus: vi.fn().mockResolvedValue({}),
+  readCode: vi.fn().mockResolvedValue({ kind: "text", text: "fn main() {}", revision: "r1", baseline: null }),
+}));
+
+import { readCode } from "@/api/workspaceCode";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { renderApp } from "@/test/fixtures";
 import { SessionsPage, historyBefore } from "./SessionsPage";
@@ -132,6 +139,32 @@ describe("SessionsPage", () => {
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
     expect(screen.queryByText("Fixed.")).not.toBeInTheDocument();
   });
+
+  it("opens a history file in the session's right-hand code panel", async () => {
+    vi.mocked(sessionPreview).mockResolvedValue({
+      ...preview,
+      timeline: preview.timeline.map((item) => item.type === "tool" && item.name === "Read"
+        ? { ...item, input: '{"file_path":"/work/demo/src/main.rs"}', is_error: false }
+        : item),
+    });
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Read.*src\/main.rs/ }));
+    const codeButton = screen.getByRole("button", { name: "代码", expanded: true });
+    const panel = await screen.findByRole("complementary", { name: "代码" }, { timeout: 5000 });
+    expect(await within(panel).findByRole("button", { name: "main.rs", pressed: true })).toBeInTheDocument();
+    expect(readCode).toHaveBeenCalledWith("/work/demo", "src/main.rs", null);
+    expect(codeButton.previousElementSibling).toHaveAttribute("role", "radiogroup");
+    expect(codeButton.previousElementSibling).toHaveClass("h-8");
+    expect(codeButton).toHaveClass("h-8", "rounded-none");
+    expect(within(codeButton).getByText("📂")).toHaveClass("text-lg");
+    expect(panel.parentElement).not.toContainElement(codeButton);
+    expect(panel.parentElement?.previousElementSibling).toContainElement(codeButton);
+    await userEvent.click(screen.getByRole("button", { name: "代码", expanded: true }));
+    expect(panel).not.toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "代码", expanded: false }));
+    expect(within(panel).getByRole("button", { name: "main.rs", pressed: true })).toBeInTheDocument();
+  }, 10000);
 
   it("folds long runs of tool chips behind +N", async () => {
     const many = Array.from({ length: 11 }, (_, i) => ({

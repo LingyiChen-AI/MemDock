@@ -1,5 +1,6 @@
 import * as React from "react";
-import ReactMarkdown from "react-markdown";
+import { messageCodeLocation, WorkspaceCodeContext } from "@/pages/chat/workspaceCodeLinks";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
@@ -55,12 +56,14 @@ export function cleanReplyText(text: string): string {
 }
 
 export function ChatMarkdown({ text: raw }: { text: string }) {
+  const openCode = React.useContext(WorkspaceCodeContext);
   const text = cleanReplyText(raw);
   if (!text.trim()) return null;
   return (
     <div className="min-w-0 text-sm leading-relaxed [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={(url, key) => openCode && key === "href" && /^[a-z]:[\\/]/i.test(url) ? url : defaultUrlTransform(url)}
         components={{
           h1: ({ children }) => <h3 className="mt-3 mb-1.5 text-[15px] font-semibold">{children}</h3>,
           h2: ({ children }) => <h3 className="mt-3 mb-1.5 text-[15px] font-semibold">{children}</h3>,
@@ -73,7 +76,16 @@ export function ChatMarkdown({ text: raw }: { text: string }) {
           strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
           blockquote: ({ children }) => <blockquote className="my-2 border-l-[3px] border-border pl-3 text-muted-foreground">{children}</blockquote>,
           hr: () => <hr className="my-3 border-border" />,
-          a: ({ children, href }) => <ExternalLink href={href}>{children}</ExternalLink>,
+          a: ({ children, href }) => {
+            let path = href;
+            if (href && !externalHref(href)) {
+              try { path = decodeURI(href); } catch { /* Keep a literal percent in a file name. */ }
+            }
+            const location = openCode && path && !externalHref(href) && messageCodeLocation(path);
+            return location
+              ? <button type="button" className="text-primary underline" onClick={() => openCode?.(location)}>{children}</button>
+              : <ExternalLink href={href}>{children}</ExternalLink>;
+          },
           img: ({ alt, src }) => (
             <span className="inline-flex max-w-full items-center gap-1 align-middle text-xs text-muted-foreground">
               <ImageOff size={13} aria-hidden />
@@ -85,9 +97,13 @@ export function ChatMarkdown({ text: raw }: { text: string }) {
               {children}
             </pre>
           ),
-          code: ({ className, children }) => (
-            <code className={cn("rounded border border-border/60 bg-muted px-1 py-px font-mono text-[12px] break-all", className)}>{children}</code>
-          ),
+          code: ({ className, children }) => {
+            const location = openCode && !className && typeof children === "string" && messageCodeLocation(children);
+            const style = cn("rounded border border-border/60 bg-muted px-1 py-px font-mono text-[12px] break-all", className);
+            return location
+              ? <button type="button" className={cn(style, "text-primary underline")} onClick={() => openCode?.(location)}>{children}</button>
+              : <code className={style}>{children}</code>;
+          },
           table: ({ children }) => (
             <div className="my-2 max-w-full overflow-x-auto">
               <table className="border-collapse text-[13px]">{children}</table>

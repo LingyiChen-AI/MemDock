@@ -1,4 +1,5 @@
 import * as React from "react";
+import { WorkspaceCodeContext, useWorkspaceCode } from "@/pages/chat/workspaceCodeLinks";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
 import { ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
@@ -734,6 +735,10 @@ export function linkPaneIds(ids: (string | null | undefined)[]): string {
   return key;
 }
 
+const WorkspaceCodePanel = React.lazy(() =>
+  import("@/pages/chat/WorkspaceCodePanel").then(({ WorkspaceCodePanel }) => ({ default: WorkspaceCodePanel })),
+);
+
 function ChatPane({
   target,
   preview,
@@ -789,6 +794,8 @@ function ChatPane({
   const w = c.worktree;
   const wtState = useWorktreeState();
   const wt = worktreeOf(wtState, target.cwd);
+  const code = useWorkspaceCode(target.cwd);
+  const { t: { workspaceCode: codeLabels } } = useI18n();
   const wtDeleted = !!wt?.deleted;
   const [creatingWt, setCreatingWt] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -977,8 +984,8 @@ function ChatPane({
   ) : null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-col gap-3 border-b border-border p-4">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-col gap-3 border-b border-border p-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-2">
             <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
@@ -1012,8 +1019,7 @@ function ChatPane({
               ) : null}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching || !target.cwd || wtDeleted || creatingWt} c={c} />
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             {mode === "gui" && running && live ? (
               <HeaderButton
                 label={c.stop}
@@ -1033,191 +1039,214 @@ function ChatPane({
                 {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[targetTool] })}
               </Button>
             ) : null}
+            <div className="inline-flex shrink-0 items-center gap-2">
+              <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching || !target.cwd || wtDeleted || creatingWt} c={c} />
+              <button
+                type="button"
+                aria-expanded={code.shown}
+                disabled={!target.cwd || wtDeleted}
+                onClick={code.toggle}
+                className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-none border border-border bg-card px-2.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 aria-expanded:bg-muted aria-expanded:text-foreground"
+              >
+                <span aria-hidden="true" className="text-lg leading-none">📂</span>{codeLabels.title}
+              </button>
+            </div>
           </div>
         </div>
         {result ? <ResultCard result={result} s={s} /> : session && mode === "gui" ? <ResumeCommands session={session} s={s} /> : null}
       </div>
-      {wt?.info ? (
-        <WorktreePanel
-          info={wt.info}
-          title={target.title}
-          running={running}
-          c={c}
-          onNotice={setNotice}
-          onError={setActionError}
-          beforeRemove={stopForRemove}
-          onOpenShell={onOpenShell}
-          onAskAi={askAi}
-        />
-      ) : null}
-      {creatingWt ? (
-        <p role="status" className="flex items-center gap-2 border-b border-violet-500/25 bg-violet-500/6 px-4 py-2 text-sm text-violet-700 dark:text-violet-300">
-          <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-          {w.creating}
-        </p>
-      ) : null}
-      {notice ? (
-        <p role="status" className="flex items-center gap-2 border-b border-border px-4 py-2 text-sm text-emerald-700 dark:text-emerald-400">
-          <Check className="size-4 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1">{notice}</span>
-          <Button type="button" size="icon-xs" variant="ghost" className="cursor-pointer" aria-label={w.dismiss} onClick={() => setNotice(null)}>
-            <X aria-hidden="true" />
-          </Button>
-        </p>
-      ) : null}
-      {actionError ? (
-        <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
-          {actionError}
-        </p>
-      ) : null}
-      <ConfirmDialog
-        open={confirmStop !== null}
-        title={c.switchConfirmTitle}
-        body={c.switchConfirmBody}
-        confirmLabel={c.switchConfirm}
-        cancelLabel={s.cancel}
-        destructive
-        onConfirm={() => answerConfirm(true)}
-        onCancel={() => answerConfirm(false)}
-      />
-      <ConfirmDialog
-        open={busyPty !== null}
-        title={c.busyPtyTitle}
-        body={c.busyPtyBody}
-        confirmLabel={c.busyPtyClose}
-        cancelLabel={s.cancel}
-        extraLabel={c.busyPtyShow}
-        destructive
-        onConfirm={() => {
-          busyPty?.("close");
-          setBusyPty(null);
-        }}
-        onExtra={() => {
-          busyPty?.("show");
-          setBusyPty(null);
-        }}
-        onCancel={() => {
-          busyPty?.("cancel");
-          setBusyPty(null);
-        }}
-      />
-      {mode === "terminal" && wtPending ? (
-        <div className="grid flex-1 place-items-center p-6 text-sm text-muted-foreground">{w.creating}</div>
-      ) : mode === "terminal" ? (
-        <TerminalView termKey={termKey} opts={termOpts} c={c} onClose={() => void switchMode("gui")} />
-      ) : (
-        <>
-          {openingLoad ? (
-            <ChatSkeleton label={s.previewLoading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
-          ) : session || (live && lc?.loaded) ? (
-            // History and the live chat share one scroll area: the first live event only appends
-            // below the history (no remount, no flash, scroll kept).
-            <>
-              {session && preview ? (
-                <TimelineFilterBar preview={preview} value={historyFilter} onChange={setHistoryFilter} />
-              ) : session ? (
-                // Holds the filter bar's place while the history loads, so the messages don't shift down.
-                <div className="flex shrink-0 border-b border-border bg-background px-4 py-2.5" aria-hidden="true">
-                  <span className="h-7" />
-                </div>
-              ) : null}
-              <Conversation
-                scrollKey={termKey}
-                conv={live && lc?.loaded ? lc.conv : EMPTY_CONV}
-                agent={target.tool}
-                running={running}
-                starting={live?.state === "starting"}
-                onRespond={respond}
-                prefix={
-                  history ? (
-                    <>
-                      {history}
-                      {live ? (
-                        <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
-                          <span className="h-px flex-1 bg-border" />
-                          {c.continuedHere}
-                          <span className="h-px flex-1 bg-border" />
-                        </div>
-                      ) : null}
-                    </>
-                  ) : undefined
-                }
-              />
-            </>
-          ) : target.draft ? (
-            <div className="grid flex-1 place-items-center p-6 text-center text-sm text-muted-foreground">
-              <div className="flex max-w-sm flex-col items-center gap-2">
-                <MessagesSquare className="size-8 text-muted-foreground/60" aria-hidden="true" />
-                <p className="font-medium text-foreground">{c.emptyConv}</p>
-                <p className="text-xs">{c.draftHint}</p>
-              </div>
-            </div>
-          ) : (
-            <ChatSkeleton label={c.loading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
-          )}
-          {usedElsewhere ? (
-            <p role="status" className="mx-4 mb-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
-              <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 flex-1">{c.usedElsewhere}</span>
-              {live && !running ? (
-                <button
-                  type="button"
-                  className="shrink-0 cursor-pointer font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
-                  onClick={() => {
-                    // Let MemDock's process go: the next message resumes from the newest record,
-                    // i.e. what the terminal last did.
-                    void closeLive(live.live_id).finally(() => {
-                      setUsedElsewhere(false);
-                      onRefresh();
-                    });
-                  }}
-                >
-                  {c.catchUpTerminal}
-                </button>
-              ) : null}
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {wt?.info ? (
+            <WorktreePanel
+              info={wt.info}
+              title={target.title}
+              running={running}
+              c={c}
+              onNotice={setNotice}
+              onError={setActionError}
+              beforeRemove={stopForRemove}
+              onOpenShell={onOpenShell}
+              onAskAi={askAi}
+            />
+          ) : null}
+          {creatingWt ? (
+            <p role="status" className="flex items-center gap-2 border-b border-violet-500/25 bg-violet-500/6 px-4 py-2 text-sm text-violet-700 dark:text-violet-300">
+              <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              {w.creating}
             </p>
           ) : null}
-          <ChatComposer
-            key={termKey}
-            stateKey={termKey}
-            c={c}
-            meters={
-              <ContextMeters
-                tool={target.tool}
-                path={session?.path ?? null}
-                nativeId={target.nativeId ?? live?.native_id ?? null}
-                onContext={(ctx) =>
-                  // The last request came from Claude Code in a terminal after MemDock attached:
-                  // the same session is running in two places.
-                  setUsedElsewhere(!!live && live.state !== "exited" && ctx?.source === "cli" && (ctx.at ?? 0) > live.created_at)
-                }
-                refreshKey={`${session?.updated_at ?? ""}:${lc?.conv.lastUsage ? JSON.stringify(lc.conv.lastUsage) : ""}:${live?.state ?? ""}`}
-                t={c.meters}
-              />
-            }
-            agent={target.tool}
-            cwd={target.cwd}
-            disabled={wtDeleted || creatingWt}
-            placeholder={wtDeleted ? w.deletedHint : running ? c.inputQueued : undefined}
-            hint={wtDeleted ? w.deletedHint : creatingWt ? w.creating : undefined}
-            draft={
-              target.draft && onDraftChange
-                ? { onAgentChange: (agent) => onDraftChange({ agent }), onCwdChange: (cwd) => onDraftChange({ cwd }) }
-                : null
-            }
-            projects={projects}
-            running={running}
-            onStop={() => {
-              if (!live) return;
-              setActionError(null);
-              liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
-            }}
-            attached={attached && live ? { permission: live.permission, model: live.model } : null}
-            onError={setActionError}
-            onSend={send}
+          {notice ? (
+            <p role="status" className="flex items-center gap-2 border-b border-border px-4 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+              <Check className="size-4 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1">{notice}</span>
+              <Button type="button" size="icon-xs" variant="ghost" className="cursor-pointer" aria-label={w.dismiss} onClick={() => setNotice(null)}>
+                <X aria-hidden="true" />
+              </Button>
+            </p>
+          ) : null}
+          {actionError ? (
+            <p role="alert" className="border-b border-border px-4 py-2 text-sm text-destructive">
+              {actionError}
+            </p>
+          ) : null}
+          <ConfirmDialog
+            open={confirmStop !== null}
+            title={c.switchConfirmTitle}
+            body={c.switchConfirmBody}
+            confirmLabel={c.switchConfirm}
+            cancelLabel={s.cancel}
+            destructive
+            onConfirm={() => answerConfirm(true)}
+            onCancel={() => answerConfirm(false)}
           />
-        </>
-      )}
+          <ConfirmDialog
+            open={busyPty !== null}
+            title={c.busyPtyTitle}
+            body={c.busyPtyBody}
+            confirmLabel={c.busyPtyClose}
+            cancelLabel={s.cancel}
+            extraLabel={c.busyPtyShow}
+            destructive
+            onConfirm={() => {
+              busyPty?.("close");
+              setBusyPty(null);
+            }}
+            onExtra={() => {
+              busyPty?.("show");
+              setBusyPty(null);
+            }}
+            onCancel={() => {
+              busyPty?.("cancel");
+              setBusyPty(null);
+            }}
+          />
+          <WorkspaceCodeContext.Provider value={target.cwd && !wtDeleted ? code.open : null}>
+            {mode === "terminal" && wtPending ? (
+              <div className="grid flex-1 place-items-center p-6 text-sm text-muted-foreground">{w.creating}</div>
+            ) : mode === "terminal" ? (
+              <TerminalView termKey={termKey} opts={termOpts} c={c} onClose={() => void switchMode("gui")} />
+            ) : (
+              <>
+                {openingLoad ? (
+                  <ChatSkeleton label={s.previewLoading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
+                ) : session || (live && lc?.loaded) ? (
+                  // History and the live chat share one scroll area: the first live event only appends
+                  // below the history (no remount, no flash, scroll kept).
+                  <>
+                    {session && preview ? (
+                      <TimelineFilterBar preview={preview} value={historyFilter} onChange={setHistoryFilter} />
+                    ) : session ? (
+                      // Holds the filter bar's place while the history loads, so the messages don't shift down.
+                      <div className="flex shrink-0 border-b border-border bg-background px-4 py-2.5" aria-hidden="true">
+                        <span className="h-7" />
+                      </div>
+                    ) : null}
+                    <Conversation
+                      scrollKey={termKey}
+                      conv={live && lc?.loaded ? lc.conv : EMPTY_CONV}
+                      agent={target.tool}
+                      running={running}
+                      starting={live?.state === "starting"}
+                      onRespond={respond}
+                      prefix={
+                        history ? (
+                          <>
+                            {history}
+                            {live ? (
+                              <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+                                <span className="h-px flex-1 bg-border" />
+                                {c.continuedHere}
+                                <span className="h-px flex-1 bg-border" />
+                              </div>
+                            ) : null}
+                          </>
+                        ) : undefined
+                      }
+                    />
+                  </>
+                ) : target.draft ? (
+                  <div className="grid flex-1 place-items-center p-6 text-center text-sm text-muted-foreground">
+                    <div className="flex max-w-sm flex-col items-center gap-2">
+                      <MessagesSquare className="size-8 text-muted-foreground/60" aria-hidden="true" />
+                      <p className="font-medium text-foreground">{c.emptyConv}</p>
+                      <p className="text-xs">{c.draftHint}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <ChatSkeleton label={c.loading} className="min-h-0 flex-1 overflow-hidden px-4 py-4" />
+                )}
+                {usedElsewhere ? (
+                  <p role="status" className="mx-4 mb-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+                    <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 flex-1">{c.usedElsewhere}</span>
+                    {live && !running ? (
+                      <button
+                        type="button"
+                        className="shrink-0 cursor-pointer font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
+                        onClick={() => {
+                          // Let MemDock's process go: the next message resumes from the newest record,
+                          // i.e. what the terminal last did.
+                          void closeLive(live.live_id).finally(() => {
+                            setUsedElsewhere(false);
+                            onRefresh();
+                          });
+                        }}
+                      >
+                        {c.catchUpTerminal}
+                      </button>
+                    ) : null}
+                  </p>
+                ) : null}
+                <ChatComposer
+                  key={termKey}
+                  stateKey={termKey}
+                  c={c}
+                  meters={
+                    <ContextMeters
+                      tool={target.tool}
+                      path={session?.path ?? null}
+                      nativeId={target.nativeId ?? live?.native_id ?? null}
+                      onContext={(ctx) =>
+                        // The last request came from Claude Code in a terminal after MemDock attached:
+                        // the same session is running in two places.
+                        setUsedElsewhere(!!live && live.state !== "exited" && ctx?.source === "cli" && (ctx.at ?? 0) > live.created_at)
+                      }
+                      refreshKey={`${session?.updated_at ?? ""}:${lc?.conv.lastUsage ? JSON.stringify(lc.conv.lastUsage) : ""}:${live?.state ?? ""}`}
+                      t={c.meters}
+                    />
+                  }
+                  agent={target.tool}
+                  cwd={target.cwd}
+                  disabled={wtDeleted || creatingWt}
+                  placeholder={wtDeleted ? w.deletedHint : running ? c.inputQueued : undefined}
+                  hint={wtDeleted ? w.deletedHint : creatingWt ? w.creating : undefined}
+                  draft={
+                    target.draft && onDraftChange
+                      ? { onAgentChange: (agent) => onDraftChange({ agent }), onCwdChange: (cwd) => onDraftChange({ cwd }) }
+                      : null
+                  }
+                  projects={projects}
+                  running={running}
+                  onStop={() => {
+                    if (!live) return;
+                    setActionError(null);
+                    liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
+                  }}
+                  attached={attached && live ? { permission: live.permission, model: live.model } : null}
+                  onError={setActionError}
+                  onSend={send}
+                />
+              </>
+            )}
+          </WorkspaceCodeContext.Provider>
+        </div>
+        {target.cwd && !wtDeleted && code.mounted ? (
+          <React.Suspense fallback={null}>
+            <WorkspaceCodePanel key={target.cwd} cwd={target.cwd} base={wt?.info ?? null} shown={code.shown} request={code.request} />
+          </React.Suspense>
+        ) : null}
+      </div>
     </div>
   );
 }

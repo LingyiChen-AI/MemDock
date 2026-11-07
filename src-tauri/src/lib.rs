@@ -2,6 +2,7 @@ pub mod commands;
 pub mod commands_env;
 pub mod commands_extract;
 pub mod commands_sessions;
+mod workspace_code;
 pub mod commands_ghimport;
 pub mod commands_skill_manifest;
 pub mod commands_skills;
@@ -214,6 +215,14 @@ pub fn run() {
             commands_env::env_detect,
             commands_env::env_install,
             commands_env::open_data_dir,
+            workspace_code::code_trash_file,
+            workspace_code::code_create_file,
+            workspace_code::code_entries,
+            workspace_code::code_read,
+            workspace_code::code_save,
+            workspace_code::code_search,
+            workspace_code::code_status,
+            workspace_code::code_open_vscode,
             commands_sessions::list_sessions,
             commands_sessions::session_preview,
             commands_sessions::rename_session,

@@ -459,7 +459,7 @@ fn files_dir(entry: &SkillEntry) -> PathBuf {
 }
 
 /// CON, PRN, AUX, NUL, COM1-9, LPT1-9 (case-insensitive, with or without extension).
-fn is_windows_reserved(name: &str) -> bool {
+pub(crate) fn is_windows_reserved(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
     ["con", "prn", "aux", "nul"].contains(&stem.as_str())
         || ["com", "lpt"].iter().any(|p| {

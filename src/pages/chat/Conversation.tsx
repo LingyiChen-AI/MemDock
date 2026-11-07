@@ -1,4 +1,5 @@
 import * as React from "react";
+import { toolCodeLocation, WorkspaceCodeContext } from "./workspaceCodeLinks";
 import { useAccountName } from "./accountNames";
 import { Archive, Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
 import { readImageDataUri, storedImagePath, type Decision, type LiveAgent } from "@/api/live";
@@ -348,6 +349,8 @@ function CallMark({ call, c }: { call: LiveToolCall; c: C }) {
 
 /** Same capsules as the history timeline: wrap inside the bubble, long runs fold behind "+N". */
 function ChipRun({ calls, onOpen, c }: { calls: LiveToolCall[]; onOpen: (call: LiveToolCall) => void; c: C }) {
+  const openCode = React.useContext(WorkspaceCodeContext);
+  const { t: { workspaceCode } } = useI18n();
   const [all, setAll] = React.useState(false);
   const shown = all || calls.length <= CHIP_FOLD ? calls : calls.slice(0, CHIP_FOLD);
   const rest = calls.length - shown.length;
@@ -355,12 +358,15 @@ function ChipRun({ calls, onOpen, c }: { calls: LiveToolCall[]; onOpen: (call: L
     <div className="flex max-w-full min-w-0 flex-wrap gap-1.5">
       {shown.map((call) => {
         const Icon = KIND_ICON[call.kind] ?? Wrench;
+        const location = openCode && toolCodeLocation(call);
         return (
           <button
             key={call.id}
             type="button"
-            onClick={() => onOpen(call)}
-            title={`${call.name}  ${call.summary}`}
+            onClick={(event) => {
+              if (event.altKey || !location || !openCode?.(location)) onOpen(call);
+            }}
+            title={`${call.name}  ${call.summary}${location ? "\n" + workspaceCode.toolDetails : ""}`}
             className={cn(
               "inline-flex h-6 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full border bg-background px-2.5 text-xs outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring",
               call.is_error ? "border-destructive/40" : "border-border",

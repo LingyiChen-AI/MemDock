@@ -322,7 +322,7 @@ pub fn list(data_dir: &Path) -> Result<Vec<WorktreeInfo>, String> {
 
 /// The commit changes are measured against: merge-base of HEAD and the
 /// current base-branch tip (equals `base_commit` until the base moves).
-fn diff_base(info: &WorktreeInfo, wt: &Path) -> Result<String, String> {
+pub(crate) fn diff_base(info: &WorktreeInfo, wt: &Path) -> Result<String, String> {
     let tip = format!("refs/heads/{}", info.base_branch);
     match git(wt, &["merge-base", &tip, "HEAD"]) {
         Ok(mb) if !mb.is_empty() => Ok(mb),

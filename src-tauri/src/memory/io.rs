@@ -98,6 +98,14 @@ fn encode(text: &str, has_bom: bool, crlf: bool) -> Vec<u8> {
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic_if(path, bytes, || Ok(()))
+}
+
+pub(crate) fn write_atomic_if(
+    path: &Path,
+    bytes: &[u8],
+    before_replace: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
@@ -117,6 +125,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         if let Ok(meta) = fs::metadata(path) {
             let _ = fs::set_permissions(&tmp, meta.permissions());
         }
+        before_replace()?;
         fs::rename(&tmp, path)
     })();
     if result.is_err() {

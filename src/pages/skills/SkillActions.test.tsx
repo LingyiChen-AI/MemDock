@@ -74,6 +74,10 @@ describe("skill actions", () => {
     await open();
     await userEvent.click(screen.getByRole("button", { name: /检查更新/ }));
     await screen.findByText("有更新");
+    const batch = await screen.findByRole("dialog", { name: "批量更新 Skill" });
+    expect(within(batch).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(batch).getByText(/其余更新请到对应 Skill 的详情页查看/)).toBeInTheDocument();
+    await userEvent.click(within(batch).getByRole("button", { name: "关闭" }));
     await userEvent.click(screen.getByRole("button", { name: "更新" }));
     expect(
       await screen.findByText("无法判断本地是否修改过，更新会覆盖当前内容（已自动备份），继续？"),

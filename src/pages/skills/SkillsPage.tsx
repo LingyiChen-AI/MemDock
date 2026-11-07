@@ -4,12 +4,14 @@ import { Package, TriangleAlert } from "lucide-react";
 import { listMemories } from "@/api/memory";
 import {
   checkSkillUpdates,
+  checkSkillPluginUpdates,
   deleteSkill,
   gitAvailable,
   listDeletedSkillBackups,
   listSkills,
   onSkillsChanged,
   updateSkill,
+  updateSkillPlugin,
 } from "@/api/skills";
 import type { DeletedSkill, MemoryIndex, SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -23,6 +25,7 @@ import { BackupsDrawer } from "./BackupsDrawer";
 import { DeletedSkillDetail } from "./DeletedSkillDetail";
 import { PARTIAL_SAVE_PREFIX, describeError } from "./flowParts";
 import { SkillDetail } from "./SkillDetail";
+import { SkillUpdatesDialog, type SkillUpdateItem } from "./SkillUpdatesDialog";
 import { SkillList } from "./SkillList";
 import { SyncDialog } from "./SyncDialog";
 import { ToastRegion, useToasts } from "./Toasts";
@@ -61,6 +64,7 @@ export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
   const [gitOk, setGitOk] = React.useState(true);
   const [updates, setUpdates] = React.useState<Map<string, UpdateStatus>>(new Map());
   const [checking, setChecking] = React.useState(false);
+  const [batchItems, setBatchItems] = React.useState<SkillUpdateItem[] | null>(null);
   const [checkedUpdates, setCheckedUpdates] = React.useState<number | null>(null);
   const [checkError, setCheckError] = React.useState<string | null>(null);
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
@@ -79,6 +83,8 @@ export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
   const [updateConfirm, setUpdateConfirm] = React.useState<{ entry: SkillEntry; unknown: boolean } | null>(null);
   const [updatingId, setUpdatingId] = React.useState<string | null>(null);
   const updatingRef = React.useRef(false);
+  const [updatingPlugin, setUpdatingPlugin] = React.useState<SkillEntry | null>(null);
+  const pluginUpdatingRef = React.useRef(false);
   const deletingRef = React.useRef(false);
   const { toasts, push, dismiss } = useToasts();
   const [width, setWidth] = React.useState(loadWidth);
@@ -123,6 +129,39 @@ export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
       unlisten?.();
     };
   }, [load]);
+
+  const updatePlugin = async (entry: SkillEntry) => {
+    if (pluginUpdatingRef.current) return;
+    pluginUpdatingRef.current = true;
+    setUpdatingPlugin(entry);
+    try {
+      await updateSkillPlugin(entry);
+      const refreshed = await load();
+      if (refreshed) {
+        const previous = entries?.find((skill) => entryKey(skill) === selectedKey);
+        if (
+          previous?.plugin &&
+          previous.plugin === entry.plugin &&
+          previous.plugin_install_path === entry.plugin_install_path &&
+          previous.tool === entry.tool
+        ) {
+          const replacement = refreshed.find((skill) => (
+            skill.plugin === previous.plugin &&
+            skill.tool === previous.tool &&
+            skill.name === previous.name &&
+            JSON.stringify(skill.scope) === JSON.stringify(previous.scope)
+          ));
+          if (replacement) setSelectedKey((current) => current === selectedKey ? entryKey(replacement) : current);
+        }
+      }
+      push("success", s.pluginUpdateDone);
+    } catch (e) {
+      push("error", fmt(s.pluginUpdateFailed, { message: errorMessage(e) }));
+    } finally {
+      pluginUpdatingRef.current = false;
+      setUpdatingPlugin(null);
+    }
+  };
 
   const projectName = React.useCallback(
     (id: string) => index?.projects.find((p) => p.project.id === id)?.project.name ?? basename(id),
@@ -180,9 +219,30 @@ export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
     setChecking(true);
     setCheckError(null);
     try {
-      const result = await checkSkillUpdates();
+      const hasPlugins = entries?.some((entry) => entry.plugin);
+      const [result, plugins] = await Promise.all([
+        gitOk ? checkSkillUpdates() : Promise.resolve([]),
+        hasPlugins ? checkSkillPluginUpdates() : Promise.resolve([]),
+      ]);
       setUpdates(new Map(result.map((u) => [u.skill_id, u])));
-      setCheckedUpdates(result.filter((u) => u.has_update).length);
+      const items: SkillUpdateItem[] = [];
+      for (const update of result) {
+        const entry = entries?.find((e) => e.id === update.skill_id);
+        if (!entry || !update.has_update) continue;
+        const manual = update.local_modified || update.local_state_unknown || update.not_updatable_subdir;
+        if (!manual) items.push({ entry, latest: shortCommit(update.latest), status: "available" });
+      }
+      for (const update of plugins) {
+        const entry = entries?.find((e) => (
+          e.plugin && e.id === update.skill_id && e.tool === update.tool &&
+          JSON.stringify(e.scope) === JSON.stringify(update.scope)
+        ));
+        if (entry && update.has_update !== false) {
+          items.push({ entry, latest: update.latest, status: update.has_update ? "available" : "unverified" });
+        }
+      }
+      setCheckedUpdates(items.filter((item) => item.status !== "unverified").length);
+      setBatchItems(items);
     } catch (e) {
       setCheckError(fmt(s.checkFailed, { message: errorMessage(e) }));
     } finally {
@@ -348,6 +408,8 @@ export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
           onCheck={() => void check()}
           onAdd={() => setAddOpen(true)}
           onManifest={() => setManifestOpen(true)}
+          onUpdatePlugin={(entry) => void updatePlugin(entry)}
+          updatingPlugin={updatingPlugin}
           deleted={deleted}
           selectedDeleted={deletedItem?.bucket}
           onSelectDeleted={selectDeleted}
@@ -429,6 +491,26 @@ export function SkillsPage({ onDirtyChange, onNavigate }: SkillsPageProps) {
       />
       {addDialog}
       {manifestDialog}
+      {batchItems && (
+        <SkillUpdatesDialog
+          items={batchItems}
+          onClose={() => setBatchItems(null)}
+          onUpdate={async ({ entry }) => {
+            if (entry.plugin) {
+              await updateSkillPlugin(entry);
+            } else {
+              await updateSkill(entry.id, false);
+              setUpdates((previous) => {
+                const next = new Map(previous);
+                next.delete(entry.id);
+                return next;
+              });
+            }
+            setCheckedUpdates(null);
+          }}
+          onComplete={load}
+        />
+      )}
       {syncEntry ? (
         <SyncDialog
           entry={syncEntry}

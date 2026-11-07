@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
-const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
+const CHECK_INTERVAL = 30 * 60 * 1000;
 
 type Status = "idle" | "checking" | "current" | "available" | "downloading" | "installing" | "installed" | "error";
 
@@ -21,30 +21,32 @@ export function useAppUpdate(blocked: boolean) {
     if (isTauri()) void getVersion().then(setVersion).catch(() => {});
   }, []);
 
-  const checkNow = useCallback(async (manual = true) => {
-    if (!enabled || operation.current || update) return;
+  const checkNow = async (manual = true) => {
+    if (!enabled || operation.current || status === "installed") return;
     operation.current = true;
     if (manual) setStatus("checking");
     try {
       const candidate = await check({ timeout: 15_000 });
       setUpdate(candidate);
       setStatus(candidate ? "available" : manual ? "current" : "idle");
+      if (update && update !== candidate) void update.close().catch(() => {});
     } catch {
       if (manual) setStatus("error");
     } finally {
       operation.current = false;
     }
-  }, [enabled, update]);
+  };
+  const checkInBackground = useEffectEvent(() => void checkNow(false));
 
   useEffect(() => {
-    if (!enabled || update) return;
-    const startup = window.setTimeout(() => void checkNow(false), 5_000);
-    const interval = window.setInterval(() => void checkNow(false), CHECK_INTERVAL);
+    if (!enabled) return;
+    const startup = window.setTimeout(() => checkInBackground(), 5_000);
+    const interval = window.setInterval(() => checkInBackground(), CHECK_INTERVAL);
     return () => {
       window.clearTimeout(startup);
       window.clearInterval(interval);
     };
-  }, [checkNow, enabled, update]);
+  }, [enabled]);
 
   const install = async () => {
     if (!update || blocked || operation.current || status === "installed") return;
@@ -58,6 +60,7 @@ export function useAppUpdate(blocked: boolean) {
         switch (event.event) {
           case "Started":
             total = event.data.contentLength;
+            if (total) setProgress(0);
             break;
           case "Progress":
             received += event.data.chunkLength;

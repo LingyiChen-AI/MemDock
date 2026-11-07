@@ -58,6 +58,7 @@ export function UsagePage() {
   const [focusKey, setFocusKey] = React.useState<string | null>(null);
   const [enabling, setEnabling] = React.useState(false);
   const [rescanning, setRescanning] = React.useState(false);
+  const [usageVersion, setUsageVersion] = React.useState(0);
   const [now, setNow] = React.useState(() => Date.now());
   const { toasts, push, dismiss } = useToasts();
 
@@ -100,6 +101,7 @@ export function UsagePage() {
     let unlisten: (() => void) | null = null;
     let alive = true;
     void onUsageUpdated(() => {
+      setUsageVersion((v) => v + 1);
       void reloadRef.current();
       void loadQuota();
     }).then((f) => {
@@ -159,6 +161,7 @@ export function UsagePage() {
     setRescanning(true);
     try {
       await usageRescan();
+      setUsageVersion((v) => v + 1);
       await Promise.all([loadSummary(), loadQuota(true)]);
     } catch (e) {
       push("error", errorMessage(e));
@@ -297,7 +300,7 @@ export function UsagePage() {
         <UsageKpis report={report} view={view} />
 
         {report ? <UsageChart report={report} onPick={pickBar} /> : <div className="h-64 animate-pulse rounded-lg bg-muted motion-reduce:animate-none" />}
-        <UsageHeatmap view={view} range={range} tools={query.tools} models={query.models} version={report} />
+        <UsageHeatmap today={localDate(new Date(now))} tools={query.tools} models={query.models} version={usageVersion} />
         {report ? <UsageTable report={report} focusKey={focusKey} /> : null}
 
         {report ? (

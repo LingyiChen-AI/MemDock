@@ -41,9 +41,12 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// Git access for skill install / update; tests may replace it.
     pub git: Arc<dyn GitRunner>,
-    /// Serializes every mutating skill operation.
+    /// Serializes filesystem writes and registry changes for standalone skills.
     pub skills_lock: Mutex<()>,
-    /// Serializes git-cache check / clone / cleanup (shared with the ops layer).
+    /// Each plugin CLI owns a separate installation inventory.
+    pub claude_plugins_lock: Mutex<()>,
+    pub codex_plugins_lock: Mutex<()>,
+    /// Serializes Git cache lookup, publication and cleanup.
     pub cache_lock: Arc<Mutex<()>>,
     /// GitHub sync: locks, pending plans, GitHub API, token store, git.
     /// Tests replace it with fakes before wrapping the state in an `Arc`.
@@ -66,6 +69,8 @@ impl AppState {
             data_dir: data_dir.clone(),
             git: Arc::new(SystemGit::new()),
             skills_lock: Mutex::new(()),
+            claude_plugins_lock: Mutex::new(()),
+            codex_plugins_lock: Mutex::new(()),
             cache_lock: Arc::new(Mutex::new(())),
             snapshots: SnapshotStore::new(data_dir.join("snapshots")),
             index: Mutex::new(MemoryIndex {

@@ -734,6 +734,7 @@ fn manifest_merges_local_skills() {
     let w = World::new();
     let mut a = w.machine("A");
     let skill = ManifestSkill {
+        plugin: None,
         name: "s".into(),
         url: "https://github.com/x/skills".into(),
         git_ref: None,
@@ -1044,6 +1045,7 @@ fn skills_json_is_scanned() {
     let a = w.machine("A");
     let token = format!("ghp_{}", "a1B2c3D4e5".repeat(4));
     let skill = ManifestSkill {
+        plugin: None,
         name: token,
         url: "https://github.com/x/skills".into(),
         git_ref: None,

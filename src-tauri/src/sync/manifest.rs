@@ -1,6 +1,6 @@
 //! Skills install manifest (`skills.json`): syncs how skills are installed, not their files.
 //!
-//! # File format (`format: 1`)
+//! # File format (`format: 1` for standalone skills, `format: 2` with plugins)
 //!
 //! ```text
 //! {
@@ -51,6 +51,8 @@ pub enum ManifestScope {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ManifestSkill {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<ManifestPlugin>,
     pub name: String,
     pub url: String,
     #[serde(default)]
@@ -69,6 +71,14 @@ pub struct ManifestSkill {
     pub local_only: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct ManifestPlugin {
+    pub key: String,
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub local_scope: bool,
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -76,7 +86,7 @@ fn is_false(b: &bool) -> bool {
 impl ManifestSkill {
     /// Local-only entries (flag set, or no url at all) cannot be installed.
     pub fn is_local_only(&self) -> bool {
-        self.local_only || self.url.trim().is_empty()
+        self.local_only || (self.plugin.is_none() && self.url.trim().is_empty())
     }
 }
 
@@ -100,6 +110,14 @@ impl Default for Manifest {
 }
 
 impl Manifest {
+    pub fn format_for(skills: &[ManifestSkill]) -> u32 {
+        if skills.iter().any(|s| s.plugin.is_some()) {
+            2
+        } else {
+            1
+        }
+    }
+
     /// Pretty JSON (2 spaces) with a trailing newline.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         let mut s = serde_json::to_string_pretty(self)?;
@@ -112,16 +130,16 @@ impl Manifest {
     /// values are errors. Urls and skill paths are normalized.
     pub fn from_json(text: &str) -> Result<Manifest, String> {
         let mut m: Manifest = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        if m.format > 1 {
+        if m.format > 2 {
             return Err(format!(
-                "skills.json format {} is newer than supported (1)",
+                "skills.json format {} is newer than supported (2)",
                 m.format
             ));
         }
         for s in &mut m.skills {
             s.url = norm_url(&s.url);
             s.skill_path = norm_path(&s.skill_path);
-            if s.url.is_empty() {
+            if s.plugin.is_none() && s.url.is_empty() {
                 s.local_only = true;
             }
         }
@@ -149,6 +167,19 @@ fn norm_path(p: &str) -> String {
 }
 
 fn identity(s: &ManifestSkill) -> Identity {
+    if let Some(plugin) = &s.plugin {
+        return (
+            String::new(),
+            plugin.key.clone(),
+            tool_rank(s.tool),
+            s.scope.clone(),
+            if plugin.local_scope {
+                "local".into()
+            } else {
+                String::new()
+            },
+        );
+    }
     if s.is_local_only() {
         return (
             String::new(),
@@ -174,6 +205,7 @@ fn sort_skills(v: &mut [ManifestSkill]) {
 fn make(name: &str, src: Option<&SkillSource>, tool: Tool, scope: ManifestScope) -> ManifestSkill {
     let src = src.filter(|s| !s.url.trim().is_empty());
     ManifestSkill {
+        plugin: None,
         name: name.to_string(),
         url: src.map(|s| norm_url(&s.url)).unwrap_or_default(),
         git_ref: src.and_then(|s| s.git_ref.clone()),
@@ -189,7 +221,8 @@ fn make(name: &str, src: Option<&SkillSource>, tool: Tool, scope: ManifestScope)
 
 /// This machine's skills for the manifest, from a scan whose entries already
 /// carry their inferred source (`scan_with_sources` / `infer_source`).
-/// Read-only skills (plugins, Codex built-ins, synced) are skipped. Skills
+/// Plugin packages are recorded once by marketplace key. Codex built-ins and
+/// Claude synced skills are skipped. Standalone skills
 /// with a source url become installable entries; the rest are recorded as
 /// `local_only`. Project skills need their project's key in `projects`
 /// (`(project_id, key)`), otherwise they are skipped. The first entry wins
@@ -199,7 +232,7 @@ pub fn local_entries(
     projects: &[(String, Option<String>)],
 ) -> Vec<ManifestSkill> {
     let mut out: Vec<ManifestSkill> = Vec::new();
-    for e in entries.iter().filter(|e| !e.readonly) {
+    for e in entries.iter().filter(|e| !e.readonly || e.plugin.is_some()) {
         let scope = match &e.scope {
             SkillScope::Global => ManifestScope::Global,
             SkillScope::Project { project_id } => {
@@ -213,7 +246,18 @@ pub fn local_entries(
                 }
             }
         };
-        out.push(make(&e.name, e.source.as_ref(), e.tool, scope));
+        if let Some(key) = &e.plugin {
+            let mut item = make(key, None, e.tool, scope);
+            item.plugin = Some(ManifestPlugin {
+                key: key.clone(),
+                version: e.plugin_version.clone(),
+                local_scope: e.plugin_local_scope,
+            });
+            item.local_only = false;
+            out.push(item);
+        } else {
+            out.push(make(&e.name, e.source.as_ref(), e.tool, scope));
+        }
     }
     // stable sort + dedup keeps the first entry for a repeated identity
     sort_skills(&mut out);
@@ -276,6 +320,7 @@ pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> 
             item.commit = l.commit.clone().or(item.commit.take());
             item.git_ref = l.git_ref.clone().or(item.git_ref.take());
             item.local_only = l.is_local_only();
+            item.plugin.clone_from(&l.plugin);
         } else if item.installed_on.contains(machine) {
             item.installed_on.remove(machine);
             item.removed_on.insert(machine.to_string());
@@ -296,7 +341,7 @@ pub fn merge(base_remote: &Manifest, local: &[ManifestSkill], machine: &str) -> 
     sort_skills(&mut result);
     Manifest {
         description: None,
-        format: 1,
+        format: Manifest::format_for(&result),
         skills: result,
     }
 }
@@ -329,7 +374,8 @@ pub fn removed_elsewhere(
     m.skills
         .iter()
         .filter(|s| {
-            has_local(local, s)
+            s.plugin.is_none()
+                && has_local(local, s)
                 && s.removed_on.iter().any(|o| o != machine)
                 && s.installed_on.iter().all(|o| o == machine)
         })
@@ -395,7 +441,12 @@ mod tests {
         }
     }
 
-    fn scanned(name: &str, tool: Tool, scope: SkillScope, source: Option<SkillSource>) -> SkillEntry {
+    fn scanned(
+        name: &str,
+        tool: Tool,
+        scope: SkillScope,
+        source: Option<SkillSource>,
+    ) -> SkillEntry {
         SkillEntry {
             id: format!("{name}-{tool:?}-{scope:?}"),
             name: name.into(),
@@ -408,6 +459,9 @@ mod tests {
             symlink_target: None,
             readonly: false,
             plugin: None,
+            plugin_version: None,
+            plugin_install_path: None,
+            plugin_local_scope: false,
             source,
             file_count: 1,
             size_bytes: 1,
@@ -423,6 +477,7 @@ mod tests {
 
     fn sk(name: &str, on: &[&str], off: &[&str]) -> ManifestSkill {
         ManifestSkill {
+            plugin: None,
             name: name.into(),
             url: format!("https://github.com/o/{name}"),
             git_ref: None,
@@ -452,6 +507,30 @@ mod tests {
     }
 
     #[test]
+    fn plugin_package_round_trips_and_is_offered_once_on_another_machine() {
+        let mut a = scanned("brainstorm", Tool::Claude, SkillScope::Global, None);
+        a.readonly = true;
+        a.kind = SkillKind::Plugin;
+        a.plugin = Some("superpowers@claude-plugins-official".into());
+        a.plugin_version = Some("1.2.3".into());
+        let mut b = a.clone();
+        b.name = "debugging".into();
+        let local = local_entries(&[a, b], &[]);
+        assert_eq!(local.len(), 1);
+        let merged = merge(&Manifest::default(), &local, "first");
+        let remote = Manifest::from_json(&merged.to_json().unwrap()).unwrap();
+        assert_eq!(remote.format, 2);
+        let missing = missing_here(&remote, &[], "second");
+        assert_eq!(missing.len(), 1);
+        assert!(!missing[0].is_local_only());
+        assert_eq!(
+            missing[0].plugin.as_ref().unwrap().version.as_deref(),
+            Some("1.2.3")
+        );
+        assert!(missing_here(&remote, &local, "second").is_empty());
+    }
+
+    #[test]
     fn local_entries_cover_every_user_skill() {
         let mut plugin = scanned("plug", Tool::Claude, SkillScope::Global, None);
         plugin.readonly = true;
@@ -461,9 +540,24 @@ mod tests {
         let mut lock_src = src("https://github.com/o/l", "s/l");
         lock_src.origin = SourceOrigin::SkillLock;
         let entries = vec![
-            scanned("a", Tool::Claude, SkillScope::Global, Some(src("https://github.com/o/a", ""))),
-            scanned("a", Tool::Claude, proj("p1"), Some(src("https://github.com/o/a", ""))),
-            scanned("a", Tool::Claude, proj("p2"), Some(src("https://github.com/o/a", ""))),
+            scanned(
+                "a",
+                Tool::Claude,
+                SkillScope::Global,
+                Some(src("https://github.com/o/a", "")),
+            ),
+            scanned(
+                "a",
+                Tool::Claude,
+                proj("p1"),
+                Some(src("https://github.com/o/a", "")),
+            ),
+            scanned(
+                "a",
+                Tool::Claude,
+                proj("p2"),
+                Some(src("https://github.com/o/a", "")),
+            ),
             scanned("g", Tool::Claude, SkillScope::Global, Some(git_src)),
             scanned("l", Tool::Codex, SkillScope::Global, Some(lock_src)),
             scanned("mine", Tool::Codex, SkillScope::Global, None),
@@ -521,7 +615,10 @@ mod tests {
         assert!(!m.skills[0].local_only);
         assert!(m.skills[1].local_only);
         // false is not written, so unchanged entries keep their old bytes
-        assert!(!man(vec![sk("a", &[], &[])]).to_json().unwrap().contains("local_only"));
+        assert!(!man(vec![sk("a", &[], &[])])
+            .to_json()
+            .unwrap()
+            .contains("local_only"));
     }
 
     #[test]
@@ -548,7 +645,12 @@ mod tests {
             assert!(ok, "git {args:?}");
         };
         run(&["init", "-q"]);
-        run(&["remote", "add", "origin", "https://github.com/acme/cloned.git"]);
+        run(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/cloned.git",
+        ]);
         let local = tmp.path().join("plain");
         std::fs::create_dir_all(&local).unwrap();
         let mut a = scanned("cloned", Tool::Claude, SkillScope::Global, None);
@@ -582,11 +684,21 @@ mod tests {
             local_sk("copy", &["B"]),
         ]);
         remote.skills.push(sk("other", &["C"], &[]));
-        let local = vec![sk("both", &[], &[]), sk("new", &[], &[]), local_sk("mine", &[])];
+        let local = vec![
+            sk("both", &[], &[]),
+            sk("new", &[], &[]),
+            local_sk("mine", &[]),
+        ];
         let c = compare(&local, &remote, "A");
         let names = |v: &[ManifestSkill]| v.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&c.missing_here), vec!["other", "from_file", "copy"]);
-        assert!(c.missing_here.iter().find(|s| s.name == "copy").unwrap().local_only);
+        assert!(
+            c.missing_here
+                .iter()
+                .find(|s| s.name == "copy")
+                .unwrap()
+                .local_only
+        );
         assert_eq!(names(&c.in_both), vec!["both"]);
         assert_eq!(names(&c.only_here), vec!["new", "mine"]);
         // a local-only skill with the same name/tool/scope counts as present
@@ -669,7 +781,7 @@ mod tests {
     #[test]
     fn from_json_rejects_bad_input() {
         assert!(Manifest::from_json("{not json").is_err());
-        assert!(Manifest::from_json(r#"{"format":2,"skills":[]}"#).is_err());
+        assert!(Manifest::from_json(r#"{"format":3,"skills":[]}"#).is_err());
         let bad_tool = r#"{"format":1,"skills":[{"name":"a","url":"u","skill_path":"","tool":"vim","scope":{"type":"global"}}]}"#;
         assert!(Manifest::from_json(bad_tool).is_err());
         let bad_scope = r#"{"format":1,"skills":[{"name":"a","url":"u","skill_path":"","tool":"claude","scope":{"type":"moon"}}]}"#;

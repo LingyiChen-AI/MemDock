@@ -4,6 +4,7 @@ import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
 import { ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { liveInterrupt, liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
+import { envDetect } from "@/api/env";
 import { worktreeCreate } from "@/api/worktree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { WorktreeBadge, WorktreePanel } from "@/pages/chat/WorktreePanel";
@@ -48,6 +49,7 @@ import { agentSettings, isActive, loadChatPrefs, parseExtraArgs, rememberLast } 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { closeLive, ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
 import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
+import { loadProjectChatAgent, resolveProjectChatAgent } from "@/pages/chat/newChatAgent";
 import { resolveNewChatDir } from "@/pages/chat/newChatDir";
 import { ContextMeters } from "@/pages/chat/ContextMeter";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
@@ -158,10 +160,8 @@ function MenuAction({
 }
 
 /** The project group's single "＋": new session / new session in a worktree / new terminal. */
-function ProjectAddMenu({ name, cwd, tool, onNew, onNewWorktree, onTerminal, c }: { name: string; cwd: string; tool: ToolFilter; onNew: () => void; onNewWorktree: () => void; onTerminal: () => void; c: C }) {
+function ProjectAddMenu({ name, cwd, onNew, onNewWorktree, onTerminal, c }: { name: string; cwd: string; onNew: () => void; onNewWorktree: () => void; onTerminal: () => void; c: C }) {
   const w = c.worktree;
-  const agent = tool === "all" ? "" : tool === "codex" ? "Codex" : "Claude Code";
-  const newLabel = agent ? `${w.menuNew} · ${agent}` : w.menuNew;
   const [open, setOpen] = React.useState(false);
   const git = useGitRepo(cwd, open);
   const run = (f: () => void) => {
@@ -186,7 +186,7 @@ function ProjectAddMenu({ name, cwd, tool, onNew, onNewWorktree, onTerminal, c }
       </Tooltip>
       <PopoverContent align="end" className="w-72 p-1">
         <div role="menu" aria-label={name}>
-          <MenuAction autoFocus icon={<SquarePen aria-hidden="true" />} label={newLabel} sub={fmt(w.menuNewSub, { name })} kbd="Enter" onClick={() => run(onNew)} />
+          <MenuAction autoFocus icon={<SquarePen aria-hidden="true" />} label={w.menuNew} sub={fmt(w.menuNewSub, { name })} kbd="Enter" onClick={() => run(onNew)} />
           <MenuAction
             violet
             icon={<GitBranch aria-hidden="true" />}
@@ -1495,9 +1495,24 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     const p = loadChatPrefs();
     // Folder: the given one (project "＋"), else per the "new chat folder" setting.
     const dir = cwd ?? (await resolveNewChatDir(selected?.cwd ?? selectedLive?.cwd ?? null, p.cwd));
+    let agent = tool === "all" ? p.agent : tool;
+    if (cwd !== undefined) {
+      try {
+        const report = await envDetect();
+        const projectAgent = resolveProjectChatAgent(report, loadProjectChatAgent());
+        if (!projectAgent) {
+          setPageError(t.settings.newChatAgent.noneInstalled);
+          return;
+        }
+        agent = projectAgent;
+      } catch (e) {
+        setPageError(fmt(c.actionFailed, { error: errorMessage(e) }));
+        return;
+      }
+    }
     const key = newDraftKey();
     if (worktree) patchConvUi(key, { worktree: true });
-    setDraft({ key, agent: tool === "all" ? p.agent : tool, cwd: dir });
+    setDraft({ key, agent, cwd: dir });
     setSelectedKey(key);
     resetPane();
   };
@@ -1765,7 +1780,6 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                         <ProjectAddMenu
                           name={g.name}
                           cwd={g.cwd}
-                          tool={tool}
                           onNew={() => openDraft(g.cwd)}
                           onNewWorktree={() => openDraft(g.cwd, true)}
                           onTerminal={() => openShell(g.cwd)}

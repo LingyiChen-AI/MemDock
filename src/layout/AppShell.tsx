@@ -3,6 +3,7 @@ import {
   BarChart3,
   BookOpen,
   ChevronDown,
+  Download,
   Link2,
   ListChecks,
   MessagesSquare,
@@ -98,6 +99,7 @@ export interface AppShellProps {
   badges?: Partial<Record<NavKey, number>>;
   /** Footer status area above the collapse toggle (plan 4 puts "pending sync" here). */
   status?: React.ReactNode;
+  onOpenUpdate?: () => void;
   /** Content of the `memory` page. */
   children?: React.ReactNode;
   /** Content of the other pages that already exist; the rest render the placeholder. */
@@ -226,7 +228,7 @@ function AppearanceButton() {
   );
 }
 
-export function AppShell({ current, onNavigate, badges, status, children, pages, onNewChat, onNewTerminal }: AppShellProps) {
+export function AppShell({ current, onNavigate, badges, status, onOpenUpdate, children, pages, onNewChat, onNewTerminal }: AppShellProps) {
   const { t } = useI18n();
   // Ctrl/⌘+N: new chat; Ctrl+`: new terminal (as in VS Code). Also suppresses the webview's own Ctrl+N window.
   const actions = React.useRef({ onNewChat, onNewTerminal });
@@ -335,6 +337,21 @@ export function AppShell({ current, onNavigate, badges, status, children, pages,
             <div className="min-w-0 flex-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:w-full group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center">
               <CollapseToggle />
             </div>
+            {onOpenUpdate && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={t.appUpdate.sidebarUpdate}
+                    onClick={onOpenUpdate}
+                    className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-primary outline-none hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Download className="size-4" aria-hidden />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">{t.appUpdate.sidebarUpdate}</TooltipContent>
+              </Tooltip>
+            )}
             <GithubButton />
             <AppearanceButton />
           </div>

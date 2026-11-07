@@ -62,9 +62,8 @@ fn is_full_sha(s: &str) -> bool {
 
 /// Returns a complete clone of `url` as `(cache dir, commit)`. With `pin` (a
 /// full commit id) that exact commit is used and `ls-remote` is skipped;
-/// otherwise the remote commit of `git_ref`. Under `cache_lock`: old entries
-/// are cleaned first, only complete caches are reused, anything else is
-/// re-cloned. The cache directory is named after the commit the clone really
+/// otherwise the remote commit of `git_ref`. The cache lock protects cleanup
+/// and publication. Clones are prepared in private staging directories. The cache directory is named after the commit the clone really
 /// holds, even when the remote moved between `ls-remote` and the clone.
 pub fn ensure_cache(
     ctx: &OpsCtx,
@@ -78,31 +77,29 @@ pub fn ensure_cache(
         Some(p) => p.to_string(),
         None => ctx.git.ls_remote_head(clone_url, git_ref).map_err(git_err)?,
     };
-    let _g = ctx.cache_lock.lock().unwrap_or_else(|e| e.into_inner());
-    cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
     let cache = cache_dir_for(&ctx.cache_root(), url, &head);
-    if is_complete_cache(&cache) {
-        return Ok((cache, head));
+    {
+        let _guard = ctx.cache_lock.lock().unwrap_or_else(|e| e.into_inner());
+        cleanup_cache(&ctx.cache_root(), CACHE_MAX_AGE);
+        if is_complete_cache(&cache) {
+            return Ok((cache, head));
+        }
     }
-    if cache.exists() {
-        remove_any(&cache)?;
-    }
-    let commit = ctx
-        .git
-        .shallow_clone(clone_url, pin.or(git_ref), &cache)
+
+    let staging = TempDir::new(&ctx.staging_root())?;
+    let checkout = staging.0.join("checkout");
+    let commit = ctx.git
+        .shallow_clone(clone_url, pin.or(git_ref), &checkout)
         .map_err(git_err)?;
-    if commit == head {
-        return Ok((cache, commit));
-    }
     let actual = cache_dir_for(&ctx.cache_root(), url, &commit);
-    if is_complete_cache(&actual) {
-        remove_any(&cache)?;
-        return Ok((actual, commit));
+    let _guard = ctx.cache_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if !is_complete_cache(&actual) {
+        if actual.exists() {
+            remove_any(&actual)?;
+        }
+        fs::create_dir_all(ctx.cache_root())?;
+        fs::rename(&checkout, &actual)?;
     }
-    if actual.exists() {
-        remove_any(&actual)?;
-    }
-    fs::rename(&cache, &actual)?;
     Ok((actual, commit))
 }
 
@@ -196,16 +193,18 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(root: &Path) -> io::Result<TempDir> {
+        static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         fs::create_dir_all(root)?;
         let p = root.join(format!(
-            "install-{}-{}",
+            "install-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .unwrap_or(0),
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        fs::create_dir_all(&p)?;
+        fs::create_dir(&p)?;
         Ok(TempDir(p))
     }
 }
@@ -771,7 +770,9 @@ fn git_msg(e: &GitError) -> String {
 pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> {
     let reg = load_registry(&ctx.registry_path).unwrap_or_default();
     let git_ok = ctx.git.available();
-    let mut remote: HashMap<(String, Option<String>), Result<String, String>> = HashMap::new();
+    const MAX_REMOTE_CHECKS: usize = 6;
+    let mut requests = std::collections::HashSet::new();
+    let mut pending = Vec::new();
     let mut out = Vec::new();
     for e in entries.iter().filter(|e| !e.readonly) {
         let Some(source) = &e.source else { continue };
@@ -804,24 +805,46 @@ pub fn check_updates(ctx: &OpsCtx, entries: &[SkillEntry]) -> Vec<UpdateStatus> 
                 continue;
             }
         }
-        let url = network_url(ctx, e, source, reg_entry);
-        let key = (url.clone(), source.git_ref.clone());
-        let res = remote
-            .entry(key)
-            .or_insert_with(|| {
-                ctx.git
-                    .ls_remote_head(&url, source.git_ref.as_deref())
-                    .map_err(|e| git_msg(&e))
-            })
-            .clone();
-        match res {
-            Ok(latest) => {
-                st.has_update = current.as_deref() != Some(latest.as_str());
-                st.latest = Some(latest);
-            }
-            Err(m) => st.error = Some(m),
-        }
+        let key = (network_url(ctx, e, source, reg_entry), source.git_ref.clone());
+        requests.insert(key.clone());
+        pending.push((out.len(), key));
         out.push(st);
+    }
+
+    // Workers take the next unique remote as soon as they finish their current one.
+    let workers = requests.len().min(MAX_REMOTE_CHECKS);
+    let requests = std::sync::Mutex::new(requests.into_iter());
+    let remote: HashMap<_, _> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut results = Vec::new();
+                    loop {
+                        let next = crate::commands::lock(&requests).next();
+                        let Some(key) = next else { break };
+                        let result = ctx.git
+                            .ls_remote_head(&key.0, key.1.as_deref())
+                            .map_err(|e| git_msg(&e));
+                        results.push((key, result));
+                    }
+                    results
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("remote check worker"))
+            .collect()
+    });
+    for (index, key) in pending {
+        let st = &mut out[index];
+        match &remote[&key] {
+            Ok(latest) => {
+                st.has_update = st.current.as_deref() != Some(latest.as_str());
+                st.latest = Some(latest.clone());
+            }
+            Err(message) => st.error = Some(message.clone()),
+        }
     }
     out
 }
@@ -929,11 +952,18 @@ fn lookup(ctx: &OpsCtx, skill_id: &str) -> Result<(SkillEntry, Registry), OpsErr
 
 /// Updates a skill to the latest commit of its tracking ref. The previous
 /// state is backed up first; on any failure the skill directory is unchanged.
-pub fn update(
+#[cfg(test)]
+pub fn update(ctx: &OpsCtx, skill_id: &str, accept_local_changes: bool) -> Result<SkillEntry, OpsError> {
+    update_with_lock(ctx, skill_id, accept_local_changes, &Mutex::new(()))
+}
+
+pub fn update_with_lock(
     ctx: &OpsCtx,
     skill_id: &str,
     accept_local_changes: bool,
+    skills_lock: &Mutex<()>,
 ) -> Result<SkillEntry, OpsError> {
+    let mut guard = crate::commands::lock(skills_lock);
     load_registry(&ctx.registry_path).map_err(io_msg)?;
     let (entry, reg) = lookup(ctx, skill_id)?;
     if entry.readonly {
@@ -961,9 +991,28 @@ pub fn update(
         update_by_pull(ctx, &entry)?;
     } else {
         let url = network_url(ctx, &entry, &source, reg_entry);
-        update_by_clone(ctx, &entry, &source, &url)?;
+        let (staging, commit) = if accept_local_changes {
+            stage_clone_update(ctx, &source, &url)?
+        } else {
+            drop(guard);
+            let staged = stage_clone_update(ctx, &source, &url)?;
+            guard = crate::commands::lock(skills_lock);
+            let (current, registry) = lookup(ctx, skill_id)?;
+            if current.readonly || current.dir != entry.dir || current.source.as_ref() != Some(&source) {
+                return Err(invalid("skill changed during update; check again"));
+            }
+            let (modified, unknown) = local_state_git(ctx, &current, find_reg(&registry, skill_id));
+            if modified {
+                return Err(OpsError::LocalChanges { unknown });
+            }
+            staged
+        };
+        place(ctx, &staging.0.join("content"), Path::new(&entry.dir), &meta_of(&entry), true, true)?;
+        record_state(ctx, &entry, &source, &url, Some(commit), true)?;
     }
-    rescan_entry(ctx, &entry.id)
+    let result = rescan_entry(ctx, &entry.id);
+    drop(guard);
+    result
 }
 
 /// Skills that are themselves a git working tree (or a link to one): fast-forward the repository.
@@ -994,12 +1043,7 @@ fn update_by_pull(ctx: &OpsCtx, entry: &SkillEntry) -> Result<(), OpsError> {
 }
 
 /// Registry-installed skills: shallow-clone the latest, replace atomically.
-fn update_by_clone(
-    ctx: &OpsCtx,
-    entry: &SkillEntry,
-    source: &SkillSource,
-    url: &str,
-) -> Result<(), OpsError> {
+fn stage_clone_update(ctx: &OpsCtx, source: &SkillSource, url: &str) -> Result<(TempDir, String), OpsError> {
     let sub = repo_subpath(&source.skill_path)?;
     let (cache, commit) = ensure_cache(ctx, &source.url, url, source.git_ref.as_deref(), None)?;
     let skill_src = cache.join(&sub);
@@ -1023,8 +1067,7 @@ fn update_by_clone(
     if !content.join("SKILL.md").is_file() {
         return Err(invalid("SKILL.md not found in the updated skill"));
     }
-    place(ctx, &content, Path::new(&entry.dir), &meta_of(entry), true, true)?;
-    record_state(ctx, entry, source, url, Some(commit), true)
+    Ok((staging, commit))
 }
 
 /// Restores a backup. The current state is backed up first, so a rollback can
@@ -1887,6 +1930,8 @@ mod tests {
     struct WrapGit {
         inner: SystemGit,
         ls_calls: AtomicUsize,
+        active_checks: AtomicUsize,
+        peak_checks: AtomicUsize,
         fail_clone: AtomicBool,
         /// After a successful clone, turn this path into a directory.
         sabotage: std::sync::Mutex<Option<PathBuf>>,
@@ -1899,6 +1944,8 @@ mod tests {
             Arc::new(WrapGit {
                 inner: SystemGit::new(),
                 ls_calls: AtomicUsize::new(0),
+                active_checks: AtomicUsize::new(0),
+                peak_checks: AtomicUsize::new(0),
                 fail_clone: AtomicBool::new(false),
                 sabotage: std::sync::Mutex::new(None),
                 stale_head: std::sync::Mutex::new(None),
@@ -1912,7 +1959,12 @@ mod tests {
         }
         fn ls_remote_head(&self, url: &str, r: Option<&str>) -> Result<String, GitError> {
             self.ls_calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(h) = self.stale_head.lock().unwrap().clone() {
+            let stale = self.stale_head.lock().unwrap().clone();
+            if let Some(h) = stale {
+                let active = self.active_checks.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak_checks.fetch_max(active, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                self.active_checks.fetch_sub(1, Ordering::SeqCst);
                 return Ok(h);
             }
             self.inner.ls_remote_head(url, r)
@@ -2037,6 +2089,34 @@ mod tests {
         let st = check_updates(&e.ctx, &es);
         assert_eq!(st.len(), 2);
         assert_eq!(w.ls_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn check_runs_distinct_remotes_with_bounded_concurrency() {
+        let (e, git) = env_wrap();
+        let (url, _) = repo_with_skill(&e);
+        install(&e.ctx, tracked(&url, "skills/x"), &[claude()], false).unwrap();
+        let template = all_entries(&e).pop().unwrap();
+        let mut entries: Vec<_> = (0..12)
+            .map(|i| {
+                let mut entry = template.clone();
+                entry.id = format!("skill-{i}");
+                entry.source.as_mut().unwrap().url = format!("https://example.com/skill-{i}");
+                entry
+            })
+            .collect();
+        entries.push(entries[0].clone());
+        git.ls_calls.store(0, Ordering::SeqCst);
+        *git.stale_head.lock().unwrap() = Some("new-commit".into());
+
+        let result = check_updates(&e.ctx, &entries);
+
+        assert_eq!(git.ls_calls.load(Ordering::SeqCst), 12);
+        assert!((2..=6).contains(&git.peak_checks.load(Ordering::SeqCst)));
+        assert_eq!(result.len(), entries.len());
+        assert!(result.iter().zip(entries).all(|(status, entry)| {
+            status.skill_id == entry.id && status.latest.as_deref() == Some("new-commit")
+        }));
     }
 
     #[test]
@@ -2397,7 +2477,7 @@ v2
         push_change(&work, "skills/x/more.md", "m");
         *w.sabotage.lock().unwrap() = Some(e.ctx.registry_path.clone());
         let id = normalize_path(&dir.to_string_lossy());
-        match update(&e.ctx, &id, false) {
+        match update(&e.ctx, &id, true) {
             Err(OpsError::Io { message }) => {
                 assert!(
                     message.contains("files updated, registry not saved"),

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Download, Loader2, Trash2 } from "lucide-react";
 import { deleteSkill, listSkills } from "@/api/skills";
-import { installFromManifest } from "@/pages/skills/manifestInstall";
+import { installFromManifest, isLocalOnly } from "@/pages/skills/manifestInstall";
 import type { ManifestSkill, SkillEntry, SkillScope, SyncProject } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,12 +18,12 @@ export interface MissingSkillsProps {
   notify: (kind: ToastKind, message: string) => void;
 }
 
-const keyOf = (m: ManifestSkill) => `${m.tool}|${m.scope.type === "global" ? "" : m.scope.key}|${m.name}`;
+const keyOf = (m: ManifestSkill) => `${m.tool}|${m.scope.type === "global" ? "" : m.scope.key}|${m.name}|${Boolean(m.plugin?.local_scope)}`;
 
 /** Local scope of a manifest entry; `null` when the project is not on this computer
  * or the entry has no source to install from (local-only). */
 function localScope(m: ManifestSkill, projects: SyncProject[] | null): SkillScope | null {
-  if (m.local_only || !m.url) return null;
+  if (isLocalOnly(m)) return null;
   if (m.scope.type === "global") return { type: "global" };
   const key = m.scope.key;
   const p = projects?.find((x) => x.key === key || x.dir_key === key);
@@ -97,7 +97,7 @@ export function MissingSkills({ missing, removed, projects, notify }: MissingSki
 
   const localSkill = (m: ManifestSkill): SkillEntry | null => {
     const scope = localScope(m, projects);
-    if (!scope || !local) return null;
+    if (m.plugin || !scope || !local) return null;
     return local.find((x) => x.name === m.name && x.tool === m.tool && sameScope(x.scope, scope)) ?? null;
   };
 
@@ -116,15 +116,15 @@ export function MissingSkills({ missing, removed, projects, notify }: MissingSki
   };
 
   const openMissing = missing.filter((m) => !done.has(keyOf(m)));
-  const openRemoved = removed.filter((m) => !done.has(keyOf(m)));
+  const openRemoved = removed.filter((m) => !m.plugin && !done.has(keyOf(m)));
   if (openMissing.length === 0 && openRemoved.length === 0) return null;
 
   const installable = openMissing.filter((m) => localScope(m, projects) !== null);
   const notInstallable = openMissing.filter((m) => localScope(m, projects) === null);
   const scopeText = (m: ManifestSkill) => (m.scope.type === "global" ? s.scopeGlobal : fmt(s.scopeProject, { key: m.scope.key }));
   const meta = (m: ManifestSkill) => (
-    <p className="truncate text-xs text-muted-foreground" title={m.url}>
-      <span className="font-mono">{m.url.replace(/^https?:\/\//, "")}</span>
+    <p className="truncate text-xs text-muted-foreground" title={m.plugin?.key || m.url}>
+      <span className="font-mono">{m.plugin ? (m.plugin.version ?? m.plugin.key) : m.url.replace(/^https?:\/\//, "")}</span>
       {" · "}
       {m.tool === "claude" ? "Claude" : "Codex"}
       {" · "}
@@ -174,7 +174,7 @@ export function MissingSkills({ missing, removed, projects, notify }: MissingSki
                       {s.install}
                     </Button>
                   ) : (
-                    <span className="shrink-0 text-xs text-muted-foreground">{m.local_only || !m.url ? t.skills.manifest.manualCopy : s.noLocalProject}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{isLocalOnly(m) ? t.skills.manifest.manualCopy : s.noLocalProject}</span>
                   )}
                 </li>
               );
@@ -271,9 +271,9 @@ function InstallAllDialog({
   const s = t.sync;
   const row = (m: ManifestSkill) => (
     <li key={keyOf(m)} className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-1.5 dark:bg-muted/20">
-      <div className="min-w-0 flex-1" title={m.url}>
+      <div className="min-w-0 flex-1" title={m.plugin?.key || m.url}>
         <p className="truncate text-sm font-medium">{m.name}</p>
-        <p className="truncate font-mono text-xs text-muted-foreground">{m.url.replace(/^https?:\/\//, "")}</p>
+        <p className="truncate font-mono text-xs text-muted-foreground">{m.plugin ? (m.plugin.version ?? m.plugin.key) : m.url.replace(/^https?:\/\//, "")}</p>
       </div>
       <span className="shrink-0 text-xs text-muted-foreground">
         {m.tool === "claude" ? "Claude" : "Codex"} · {scopeText(m)}

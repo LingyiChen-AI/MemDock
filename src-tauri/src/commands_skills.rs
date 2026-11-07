@@ -327,8 +327,7 @@ pub fn update_skill_impl(
     skill_id: &str,
     accept_local_changes: bool,
 ) -> Result<SkillEntry, CommandError> {
-    let _g = lock(&state.skills_lock);
-    Ok(ops::update(&ops_ctx(state), skill_id, accept_local_changes)?)
+    Ok(ops::update_with_lock(&ops_ctx(state), skill_id, accept_local_changes, &state.skills_lock)?)
 }
 
 pub fn rollback_skill_impl(

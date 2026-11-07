@@ -8,6 +8,7 @@ vi.mock("@/api/memory", () => ({
 }));
 vi.mock("@/api/skills", () => ({
   installSkill: vi.fn().mockResolvedValue([]),
+  installManifestPlugin: vi.fn().mockResolvedValue(undefined),
   skillManifestCompare: vi.fn(),
   skillManifestExport: vi.fn(),
   skillManifestImport: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock("@/api/skills", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { installSkill, skillManifestCompare, skillManifestExport, skillManifestImport } from "@/api/skills";
+import { installManifestPlugin, installSkill, skillManifestCompare, skillManifestExport, skillManifestImport } from "@/api/skills";
 import type { ManifestCompare, ManifestSkill, MissingManifestSkill, SkillManifest } from "@/api/types";
 import { renderApp } from "@/test/fixtures";
 import { ManifestDialog } from "./ManifestDialog";
@@ -112,6 +113,19 @@ describe("ManifestDialog", () => {
     expect(await within(sec).findByText("已安装")).toBeInTheDocument();
     expect(props.notify).toHaveBeenCalledWith("success", "安装完成：成功 1 个，失败 0 个");
     expect(props.onInstalled).toHaveBeenCalled();
+  });
+
+  it("restores a plugin without a Git URL as a single package", async () => {
+    const key = "superpowers@claude-plugins-official";
+    (skillManifestCompare as Mock).mockResolvedValue(compareResult({
+      missing_here: [missing(key, { url: "", plugin: { key, version: "1.2.3" } })],
+    }));
+    setup();
+    await userEvent.click(await screen.findByRole("checkbox", { name: key }));
+    await userEvent.click(screen.getByRole("button", { name: "安装选中（1）" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "安装" }));
+    await waitFor(() => expect(installManifestPlugin).toHaveBeenCalledWith("claude", key, { type: "global" }, false));
+    expect(installSkill).not.toHaveBeenCalled();
   });
 
   it("select all picks only installable entries and reports failures per skill", async () => {

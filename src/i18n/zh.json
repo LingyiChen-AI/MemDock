@@ -261,6 +261,21 @@
     "scopeProject": "项目",
     "scopeReadonly": "只读来源",
     "checkUpdates": "检查更新",
+    "checkUpdatesScope": "检查独立 Skill 和插件包的更新",
+    "batchTitle": "批量更新 Skill",
+    "batchDescription": "已确认可批量更新的项目默认勾选。也可以选中市场未提供新版信息的插件包，让对应工具尝试更新。",
+    "batchNone": "当前没有可批量更新的项目。",
+    "batchUnverified": "市场未提供可比较的版本",
+    "batchIndividual": "其余更新请到对应 Skill 的详情页查看。",
+    "batchDone": "已处理",
+    "batchActive": "正在更新 {n} 项",
+    "batchRefreshing": "正在刷新列表",
+    "batchSummary": "已处理 {ok} 项，失败 {failed} 项",
+    "batchFinished": "批量更新结束",
+    "batchClose": "关闭",
+    "batchSelectAll": "全选",
+    "batchSelectedCount": "已选 {n} / {total}",
+    "batchApply": "一键更新（{n}）",
     "checkUpdatesN": "检查更新（{n}）",
     "checking": "检查中",
     "needGit": "需要安装 git",
@@ -318,6 +333,14 @@
     "fileCountSize": "{n} 个文件 · {size}",
     "modifiedAt": "更新时间",
     "description": "描述",
+    "updatePlugin": "更新",
+    "updatePluginNamed": "更新 {tool} 插件包 {name}",
+    "updatingPluginNamed": "正在更新 {tool} 插件包 {name}",
+    "pluginUpdateDone": "已完成插件包更新检查。若有新版，请在对应工具中新开会话。",
+    "pluginUpdateFailed": "插件包更新失败：{message}",
+    "pluginManagedBanner": "此 Skill 由插件包管理。可在左侧插件包上整包更新，或复制为独立 Skill 后编辑。",
+    "pluginGroup": "插件包",
+    "pluginCount": "{n} 个 Skill",
     "pluginSource": "插件 {name}",
     "removedBanner": "这个 skill 已被外部删除，编辑器里还有未保存的修改，先复制出来再离开。",
     "readOnlyBanner": "只读来源，不能直接修改。可复制到可写位置后再编辑。",
@@ -1096,14 +1119,14 @@
       "loadFailed": "热力图加载失败：{error}",
       "tool": "按工具着色",
       "allTools": "全部",
-      "total": "合计",
-      "last30": "最近 30 天"
+      "total": "合计"
     }
   },
   "appUpdate": {
+    "sidebarUpdate": "有可用更新，打开应用更新",
     "title": "应用更新",
     "version": "当前版本 {version}",
-    "schedule": "启动后自动检查，运行期间每 6 小时检查一次。",
+    "schedule": "启动后自动检查，运行期间每 30 分钟检查一次。",
     "development": "安装版客户端支持检查更新。",
     "check": "检查更新",
     "checking": "正在检查更新…",
@@ -1121,6 +1144,17 @@
     "restartError": "自动重启失败，请重新打开 MemDock 以应用更新。"
   },
   "settings": {
+    "autostart": {
+      "title": "开机自启",
+      "description": "登录系统时自动启动 MemDock。",
+      "readError": "无法读取开机自启状态。",
+      "writeError": "无法更改开机自启设置。"
+    },
+    "newChatAgent": {
+      "title": "项目新会话的默认工具",
+      "desc": "应用于项目菜单的「新建会话」和「在独立工作区新建会话」。只安装了一个工具时自动选用。两个都安装时，默认使用 Claude Code。",
+      "noneInstalled": "请先在本机安装 Claude Code 或 Codex CLI。"
+    },
     "newChatDir": {
       "title": "新对话的默认目录",
       "desc": "点侧栏或页头的「新对话」（Ctrl+N）时用哪个文件夹。项目上的「＋ 新建会话」始终用该项目的目录；发送第一条消息前也可以用 /cwd 修改。",

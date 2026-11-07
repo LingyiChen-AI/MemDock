@@ -64,6 +64,10 @@ pub struct SkillEntry {
     pub readonly: bool,
     /// Plugin key such as `superpowers@claude-plugins-official`.
     pub plugin: Option<String>,
+    pub plugin_version: Option<String>,
+    pub plugin_install_path: Option<String>,
+    #[serde(skip_serializing)]
+    pub plugin_local_scope: bool,
     pub source: Option<SkillSource>,
     pub file_count: u32,
     pub size_bytes: u64,

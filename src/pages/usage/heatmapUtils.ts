@@ -1,8 +1,6 @@
-import type { UsageRow, UsageTotals, UsageView } from "@/api/types";
+import { subYears } from "date-fns";
+import type { UsageRow, UsageTotals } from "@/api/types";
 import { localDate } from "./usageUtils";
-
-/** Span of the heatmap in the `today` view (the page itself shows only one day). */
-export const TODAY_SPAN_DAYS = 30;
 
 export type HeatMetric = "tokens" | "cost";
 /** Which tool's usage colors the cells. */
@@ -11,21 +9,6 @@ export type HeatTool = "all" | "claude" | "codex";
 /** Cell pitch (cell + gap) in px: fills the width, but stays within these bounds. */
 export const MIN_STEP = 13;
 export const MAX_STEP = 30;
-
-/** Fixed cell pitch (cell + gap) of the GitHub-style wall. */
-export const WALL_STEP = 16;
-
-/**
- * First day shown: enough whole weeks before `to` to fill `available` px at
- * `WALL_STEP`, but never later than `rangeFrom` (a long range scrolls instead).
- */
-export function wallStart(rangeFrom: string, to: string, available: number): string {
-  const end = parseLocal(to);
-  const weekStart = addDays(end, -((end.getDay() + 6) % 7));
-  const fit = Math.max(1, Math.floor(available / WALL_STEP));
-  const fitted = localDate(addDays(weekStart, -7 * (fit - 1)));
-  return fitted < rangeFrom ? fitted : rangeFrom;
-}
 
 /** Pitch that spreads `weeks` columns over `available` px, clamped to [MIN_STEP, MAX_STEP]. */
 export function cellStep(available: number, weeks: number): number {
@@ -55,16 +38,9 @@ function addDays(d: Date, n: number): Date {
   return x;
 }
 
-/**
- * Days the heatmap covers: exactly the page's filter range. The `today` view
- * (a single day on the page) shows the last 30 days up to today.
- */
-export function heatmapRange(view: UsageView, range: { from: string; to: string }, now: Date): { from: string; to: string } {
-  if (view === "today") {
-    const to = localDate(now);
-    return { from: localDate(addDays(parseLocal(to), -(TODAY_SPAN_DAYS - 1))), to };
-  }
-  return range.from <= range.to ? { from: range.from, to: range.to } : { from: range.to, to: range.from };
+/** The most recent calendar year, including today. */
+export function heatmapRange(today: string): { from: string; to: string } {
+  return { from: localDate(addDays(subYears(parseLocal(today), 1), 1)), to: today };
 }
 
 export interface HeatStat {
@@ -81,8 +57,6 @@ export interface HeatCell {
   codex: HeatStat;
   /** 0 (no usage) to 4 (most), from the selected tool and metric. */
   level: 0 | 1 | 2 | 3 | 4;
-  /** Before the selected range: drawn as an empty cell, no tooltip. */
-  outside?: boolean;
 }
 
 const ZERO: HeatStat = { cost: 0, tokens: 0, requests: 0 };
@@ -121,8 +95,6 @@ export function buildHeatGrid(
   to: string,
   metric: HeatMetric,
   tool: HeatTool = "all",
-  /** Days before this are padding: empty cells, excluded from the color scale. */
-  rangeFrom: string = from,
 ): HeatGrid {
   const byDay = new Map(rows.map((r) => [r.key, r]));
   const value = (k: string) => {
@@ -132,7 +104,7 @@ export function buildHeatGrid(
   const start = parseLocal(from);
   const end = parseLocal(to);
   let max = 0;
-  for (let d = parseLocal(rangeFrom); d <= end; d = addDays(d, 1)) max = Math.max(max, value(localDate(d)));
+  for (let d = start; d <= end; d = addDays(d, 1)) max = Math.max(max, value(localDate(d)));
 
   const weeks: (HeatCell | null)[][] = [];
   const months: HeatGrid["months"] = [];
@@ -151,14 +123,12 @@ export function buildHeatGrid(
       if (d.getDate() === 1 || (weeks.length === 0 && months.length === 0)) {
         months.push({ week: weeks.length, month: key.slice(0, 7) });
       }
-      const outside = key < rangeFrom;
       col.push({
         date: key,
         total: pick(r, "all"),
         claude: pick(r, "claude"),
         codex: pick(r, "codex"),
-        level: outside ? 0 : levelOf(value(key), max),
-        ...(outside ? { outside: true } : {}),
+        level: levelOf(value(key), max),
       });
     }
     weeks.push(col);

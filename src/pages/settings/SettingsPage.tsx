@@ -1,3 +1,5 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import * as React from "react";
 import {
   CircleCheck,
@@ -8,6 +10,7 @@ import {
   Gauge,
   GitBranch,
   Loader2,
+  MessagesSquare,
   Monitor,
   Palette,
   RefreshCw,
@@ -29,7 +32,10 @@ import { AppUpdateSection } from "./AppUpdateSection";
 import type { AppUpdate } from "./useAppUpdate";
 import { Button } from "@/components/ui/button";
 import type { NavKey } from "@/layout/AppShell";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { isChatAgentInstalled, loadProjectChatAgent, PROJECT_CHAT_AGENTS, resolveProjectChatAgent, saveProjectChatAgent } from "@/pages/chat/newChatAgent";
 import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
@@ -77,6 +83,9 @@ function CopyButton({ text, label, copiedLabel }: { text: string; label: string;
   );
 }
 
+const TOOL_ROW_CLASS = "flex flex-col gap-1.5 border-b border-border py-3 last:border-b-0";
+const TOOL_ROW_HEADER_CLASS = "flex flex-wrap items-center gap-x-3 gap-y-1";
+
 function ToolRow({
   tool,
   npmOk,
@@ -93,8 +102,8 @@ function ToolRow({
   const installable = tool.name === "claude" || tool.name === "codex";
   const busy = installing === tool.name;
   return (
-    <li className="flex flex-col gap-1.5 border-b border-border py-3 last:border-b-0">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+    <li className={TOOL_ROW_CLASS}>
+      <div className={TOOL_ROW_HEADER_CLASS}>
         <span className="w-28 shrink-0 text-sm font-medium">{e.names[tool.name]}</span>
         {tool.installed ? (
           <span className="inline-flex items-center gap-1 text-xs text-accent-text">
@@ -141,6 +150,71 @@ function ToolRow({
   );
 }
 
+function EnvironmentSkeleton({ label, tools }: { label: string; tools: EnvReport["tools"][number]["name"][] }) {
+  return (
+    <div role="status" aria-label={label}>
+      <ul aria-hidden="true" className="flex flex-col">
+        {tools.map((tool) => (
+          <li key={tool} className={TOOL_ROW_CLASS}>
+            <div className={cn(TOOL_ROW_HEADER_CLASS, "min-h-5")}>
+              <div className="w-28 shrink-0">
+                <Skeleton className="h-3 w-20 motion-reduce:animate-none" />
+              </div>
+              <Skeleton className="h-3 w-14 motion-reduce:animate-none" />
+              <Skeleton className="h-3 w-16 motion-reduce:animate-none" />
+              {(tool === "claude" || tool === "codex") && <Skeleton className="h-3 w-12 motion-reduce:animate-none" />}
+            </div>
+            <div className="flex h-4 items-center sm:pl-31">
+              <Skeleton className="h-3 w-52 max-w-full motion-reduce:animate-none" />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AutostartSettings() {
+  const { t } = useI18n();
+  const s = t.settings.autostart;
+  const [enabled, setEnabled] = React.useState<boolean>();
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<"readError" | "writeError">();
+
+  React.useEffect(() => {
+    let active = true;
+    void isEnabled().then(
+      (value) => { if (active) setEnabled(value); },
+      () => { if (active) setError("readError"); },
+    );
+    return () => { active = false; };
+  }, []);
+
+  const change = async (checked: boolean) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await (checked ? enable() : disable());
+      setEnabled(checked);
+    } catch {
+      setError("writeError");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section
+      icon={SettingsIcon}
+      title={s.title}
+      desc={s.description}
+      action={<Switch aria-label={s.title} checked={enabled ?? false} disabled={enabled === undefined || busy} onCheckedChange={(checked) => void change(checked)} />}
+    >
+      {error && <p role="alert" className="text-xs text-destructive">{s[error]}</p>}
+    </Section>
+  );
+}
+
 export interface SettingsPageProps {
   onNavigate?: (key: NavKey) => void;
   appUpdate?: AppUpdate;
@@ -150,7 +224,8 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
   const { t } = useI18n();
   const s = t.settings;
   const [env, setEnv] = React.useState<EnvReport | null>(null);
-  const [checking, setChecking] = React.useState(false);
+  const [projectChatPreference, setProjectChatPreference] = React.useState(loadProjectChatAgent);
+  const [checking, setChecking] = React.useState(true);
   const [installing, setInstalling] = React.useState<string | null>(null);
   const [log, setLog] = React.useState<string[]>([]);
   const [quotaOn, setQuotaOn] = React.useState<boolean | null>(null);
@@ -259,6 +334,7 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
     }
   };
 
+  const projectChatAgent = resolveProjectChatAgent(env, projectChatPreference);
   const npmOk = env?.tools.some((x) => x.name === "npm" && x.installed) ?? false;
 
   return (
@@ -270,6 +346,7 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
         </h1>
 
         {appUpdate && <AppUpdateSection state={appUpdate} />}
+        {isTauri() && !import.meta.env.DEV && <AutostartSettings />}
         <Section
           icon={TerminalSquare}
           title={s.env.title}
@@ -287,9 +364,9 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
                 <ToolRow key={tool.name} tool={tool} npmOk={npmOk} installing={installing} onInstall={(n) => void install(n)} />
               ))}
             </ul>
-          ) : (
-            <div className="h-40 animate-pulse rounded-md bg-muted motion-reduce:animate-none" />
-          )}
+          ) : checking ? (
+            <EnvironmentSkeleton label={s.env.checking} tools={Object.keys(s.env.names) as EnvToolStatus["name"][]} />
+          ) : null}
           {env && !npmOk ? (
             <p className="flex flex-wrap items-center gap-2 rounded-md bg-warning/15 px-3 py-2 text-sm">
               <TriangleAlert className="size-4 shrink-0 text-warning" aria-hidden="true" />
@@ -316,6 +393,35 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
 
         <Section icon={Palette} title={s.appearance.title}>
           <AppearanceControls />
+        </Section>
+
+        <Section icon={MessagesSquare} title={s.newChatAgent.title} desc={s.newChatAgent.desc}>
+          <RadioGroup
+            aria-label={s.newChatAgent.title}
+            value={projectChatAgent ?? ""}
+            className="flex flex-wrap gap-x-6 gap-y-2"
+            onValueChange={(value) => {
+              const agent = PROJECT_CHAT_AGENTS.find((item) => item === value);
+              if (!agent || !isChatAgentInstalled(env, agent)) return;
+              try {
+                saveProjectChatAgent(agent);
+                setProjectChatPreference(agent);
+              } catch (e) {
+                push("error", errorMessage(e));
+              }
+            }}
+          >
+            {PROJECT_CHAT_AGENTS.map((agent) => {
+              const disabled = !isChatAgentInstalled(env, agent);
+              return (
+                <label key={agent} className={cn("flex items-center gap-2 text-sm", disabled ? "text-muted-foreground" : "cursor-pointer")}>
+                  <RadioGroupItem value={agent} disabled={disabled} />
+                  {s.env.names[agent]}
+                </label>
+              );
+            })}
+          </RadioGroup>
+          {env && !projectChatAgent && <p className="text-xs text-muted-foreground">{s.newChatAgent.noneInstalled}</p>}
         </Section>
 
         <Section icon={FolderOpen} title={s.newChatDir.title} desc={s.newChatDir.desc}>

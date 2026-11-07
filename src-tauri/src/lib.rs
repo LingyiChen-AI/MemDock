@@ -67,6 +67,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_updater::Builder::new().build())
         // VISIBLE is excluded: the window starts hidden and setup shows it once it is sized.
         .plugin(
@@ -194,6 +195,9 @@ pub fn run() {
             commands_skill_manifest::skill_manifest_compare,
             commands_skill_manifest::skill_manifest_export,
             commands_skill_manifest::skill_manifest_import,
+            commands_skill_manifest::skill_manifest_install_plugin,
+            commands_skill_manifest::update_skill_plugin,
+            commands_skill_manifest::check_skill_plugin_updates,
             commands_sync::sync_status,
             commands_sync::login_start,
             commands_sync::login_cancel,

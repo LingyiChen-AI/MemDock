@@ -7,6 +7,8 @@ import type {
   InstallFrom,
   InstallTarget,
   ManifestCompare,
+  ManifestSkill,
+  SkillScope,
   SkillManifest,
   SkillEntry,
   SkillFileDto,
@@ -137,4 +139,18 @@ export function onSkillsChanged(
   cb: (payload: SkillsChangedPayload) => void,
 ): Promise<UnlistenFn> {
   return listen<SkillsChangedPayload>("skills-changed", (e) => cb(e.payload));
+}
+
+
+export function installManifestPlugin(tool: ManifestSkill["tool"], key: string, scope: SkillScope, localScope: boolean): Promise<void> {
+  return invoke("skill_manifest_install_plugin", { tool, key, scope, localScope });
+}
+
+
+export function updateSkillPlugin(entry: SkillEntry): Promise<void> {
+  return invoke("update_skill_plugin", { skillId: entry.id, scope: entry.scope });
+}
+
+export function checkSkillPluginUpdates(): Promise<{ skill_id: string; tool: SkillEntry["tool"]; scope: SkillScope; latest: string | null; has_update: boolean | null }[]> {
+  return invoke("check_skill_plugin_updates");
 }

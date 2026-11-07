@@ -261,6 +261,21 @@
     "scopeProject": "Project",
     "scopeReadonly": "Read-only",
     "checkUpdates": "Check updates",
+    "checkUpdatesScope": "Check standalone skills and plugin packs for updates",
+    "batchTitle": "Batch skill updates",
+    "batchDescription": "Confirmed updates are selected by default. You can also select plugin packs whose marketplace did not report a comparable version.",
+    "batchNone": "No items are available for batch update.",
+    "batchUnverified": "Marketplace did not provide a comparable version",
+    "batchIndividual": "See each skill’s details for any remaining updates.",
+    "batchDone": "Processed",
+    "batchActive": "Updating {n} items",
+    "batchRefreshing": "Refreshing the list",
+    "batchSummary": "Processed {ok}, failed {failed}",
+    "batchFinished": "Batch update finished",
+    "batchClose": "Close",
+    "batchSelectAll": "Select all",
+    "batchSelectedCount": "{n} of {total} selected",
+    "batchApply": "Update selected ({n})",
     "checkUpdatesN": "Check updates ({n})",
     "checking": "Checking",
     "needGit": "git must be installed",
@@ -318,6 +333,14 @@
     "fileCountSize": "{n} files · {size}",
     "modifiedAt": "Updated",
     "description": "Description",
+    "updatePlugin": "Update",
+    "updatePluginNamed": "Update {tool} plugin pack {name}",
+    "updatingPluginNamed": "Updating {tool} plugin pack {name}",
+    "pluginUpdateDone": "Plugin update check finished. If a new version was installed, start a new session in the corresponding tool.",
+    "pluginUpdateFailed": "Plugin update failed: {message}",
+    "pluginManagedBanner": "This skill is managed by its plugin pack. Update the pack in the sidebar or copy this skill to edit it separately.",
+    "pluginGroup": "Plugin packs",
+    "pluginCount": "{n} skills",
     "pluginSource": "Plugin {name}",
     "removedBanner": "This skill was deleted outside MemDock. The editor still has unsaved edits; copy them out before leaving.",
     "readOnlyBanner": "This skill is read-only. Copy it to a writable location to edit it.",
@@ -1096,14 +1119,14 @@
       "loadFailed": "Failed to load heatmap: {error}",
       "tool": "Color by tool",
       "allTools": "All",
-      "total": "Total",
-      "last30": "last 30 days"
+      "total": "Total"
     }
   },
   "appUpdate": {
+    "sidebarUpdate": "Update available. Open app updates",
     "title": "App updates",
     "version": "Current version {version}",
-    "schedule": "Checks automatically at startup and every six hours.",
+    "schedule": "Checks automatically at startup and every 30 minutes.",
     "development": "Update checks are available in packaged builds.",
     "check": "Check for updates",
     "checking": "Checking for updates…",
@@ -1121,6 +1144,17 @@
     "restartError": "Could not restart automatically. Reopen MemDock to apply the update."
   },
   "settings": {
+    "autostart": {
+      "title": "Launch at login",
+      "description": "Start MemDock when you log in.",
+      "readError": "Could not read launch-at-login status.",
+      "writeError": "Could not change the launch-at-login setting."
+    },
+    "newChatAgent": {
+      "title": "Default tool for new project chats",
+      "desc": "Applies to both new chat options in the project menu. If only one CLI is installed, it is selected automatically. When both are installed, the default is Claude Code.",
+      "noneInstalled": "Install Claude Code or Codex CLI on this computer first."
+    },
     "newChatDir": {
       "title": "Folder for new chats",
       "desc": "Where “New chat” in the sidebar / header (Ctrl+N) starts. The project “＋ New chat” always uses that project; before the first message you can still change it with /cwd.",

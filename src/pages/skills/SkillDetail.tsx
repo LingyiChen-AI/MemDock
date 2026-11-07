@@ -86,7 +86,7 @@ export function SkillDetail({
         <span className={tagClass}>{scopeText}</span>
         <span className={tagClass}>{sourceLabel(entry, s)}</span>
         {entry.readonly ? (
-          <span className="shrink-0 rounded-full border border-border px-2 text-xs leading-5 text-muted-foreground">{s.readOnly}</span>
+          <span className="shrink-0 rounded-full border border-border px-2 text-xs leading-5 text-muted-foreground">{entry.plugin ? s.pluginGroup : s.readOnly}</span>
         ) : null}
         <span className="flex-1" />
         {entry.readonly ? (
@@ -239,7 +239,7 @@ function Overview({
           </section>
         ) : null}
         {entry.readonly ? (
-          <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{s.readOnlyBanner}</p>
+          <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{entry.plugin ? s.pluginManagedBanner : s.readOnlyBanner}</p>
         ) : null}
 
         <dl className="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-x-6 gap-y-4 rounded-lg border border-border bg-card px-5 py-4 text-sm">

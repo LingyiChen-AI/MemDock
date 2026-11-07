@@ -17,7 +17,7 @@ struct Ctx<'a> {
     tool: Tool,
     scope: &'a SkillScope,
     kind: SkillKind,
-    plugin: Option<&'a str>,
+    plugin: Option<&'a PluginInstall>,
 }
 
 /// Finds every skill directory (a directory holding a `SKILL.md`) in the global
@@ -102,11 +102,21 @@ pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec
     }
 
     // Plugins (deduped by installPath and scope).
-    let mut seen: Vec<(String, Option<String>)> = Vec::new();
-    for inst in plugin_installs(&paths.claude_home) {
+    let mut seen = Vec::new();
+    for (tool, inst) in claude_plugin_installs(&paths.claude_home)
+        .into_iter()
+        .map(|inst| (Tool::Claude, inst))
+        .chain(
+            codex_plugin_installs(&paths.codex_home)
+                .into_iter()
+                .map(|inst| (Tool::Codex, inst)),
+        )
+    {
         let marker = (
+            tool,
             normalize_path(&inst.path.to_string_lossy()),
             inst.project_id.clone(),
+            inst.local_scope,
         );
         if seen.contains(&marker) {
             continue;
@@ -119,12 +129,12 @@ pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec
             None => SkillScope::Global,
         };
         let ctx = Ctx {
-            tool: Tool::Claude,
+            tool,
             scope: &scope,
             kind: SkillKind::Plugin,
-            plugin: Some(&inst.key),
+            plugin: Some(&inst),
         };
-        scan_children(&inst.path.join("skills"), &[], &ctx, &mut out);
+        scan_children(&inst.skills_dir, &[], &ctx, &mut out);
     }
 
     // Codex built-in.
@@ -167,12 +177,15 @@ pub fn scan_skills(paths: &AgentPaths, home: &Path, projects: &[Project]) -> Vec
 struct PluginInstall {
     key: String,
     path: PathBuf,
+    skills_dir: PathBuf,
+    version: Option<String>,
     /// Set for project-scoped installs that carry a `projectPath`.
     project_id: Option<String>,
+    local_scope: bool,
 }
 
 /// Reads `installed_plugins.json`. A missing or malformed file yields nothing.
-fn plugin_installs(claude_home: &Path) -> Vec<PluginInstall> {
+fn claude_plugin_installs(claude_home: &Path) -> Vec<PluginInstall> {
     let Ok(text) = fs::read_to_string(claude_home.join("plugins").join("installed_plugins.json"))
     else {
         return Vec::new();
@@ -192,7 +205,8 @@ fn plugin_installs(claude_home: &Path) -> Vec<PluginInstall> {
             let Some(p) = inst.get("installPath").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let project_id = if inst.get("scope").and_then(|v| v.as_str()) == Some("project") {
+            let scope = inst.get("scope").and_then(|v| v.as_str());
+            let project_id = if matches!(scope, Some("project" | "local")) {
                 inst.get("projectPath")
                     .and_then(|v| v.as_str())
                     .filter(|p| !p.is_empty())
@@ -200,14 +214,99 @@ fn plugin_installs(claude_home: &Path) -> Vec<PluginInstall> {
             } else {
                 None
             };
+            if matches!(scope, Some("project" | "local")) && project_id.is_none() {
+                continue;
+            }
             out.push(PluginInstall {
                 key: key.clone(),
                 path: PathBuf::from(p),
+                skills_dir: Path::new(p).join("skills"),
+                version: inst
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
                 project_id,
+                local_scope: scope == Some("local"),
             });
         }
     }
     out
+}
+
+/// A cached Codex plugin needs an enabled configuration entry or a remote install record.
+/// Several cached versions may remain after updating, so use the newest valid installation.
+fn codex_plugin_installs(codex_home: &Path) -> Vec<PluginInstall> {
+    let config = fs::read_to_string(codex_home.join("config.toml"))
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Table>(&text).ok());
+    let configured = config
+        .as_ref()
+        .and_then(|config| config.get("plugins"))
+        .and_then(toml::Value::as_table);
+    let Ok(marketplaces) = fs::read_dir(codex_home.join("plugins/cache")) else {
+        return Vec::new();
+    };
+    let mut installs = Vec::new();
+    for marketplace in marketplaces.flatten().filter(|entry| entry.path().is_dir()) {
+        let Ok(plugins) = fs::read_dir(marketplace.path()) else {
+            continue;
+        };
+        for plugin in plugins.flatten().filter(|entry| entry.path().is_dir()) {
+            let key = format!(
+                "{}@{}",
+                plugin.file_name().to_string_lossy(),
+                marketplace.file_name().to_string_lossy()
+            );
+            let enabled = configured
+                .and_then(|plugins| plugins.get(&key))
+                .and_then(|plugin| plugin.get("enabled"))
+                .and_then(toml::Value::as_bool);
+            let remote_install = plugin
+                .path()
+                .join(".codex-remote-plugin-install.json")
+                .is_file();
+            if !enabled.unwrap_or(remote_install) {
+                continue;
+            }
+            if let Some(install) = latest_codex_plugin(&plugin.path(), key) {
+                installs.push(install);
+            }
+        }
+    }
+    installs
+}
+
+fn latest_codex_plugin(cache: &Path, key: String) -> Option<PluginInstall> {
+    let (_, path, skills_dir, version) = fs::read_dir(cache)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path().canonicalize().ok()?;
+            let text = fs::read_to_string(path.join(".codex-plugin/plugin.json")).ok()?;
+            let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let version = manifest
+                .get("version")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned());
+            let order = semver::Version::parse(&version).ok();
+            let skills = manifest
+                .get("skills")
+                .and_then(|value| value.as_str())
+                .unwrap_or("skills");
+            let skills_dir = path.join(skills).canonicalize().ok()?;
+            (skills_dir.starts_with(&path) && skills_dir.is_dir())
+                .then_some((order, path, skills_dir, version))
+        })
+        .max()?;
+    Some(PluginInstall {
+        key,
+        path,
+        skills_dir,
+        version: Some(version),
+        project_id: None,
+        local_scope: false,
+    })
 }
 
 /// Adds every immediate subdirectory of `root` that contains a `SKILL.md`.
@@ -262,7 +361,12 @@ fn push_skill(dir: &Path, ctx: &Ctx, out: &mut Vec<SkillEntry>) {
         is_symlink,
         symlink_target,
         readonly: ctx.kind != SkillKind::User,
-        plugin: ctx.plugin.map(str::to_string),
+        plugin: ctx.plugin.map(|plugin| plugin.key.clone()),
+        plugin_version: ctx.plugin.and_then(|plugin| plugin.version.clone()),
+        plugin_install_path: ctx
+            .plugin
+            .map(|plugin| plugin.path.to_string_lossy().into_owned()),
+        plugin_local_scope: ctx.plugin.is_some_and(|plugin| plugin.local_scope),
         source: None,
         file_count,
         size_bytes,
@@ -338,6 +442,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn codex_plugins_use_install_records_and_only_the_latest_valid_cache() {
+        let (home, paths) = setup();
+        fs::create_dir_all(&paths.codex_home).unwrap();
+        fs::write(
+            paths.codex_home.join("config.toml"),
+            "[plugins.\"superpowers@official\"]\nenabled = true\n",
+        )
+        .unwrap();
+        let cache = paths.codex_home.join("plugins/cache/official");
+        for (name, version) in [
+            ("superpowers", "7.0.1"),
+            ("superpowers", "6.0.0"),
+            ("cached-only", "8.0.0"),
+            ("remote-pack", "1.0.0"),
+        ] {
+            let root = cache.join(name).join(version);
+            fs::create_dir_all(root.join(".codex-plugin")).unwrap();
+            fs::write(
+                root.join(".codex-plugin/plugin.json"),
+                serde_json::json!({
+                    "name": name, "version": version, "skills": "./workflows"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            skill(
+                &root.join("workflows").join(version),
+                "brainstorming",
+                "Plan the work",
+            );
+        }
+        fs::write(
+            cache.join("remote-pack/.codex-remote-plugin-install.json"),
+            r#"{"schema_version":1,"remote_plugin_id":"demo"}"#,
+        )
+        .unwrap();
+        let entries = scan_skills(&paths, home.path(), &[]);
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.plugin.as_deref() == Some("remote-pack@official")));
+        let entry = entries
+            .iter()
+            .find(|entry| entry.plugin.as_deref() == Some("superpowers@official"))
+            .unwrap();
+        assert_eq!(entry.tool, Tool::Codex);
+        assert_eq!(entry.plugin_version.as_deref(), Some("7.0.1"));
+        assert!(entry.readonly);
+    }
+
     fn setup() -> (TempDir, AgentPaths) {
         let tmp = TempDir::new().unwrap();
         let paths = AgentPaths::from_home(tmp.path());
@@ -374,10 +529,9 @@ mod tests {
         assert_eq!(alpha.id, normalize_path(&alpha.dir));
         assert!(alpha.source.is_none());
         // Missing frontmatter falls back to the directory name.
-        assert!(
-            out.iter()
-                .any(|s| s.name == "beta" && s.description.is_empty())
-        );
+        assert!(out
+            .iter()
+            .any(|s| s.name == "beta" && s.description.is_empty()));
         let gamma = out.iter().find(|s| s.name == "gamma").unwrap();
         assert_eq!(
             gamma.scope,

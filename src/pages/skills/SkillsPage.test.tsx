@@ -14,6 +14,9 @@ vi.mock("@/api/skills", () => ({
   revealBackupFolder: vi.fn(),
   gitAvailable: vi.fn().mockResolvedValue(true),
   checkSkillUpdates: vi.fn(),
+  checkSkillPluginUpdates: vi.fn(),
+  updateSkillPlugin: vi.fn(),
+  updateSkill: vi.fn(),
   onSkillsChanged: vi.fn().mockResolvedValue(() => {}),
   listSkillFiles: vi.fn().mockResolvedValue({ files: [], truncated: false }),
   readSkillFile: vi.fn(),
@@ -31,7 +34,7 @@ vi.mock("@uiw/react-codemirror", () => ({
   EditorView: { theme: () => [], lineWrapping: [] },
 }));
 
-import { checkSkillUpdates, listSkills } from "@/api/skills";
+import { checkSkillPluginUpdates, checkSkillUpdates, listSkills, updateSkill, updateSkillPlugin } from "@/api/skills";
 import { renderApp } from "@/test/fixtures";
 import { SkillsPage } from "./SkillsPage";
 import { mkSkill, mkUpdate } from "./testUtils";
@@ -57,9 +60,58 @@ describe("SkillsPage", () => {
     await screen.findByRole("listbox");
     expect(checkSkillUpdates).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    const dialog = await screen.findByRole("dialog", { name: "批量更新 Skill" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
     const row = within(screen.getByRole("listbox")).getAllByRole("option").find((o) => within(o).queryByText("beta"))!;
     expect(await within(row).findByText("有更新")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "检查更新（1）" })).toBeInTheDocument();
+  });
+
+  it("selects confirmed updates and tracks the selected batch to completion", async () => {
+    const plugin = mkSkill({ id: "plugin", name: "member", plugin: "superpowers@market", readonly: true });
+    (listSkills as Mock).mockResolvedValue([a, plugin]);
+    (checkSkillUpdates as Mock).mockResolvedValue([mkUpdate({ skill_id: a.id, has_update: true })]);
+    (checkSkillPluginUpdates as Mock).mockResolvedValue([{ skill_id: plugin.id, tool: plugin.tool, scope: plugin.scope, has_update: true, latest: "2.0.0" }]);
+    let finishPlugin!: () => void;
+    (updateSkillPlugin as Mock).mockImplementationOnce(() => new Promise<void>((resolve) => { finishPlugin = resolve; }));
+    renderApp(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "检查更新" }));
+    const dialog = await screen.findByRole("dialog", { name: "批量更新 Skill" });
+    const [selectAll, skill, pack] = within(dialog).getAllByRole("checkbox");
+    expect(skill).toBeChecked();
+    expect(pack).toBeChecked();
+    expect(selectAll).toBeChecked();
+    await userEvent.click(selectAll);
+    expect(skill).not.toBeChecked();
+    expect(pack).not.toBeChecked();
+    await userEvent.click(selectAll);
+    expect(skill).toBeChecked();
+    expect(pack).toBeChecked();
+    await userEvent.click(skill);
+    expect(selectAll).toBePartiallyChecked();
+    await userEvent.click(within(dialog).getByRole("button", { name: "一键更新（1）" }));
+    expect(updateSkill).not.toHaveBeenCalled();
+    expect(updateSkillPlugin).toHaveBeenCalledWith(plugin);
+    expect(within(dialog).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+    await act(async () => finishPlugin());
+    expect(within(dialog).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+  });
+
+  it("starts selected updates concurrently and counts out-of-order completion", async () => {
+    (listSkills as Mock).mockResolvedValue([a, b]);
+    (checkSkillUpdates as Mock).mockResolvedValue([a, b].map((entry) => mkUpdate({ skill_id: entry.id, has_update: true })));
+    const finish = new Map<string, () => void>();
+    (updateSkill as Mock).mockImplementation((id: string) => new Promise<void>((resolve) => finish.set(id, resolve)));
+    renderApp(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "检查更新" }));
+    const dialog = await screen.findByRole("dialog", { name: "批量更新 Skill" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "一键更新（2）" }));
+    expect(finish.size).toBe(2);
+    expect(within(dialog).getByText("正在更新 2 项")).toBeInTheDocument();
+    await act(async () => finish.get(b.id)!());
+    expect(within(dialog).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
+    await act(async () => finish.get(a.id)!());
+    expect(within(dialog).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "2");
   });
 
   it("opens the first skill and switches on click", async () => {

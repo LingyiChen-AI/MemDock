@@ -5,6 +5,11 @@ import type { SessionPreview, SessionSummary } from "@/api/types";
 import type { LiveSessionInfo } from "@/api/live";
 import type { WorktreeInfo, WorktreeStatus } from "@/api/worktree";
 
+vi.mock("@/api/env", () => ({
+  envDetect: vi.fn().mockResolvedValue({
+    tools: [{ name: "claude", installed: true }, { name: "codex", installed: true }],
+  }),
+}));
 vi.mock("@/api/memory", () => ({
   getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, accent: null, manual_projects: [] }),
   updateUiPrefs: vi.fn(),
@@ -88,6 +93,7 @@ import { SessionsPage } from "@/pages/sessions/SessionsPage";
 import { refreshLiveList, resetLiveStore } from "./liveStore";
 import { resetTerminalStore } from "./terminalStore";
 import { DEFAULT_PREFS, saveChatPrefs } from "./chatPrefs";
+import { saveProjectChatAgent } from "./newChatAgent";
 import { resetConvUi } from "./convUiState";
 import { resetComposerCaches } from "./Composer";
 import { parseWorktreePath, resetWorktreeStore } from "./worktreeStore";
@@ -247,19 +253,20 @@ describe("/worktree in the composer", () => {
 });
 
 describe("project ＋ menu", () => {
-  it("starts a Codex draft from a Codex project even when Claude was last used", async () => {
-    saveChatPrefs({ ...DEFAULT_PREFS, agent: "claude", cwd: "/work/demo" });
+  it("uses the configured tool independently of the project filter and last-used tool", async () => {
+    saveChatPrefs({ ...DEFAULT_PREFS, agent: "codex", cwd: "/work/demo" });
+    saveProjectChatAgent("claude");
     (listSessions as Mock).mockResolvedValue([mk({ id: "codex-1", tool: "codex" })]);
     renderApp(<SessionsPage />);
     await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
     const project = await screen.findByRole("region", { name: "demo" });
     await userEvent.click(within(project).getByRole("button", { name: "新建" }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /新建会话 · Codex/ }));
-    await userEvent.type(screen.getByRole("textbox"), "hello Codex{Enter}");
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^新建会话/ }));
+    await userEvent.type(screen.getByRole("textbox"), "hello Claude{Enter}");
     await waitFor(() => expect(liveStart).toHaveBeenCalledWith(expect.objectContaining({
-      agent: "codex",
+      agent: "claude",
       cwd: "/work/demo",
-      prompt: "hello Codex",
+      prompt: "hello Claude",
     })));
   });
 
@@ -298,16 +305,18 @@ describe("starting a worktree draft", () => {
   }
 
   it("first send creates the worktree, then starts the live session in it", async () => {
+    saveProjectChatAgent("codex");
     await worktreeDraft();
     await screen.findByRole("button", { name: "在独立工作区运行（仅新会话）: 开" });
     await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "Fix login{Enter}");
-    await waitFor(() => expect(liveStart).toHaveBeenCalledWith(expect.objectContaining({ cwd: WT, prompt: "Fix login", resume_id: null })));
+    await waitFor(() => expect(liveStart).toHaveBeenCalledWith(expect.objectContaining({ agent: "codex", cwd: WT, prompt: "Fix login", resume_id: null })));
     expect(worktreeCreate).toHaveBeenCalledWith("/work/demo", "Fix login");
     expect((worktreeCreate as Mock).mock.invocationCallOrder[0]).toBeLessThan((liveStart as Mock).mock.invocationCallOrder[0]);
   });
 
   it("a failed create shows the error and keeps the text", async () => {
     (worktreeCreate as Mock).mockRejectedValue("分支 memdock/fix-login 已存在");
+    saveProjectChatAgent("codex");
     await worktreeDraft();
     await screen.findByRole("button", { name: "在独立工作区运行（仅新会话）: 开" });
     await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "Fix login{Enter}");

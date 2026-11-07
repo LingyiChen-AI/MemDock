@@ -1,0 +1,5 @@
+changelog:
+  categories:
+    - title: 合并的 PR
+      labels:
+        - '*'

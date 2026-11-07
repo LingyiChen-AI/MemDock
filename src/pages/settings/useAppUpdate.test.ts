@@ -21,14 +21,20 @@ describe("desktop updates", () => {
     vi.unstubAllEnvs();
   });
 
-  it("checks on startup and every six hours", async () => {
+  it("checks on startup and every 30 minutes", async () => {
     vi.mocked(check).mockResolvedValue(null);
     const { result } = renderHook(() => useAppUpdate(false));
     await act(() => vi.advanceTimersByTimeAsync(5_000));
     expect(check).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("idle");
-    await act(() => vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000));
+    const candidate = { version: "0.2.0", close: vi.fn().mockResolvedValue(undefined) } as unknown as Update;
+    vi.mocked(check).mockResolvedValueOnce(candidate);
+    await act(() => vi.advanceTimersByTimeAsync(30 * 60 * 1000));
     expect(check).toHaveBeenCalledTimes(2);
+    expect(result.current.update).toBe(candidate);
+    await act(() => vi.advanceTimersByTimeAsync(30 * 60 * 1000));
+    expect(check).toHaveBeenCalledTimes(3);
+    expect(candidate.close).toHaveBeenCalledOnce();
   });
 
   it("installs a discovered update on demand and lets the user restart", async () => {

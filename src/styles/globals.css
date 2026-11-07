@@ -271,3 +271,8 @@ html.dark[data-accent="teal"] {
 ::highlight(chat-quote) {
   background-color: color-mix(in oklab, var(--warning) 38%, transparent);
 }
+
+@keyframes update-download {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}

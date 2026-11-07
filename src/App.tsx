@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppProviders } from "@/providers";
 import { AppShell, type NavKey } from "@/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -13,7 +13,6 @@ import { SessionsPage, type NewRequest } from "@/pages/sessions/SessionsPage";
 import { FeishuPage } from "@/pages/feishu/FeishuPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { useAppUpdate } from "@/pages/settings/useAppUpdate";
-import { fmt } from "@/pages/memory/paths";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
 import { AccountSlot } from "@/components/account/AccountSlot";
@@ -41,14 +40,6 @@ function Shell() {
   // Counts only: streaming tokens do not re-render the shell.
   const activeChats = useLiveStore(selectActiveCount);
   const appUpdate = useAppUpdate(dirty || activeChats > 0);
-  const updateVersion = appUpdate.update?.version;
-  const notifiedVersion = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (updateVersion && notifiedVersion.current !== updateVersion) {
-      notifiedVersion.current = updateVersion;
-      toasts.push("info", fmt(t.appUpdate.available, { version: updateVersion }));
-    }
-  }, [updateVersion, t.appUpdate.available, toasts.push]);
   // "New chat" / "new terminal" from the sidebar, handed to the chat page once it is open.
   const [newRequest, setNewRequest] = useState<NewRequest | null>(null);
   const requestHandled = useCallback(() => setNewRequest(null), []);
@@ -64,6 +55,7 @@ function Shell() {
       <AppShell
         current={current}
         onNavigate={navigate}
+        onOpenUpdate={appUpdate.update && appUpdate.status !== "installed" ? () => navigate("settings") : undefined}
         badges={{ review: pending?.total, chat: activeChats }}
         onNewChat={() => {
           setNewRequest("chat");

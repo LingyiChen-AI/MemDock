@@ -51,13 +51,35 @@ const names = () => within(screen.getByRole("listbox")).getAllByRole("option").m
 describe("SkillList", () => {
   it("list groups writable before readonly", () => {
     setup([plug, zeta, sys, alpha]);
-    expect(names()).toEqual(["alpha", "zeta", "imagegen", "plugged"]);
+    expect(names()).toEqual(["alpha", "zeta", "imagegen"]);
+    expect(screen.getByRole("button", { name: /superpowers/ })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("read-only rows are dimmed to 60%", () => {
-    setup([alpha, plug]);
-    const opt = within(screen.getByRole("listbox")).getAllByRole("option").find((o) => within(o).queryByText("plugged"))!;
-    expect(opt.className).toContain("opacity-60");
+  it("updates the whole plugin package and keeps system skills visually muted", async () => {
+    const onUpdatePlugin = vi.fn();
+    setup([alpha, plug, sys], { onUpdatePlugin });
+    await userEvent.click(screen.getByRole("button", { name: /更新.*插件包 superpowers/ }));
+    expect(onUpdatePlugin).toHaveBeenCalledWith(plug);
+    await userEvent.click(screen.getByRole("button", { name: /^superpowers/ }));
+    expect(screen.getByText("plugged").closest('[role="option"]')).not.toHaveClass("opacity-60");
+    expect(screen.getByText("imagegen").closest('[role="option"]')).toHaveClass("opacity-60");
+  });
+
+  it("separates plugin installations by tool and expands search matches", async () => {
+    const claude = { ...plug, plugin: "superpowers@official", plugin_version: "7.0.1" };
+    const codex = { ...claude, id: "codex:brainstorming", tool: "codex" as const, name: "brainstorming" };
+    setup([claude, codex]);
+    expect(screen.getByRole("button", { name: /superpowers Claude Code.*7\.0\.1/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /superpowers Codex.*7\.0\.1/ })).toHaveAttribute("aria-expanded", "false");
+    await userEvent.type(screen.getByRole("searchbox"), "brainstorming");
+    expect(names()).toEqual(["brainstorming"]);
+    const pack = screen.getByRole("button", { name: /superpowers Codex/ });
+    expect(pack).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(pack);
+    expect(pack).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("brainstorming")).not.toBeInTheDocument();
+    await userEvent.click(pack);
+    expect(names()).toEqual(["brainstorming"]);
   });
 
   it("search filters by name and description", async () => {
@@ -81,20 +103,23 @@ describe("SkillList", () => {
     await selectOption(screen.getByLabelText("范围"), "project");
     expect(names()).toEqual(["beta"]);
     await selectOption(screen.getByLabelText("范围"), "global");
+    expect(names()).toEqual(["alpha", "zeta"]);
+    await userEvent.click(screen.getByRole("button", { name: /superpowers/ }));
     expect(names()).toEqual(["alpha", "zeta", "plugged"]);
     await selectOption(screen.getByLabelText("范围"), "readonly");
     expect(names()).toEqual(["plugged"]);
   });
 
-  it("shows tool, scope and source tags", () => {
+  it("shows tool, scope and source tags", async () => {
     setup([gh, proj, plug, sys]);
+    await userEvent.click(screen.getByRole("button", { name: /superpowers/ }));
     const row = (n: string) => within(screen.getByRole("listbox")).getAllByRole("option").find((o) => within(o).queryByText(n))!;
     expect(within(row("gh-skill")).getByText("GitHub")).toBeInTheDocument();
     expect(within(row("gh-skill")).getByText("Claude Code")).toBeInTheDocument();
     expect(within(row("gh-skill")).getByText("全局")).toBeInTheDocument();
     expect(within(row("beta")).getByText("jev-rpa")).toBeInTheDocument();
     expect(within(row("beta")).getByText("本地")).toBeInTheDocument();
-    expect(within(row("plugged")).getByText("superpowers")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^superpowers/ })).toBeInTheDocument();
     expect(within(row("imagegen")).getByText("系统")).toBeInTheDocument();
   });
 

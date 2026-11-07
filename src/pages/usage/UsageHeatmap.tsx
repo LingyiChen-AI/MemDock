@@ -1,13 +1,13 @@
 import * as React from "react";
 import { CalendarDays } from "lucide-react";
 import { usageSummary } from "@/api/usage";
-import type { Tool, UsageReport, UsageView } from "@/api/types";
+import type { Tool, UsageReport } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { htmlLang } from "@/i18n";
 import { useI18n } from "@/i18n/I18nProvider";
 import { fmt } from "@/pages/memory/paths";
 import { errorMessage } from "@/pages/skills/skillUtils";
-import { buildHeatGrid, fmtCostFull, fmtInt, heatmapRange, wallStart, WALL_STEP, type HeatCell, type HeatMetric, type HeatStat, type HeatTool } from "./heatmapUtils";
+import { buildHeatGrid, cellStep, fmtCostFull, fmtInt, heatmapRange, type HeatCell, type HeatMetric, type HeatStat, type HeatTool } from "./heatmapUtils";
 import { fmtTokens } from "./usageUtils";
 
 const LABEL_W = 28;
@@ -72,16 +72,15 @@ function Seg<T extends string>({
 }
 
 interface Props {
-  view: UsageView;
-  range: { from: string; to: string };
+  today: string;
   tools: Tool[];
   models: string[];
-  /** Changes whenever the page reloaded its data; the heatmap reloads too. */
-  version: unknown;
+  /** Changes when local usage data is updated or rescanned. */
+  version: number;
 }
 
 /** GitHub-style daily activity grid: columns are weeks, rows Monday..Sunday. */
-export function UsageHeatmap({ view, range, tools, models, version }: Props) {
+export function UsageHeatmap({ today, tools, models, version }: Props) {
   const { t, language } = useI18n();
   const h = t.usage.heatmap;
   const [metric, setMetric] = React.useState<HeatMetric>("tokens");
@@ -96,7 +95,7 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
   const lockedTool: Tool | null = tools.length === 1 ? tools[0] : null;
   const heatTool: HeatTool = lockedTool ?? pickedTool;
 
-  const span = React.useMemo(() => heatmapRange(view, range, new Date()), [view, range]);
+  const span = React.useMemo(() => heatmapRange(today), [today]);
   const toolsKey = tools.join(",");
   const modelsKey = models.join("\u0000");
 
@@ -118,24 +117,22 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [span.from, span.to, toolsKey, modelsKey, version]);
 
-  // GitHub-style wall: fixed cell size, as many weeks as fit, ending at the range end.
-  const wallFrom = width > 0 ? wallStart(span.from, span.to, width - LABEL_W) : span.from;
   const grid = React.useMemo(
-    () => (report ? buildHeatGrid(report.rows, wallFrom, span.to, metric, heatTool, span.from) : null),
-    [report, wallFrom, span, metric, heatTool],
+    () => (report ? buildHeatGrid(report.rows, span.from, span.to, metric, heatTool) : null),
+    [report, span, metric, heatTool],
   );
   const weeks = grid?.weeks.length ?? 5;
   // A range longer than the card scrolls; start at the newest week, like GitHub.
   React.useEffect(() => {
     const el = boxRef.current;
     if (el) el.scrollLeft = el.scrollWidth;
-  }, [grid]);
-  const step = WALL_STEP;
+  }, [weeks, width]);
+  const step = cellStep(width - LABEL_W, weeks);
   const cell = step - GAP;
   const svgW = LABEL_W + weeks * step;
   const svgH = TOP_H + 7 * step;
   const statOf = (c: HeatCell): HeatStat => (heatTool === "claude" ? c.claude : heatTool === "codex" ? c.codex : c.total);
-  const activeDays = grid ? grid.weeks.flat().filter((c) => c && !c.outside && statOf(c).tokens > 0).length : 0;
+  const activeDays = grid ? grid.weeks.flat().filter((c) => c && statOf(c).tokens > 0).length : 0;
   const monthFmt = React.useMemo(() => new Intl.DateTimeFormat(htmlLang(language), { month: "short" }), [language]);
   const monthLabel = (m: string) => {
     const [y, mo] = m.split("-").map(Number);
@@ -166,7 +163,6 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
           {h.title}
           <span className="font-normal text-muted-foreground tabular-nums">
             {`${span.from} ~ ${span.to}`}
-            {view === "today" ? ` · ${h.last30}` : ""}
             {grid ? ` · ${fmt(h.activeDays, { n: activeDays })}` : ""}
           </span>
         </h2>
@@ -223,10 +219,10 @@ export function UsageHeatmap({ view, range, tools, models, version }: Props) {
                     width={cell}
                     height={cell}
                     rx={cell > 16 ? 3 : 2}
-                    style={{ fill: LEVEL_FILL[c.level], opacity: c.outside ? 0.45 : 1 }}
+                    style={{ fill: LEVEL_FILL[c.level] }}
                     stroke={hover?.cell.date === c.date ? "var(--foreground)" : "none"}
                     strokeWidth={1}
-                    onMouseEnter={(e) => (c.outside ? setHover(null) : show(c, e.currentTarget))}
+                    onMouseEnter={(e) => show(c, e.currentTarget)}
                   />
                 ) : (
                   // Outside the selected range: an empty, faded cell keeps the grid whole.

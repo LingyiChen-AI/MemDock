@@ -3,16 +3,18 @@ name: Desktop Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-release
+  group: ${{ github.event_name == 'push' && 'desktop-release' || 'desktop-release-cache' }}
   cancel-in-progress: false
 
 jobs:
   prepare:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,13 +32,18 @@ jobs:
           test "$version" = "$(jq -r .version src-tauri/tauri.conf.json)"
           test "$version" = "$(jq -r .version package.json)"
           test "$version" = "$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          test -s "$notes"
+          grep -qx '## 更新与改进' "$notes"
+          grep -qx '## 问题修复' "$notes"
       - name: Prepare draft release
         id: draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --generate-notes --title "MemDock $GITHUB_REF_NAME"
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --generate-notes \
+              --notes "$(cat "docs/releases/$GITHUB_REF_NAME.md")" --title "MemDock $GITHUB_REF_NAME"
           fi
           test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
           id="$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)"
@@ -45,6 +52,9 @@ jobs:
 
   build:
     needs: prepare
+    if: >-
+      !cancelled() && (needs.prepare.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     permissions:
       contents: write
     strategy:
@@ -61,13 +71,14 @@ jobs:
             target: x86_64-pc-windows-msvc
             cargo-jobs: 4
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.cargo-jobs }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24.21.0
-          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -75,11 +86,15 @@ jobs:
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
+          save-if: ${{ github.event_name == 'workflow_dispatch' }}
       - run: pnpm install --frozen-lockfile
+      - name: Warm release cache
+        if: github.event_name == 'workflow_dispatch'
+        run: pnpm tauri build --no-bundle --target ${{ matrix.target }}
       - uses: tauri-apps/tauri-action@v1
+        if: github.event_name == 'push'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          CARGO_BUILD_JOBS: ${{ matrix.cargo-jobs }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: '-'

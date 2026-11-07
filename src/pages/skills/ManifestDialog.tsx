@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { basename, fmt } from "@/pages/memory/paths";
 import { FlowDialog, InlineError, describeError } from "./flowParts";
-import { installFromManifest } from "./manifestInstall";
+import { installFromManifest, isLocalOnly } from "./manifestInstall";
 import { errorMessage } from "./skillUtils";
 import type { ToastKind } from "./Toasts";
 
@@ -28,11 +28,10 @@ export interface ManifestDialogProps {
 type Source = { kind: "cloud" } | { kind: "file"; name: string; manifest: SkillManifest };
 type Result = { ok: true } | { ok: false; message: string };
 
-const isLocalOnly = (m: ManifestSkill) => Boolean(m.local_only) || !m.url;
-
 /** Identity used by the backend: url + path + tool + scope, or name + tool + scope for local-only entries. */
 export function manifestKey(m: ManifestSkill): string {
   const scope = m.scope.type === "global" ? "" : m.scope.key;
+  if (m.plugin) return `${m.tool}|${scope}|plugin:${m.plugin.key}|${Boolean(m.plugin.local_scope)}`;
   return isLocalOnly(m) ? `${m.tool}|${scope}|local:${m.name}` : `${m.tool}|${scope}|${m.url}|${m.skill_path}`;
 }
 
@@ -134,8 +133,8 @@ export function ManifestDialog({ open, onOpenChange, notify, onOpenSync, onInsta
 
   const scopeText = (m: ManifestSkill) => (m.scope.type === "global" ? s.globalScope : fmt(s.projectScope, { key: m.scope.key }));
   const meta = (m: ManifestSkill) => (
-    <p className="truncate text-xs text-muted-foreground" title={m.url || undefined}>
-      {m.url ? <span className="font-mono">{m.url.replace(/^https?:\/\//, "")}{m.skill_path ? `/${m.skill_path}` : ""}</span> : s.localOnlyTag}
+    <p className="truncate text-xs text-muted-foreground" title={m.plugin?.key || m.url || undefined}>
+      {m.plugin ? <span className="font-mono">{m.plugin.version ?? m.plugin.key}</span> : m.url ? <span className="font-mono">{m.url.replace(/^https?:\/\//, "")}{m.skill_path ? `/${m.skill_path}` : ""}</span> : s.localOnlyTag}
       {" · "}
       {m.tool === "claude" ? "Claude" : "Codex"}
       {" · "}

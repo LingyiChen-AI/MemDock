@@ -210,6 +210,8 @@ export interface SkillEntry {
   symlink_target: string | null;
   readonly: boolean;
   plugin: string | null;
+  plugin_version?: string | null;
+  plugin_install_path?: string | null;
   source: SkillSource | null;
   file_count: number;
   size_bytes: number;
@@ -596,6 +598,7 @@ export interface PrefsUploadResult {
 export type ManifestScope = { type: "global" } | { type: "project"; key: string };
 
 export interface ManifestSkill {
+  plugin?: { key: string; version?: string | null; local_scope?: boolean };
   name: string;
   url: string;
   git_ref: string | null;

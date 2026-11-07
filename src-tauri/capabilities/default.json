@@ -17,6 +17,7 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "process:allow-restart",
+    "autostart:default",
     "updater:allow-check",
     "updater:allow-download-and-install",
     {

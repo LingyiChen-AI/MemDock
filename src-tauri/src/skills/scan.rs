@@ -587,8 +587,8 @@ mod tests {
         let target = s.symlink_target.as_deref().unwrap();
         assert!(!target.starts_with("\\\\?\\"));
         assert_eq!(
-            normalize_path(target),
-            normalize_path(&real.to_string_lossy())
+            Path::new(target).canonicalize().unwrap(),
+            real.canonicalize().unwrap()
         );
     }
 

@@ -402,5 +402,5 @@ fn session_list_keeps_the_latest_rollout_for_a_codex_thread() {
     let list = list_sessions_impl(&e.paths, &e.data, &cache);
     let codex_rows: Vec<_> = list.iter().filter(|s| s.tool == Tool::Codex).collect();
     assert_eq!(codex_rows.len(), 1);
-    assert_eq!(codex_rows[0].path, latest.to_string_lossy());
+    assert_eq!(Path::new(&codex_rows[0].path), latest);
 }

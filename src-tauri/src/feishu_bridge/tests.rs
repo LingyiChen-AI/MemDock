@@ -244,7 +244,8 @@ fn natural_project_matching_distinguishes_names_boundaries_and_duplicates() {
 fn project_agent_operations_use_the_same_permissions_and_path_validation() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = bot();
-    let root = canonical_root(dir.path()).unwrap();
+    let temp_root = dir.path().canonicalize().unwrap();
+    let root = canonical_root(&temp_root).unwrap();
     config.projects.push(ProjectGrant {
         path: root.to_string_lossy().into_owned(),
         read: true,

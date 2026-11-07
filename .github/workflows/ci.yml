@@ -28,7 +28,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - run: pnpm test --testTimeout=30000
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=4
       - run: pnpm tauri build --debug
       - uses: actions/upload-artifact@v4

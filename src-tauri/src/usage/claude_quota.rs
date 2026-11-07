@@ -121,7 +121,11 @@ mod tests {
         assert_eq!(parse_credentials(r#"{"claudeAiOauth":{"accessToken":""}}"#), None);
         assert_eq!(parse_credentials("nope"), None);
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(read_token(tmp.path()), None);
+        std::fs::write(
+            tmp.path().join(".credentials.json"),
+            r#"{"claudeAiOauth":{"accessToken":"test-token"}}"#,
+        ).unwrap();
+        assert!(read_token(tmp.path()).as_deref() == Some("test-token"));
     }
 
     #[test]

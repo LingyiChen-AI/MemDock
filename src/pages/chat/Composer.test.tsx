@@ -256,7 +256,9 @@ describe("ChatComposer", () => {
     expect(onAgentChange).toHaveBeenCalledWith("codex");
     expect(loadChatPrefs().agent).toBe("codex");
 
-    await userEvent.click(within(status()).getByRole("button", { name: /工作目录/ }));
+    await userEvent.type(box(), "/");
+    const cwdMenu = await screen.findByRole("listbox", { name: "命令" });
+    await userEvent.click(within(cwdMenu).getByText("/cwd"));
     await userEvent.click(await screen.findByRole("option", { name: /api/ }));
     expect(onCwdChange).toHaveBeenCalledWith("/work/api");
     expect(loadChatPrefs().cwd).toBe("/work/api");

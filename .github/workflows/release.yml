@@ -1,0 +1,110 @@
+name: Desktop Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate release tag
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$version" = "$(jq -r .version src-tauri/tauri.conf.json)"
+          test "$version" = "$(jq -r .version package.json)"
+          test "$version" = "$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+      - name: Prepare draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --generate-notes --title "MemDock $GITHUB_REF_NAME"
+          fi
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+          id="$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)"
+          [[ "$id" =~ ^[0-9]+$ ]]
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust-targets: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: pnpm install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          releaseId: ${{ needs.prepare.outputs.release-id }}
+          tagName: ${{ github.ref_name }}
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+          retryAttempts: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Validate and publish signed release
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern latest.json
+          jq -e --arg version "${GITHUB_REF_NAME#v}" --arg prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" '
+            .version == $version and (
+              .platforms | [.["darwin-aarch64"], .["darwin-x86_64"], .["windows-x86_64"]]
+              | all(. != null and (.signature | length > 0) and (.url | startswith($prefix)))
+            )
+          ' latest.json
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body > release-notes.md
+          jq --rawfile notes release-notes.md '.notes = ($notes | rtrimstr("\n"))' latest.json > verified.json
+          mv verified.json latest.json
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

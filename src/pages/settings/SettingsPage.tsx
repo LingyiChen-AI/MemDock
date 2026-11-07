@@ -25,6 +25,8 @@ import type { EnvReport, EnvToolStatus } from "@/api/types";
 import { AppearanceControls } from "@/components/appearance/AppearanceControls";
 import { NewChatDirSettings } from "./NewChatDirSection";
 import { PrefsSyncSection } from "./PrefsSyncSection";
+import { AppUpdateSection } from "./AppUpdateSection";
+import type { AppUpdate } from "./useAppUpdate";
 import { Button } from "@/components/ui/button";
 import type { NavKey } from "@/layout/AppShell";
 import { Switch } from "@/components/ui/switch";
@@ -141,9 +143,10 @@ function ToolRow({
 
 export interface SettingsPageProps {
   onNavigate?: (key: NavKey) => void;
+  appUpdate?: AppUpdate;
 }
 
-export function SettingsPage({ onNavigate }: SettingsPageProps) {
+export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
   const { t } = useI18n();
   const s = t.settings;
   const [env, setEnv] = React.useState<EnvReport | null>(null);
@@ -266,6 +269,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
           {s.title}
         </h1>
 
+        {appUpdate && <AppUpdateSection state={appUpdate} />}
         <Section
           icon={TerminalSquare}
           title={s.env.title}

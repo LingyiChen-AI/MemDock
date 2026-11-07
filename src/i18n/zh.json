@@ -1100,6 +1100,26 @@
       "last30": "最近 30 天"
     }
   },
+  "appUpdate": {
+    "title": "应用更新",
+    "version": "当前版本 {version}",
+    "schedule": "启动后自动检查，运行期间每 6 小时检查一次。",
+    "development": "安装版客户端支持检查更新。",
+    "check": "检查更新",
+    "checking": "正在检查更新…",
+    "current": "当前已是最新版本。",
+    "available": "发现 MemDock {version}。",
+    "install": "下载并安装",
+    "downloading": "正在下载更新…",
+    "installing": "正在验证并安装更新…",
+    "installed": "更新已安装，重启后生效。",
+    "restart": "立即重启",
+    "notes": "更新说明",
+    "blocked": "请先完成正在运行的对话并保存修改，再更新或重启。",
+    "checkError": "检查更新失败，请重试。",
+    "installError": "安装更新失败，请重试。",
+    "restartError": "自动重启失败，请重新打开 MemDock 以应用更新。"
+  },
   "settings": {
     "newChatDir": {
       "title": "新对话的默认目录",

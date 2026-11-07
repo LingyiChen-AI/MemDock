@@ -35,5 +35,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCOTMzMTUwQjFBMjczNUQKUldSZGM2S3hVREdURzFydUM4YWRuNEJLaXRPMWlMSERrY2hTb2IydTJMZHF2YTRVTXJqeVRMTXYK",
+      "endpoints": [
+        "https://github.com/LingyiChen-AI/MemDock/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

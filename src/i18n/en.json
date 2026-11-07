@@ -1100,6 +1100,26 @@
       "last30": "last 30 days"
     }
   },
+  "appUpdate": {
+    "title": "App updates",
+    "version": "Current version {version}",
+    "schedule": "Checks automatically at startup and every six hours.",
+    "development": "Update checks are available in packaged builds.",
+    "check": "Check for updates",
+    "checking": "Checking for updates…",
+    "current": "MemDock is up to date.",
+    "available": "MemDock {version} is available.",
+    "install": "Download and install",
+    "downloading": "Downloading update…",
+    "installing": "Verifying and installing update…",
+    "installed": "Update installed. Restart to apply it.",
+    "restart": "Restart now",
+    "notes": "Release notes",
+    "blocked": "Finish active chats and save your changes before updating or restarting.",
+    "checkError": "Could not check for updates. Try again.",
+    "installError": "Could not install the update. Try again.",
+    "restartError": "Could not restart automatically. Reopen MemDock to apply the update."
+  },
   "settings": {
     "newChatDir": {
       "title": "Folder for new chats",

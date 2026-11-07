@@ -86,25 +86,38 @@ jobs:
           retryAttempts: 3
 
   publish:
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
     steps:
       - name: Validate and publish signed release
         run: |
           gh release download "$GITHUB_REF_NAME" --pattern latest.json
-          jq -e --arg version "${GITHUB_REF_NAME#v}" --arg prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" '
+          prefix="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > assets.json
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body > release-notes.md
+          jq --slurpfile assets assets.json --rawfile notes release-notes.md --arg repo "$GITHUB_REPOSITORY" --arg prefix "$prefix" '
+            .notes = ($notes | rtrimstr("\n")) |
+            .platforms |= with_entries(
+              .value.url as $url |
+              ($assets[0] | map(select(
+                $url == ("https://api.github.com/repos/" + $repo + "/releases/assets/" + (.id | tostring)) or
+                $url == ($prefix + (.name | @uri))
+              )) | first) as $asset |
+              if $asset then .value.url = ($prefix + ($asset.name | @uri)) else error("Unknown update asset: " + $url) end
+            )
+          ' latest.json > verified.json
+          jq -e --arg version "${GITHUB_REF_NAME#v}" --arg prefix "$prefix" '
             .version == $version and (
               .platforms | [.["darwin-aarch64"], .["darwin-x86_64"], .["windows-x86_64"]]
               | all(. != null and (.signature | length > 0) and (.url | startswith($prefix)))
             )
-          ' latest.json
-          gh release view "$GITHUB_REF_NAME" --json body --jq .body > release-notes.md
-          jq --rawfile notes release-notes.md '.notes = ($notes | rtrimstr("\n"))' latest.json > verified.json
+          ' verified.json
           mv verified.json latest.json
           gh release upload "$GITHUB_REF_NAME" latest.json --clobber
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest

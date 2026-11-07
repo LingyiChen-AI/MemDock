@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MemoryEditor } from "./MemoryEditor";
+import { MemoryGraphPanel, type CachedMemoryGraph } from "./MemoryGraphPanel";
 import { MemoryTree } from "./MemoryTree";
 import { SearchPanel } from "./SearchPanel";
 import { allFiles, fileKey, findByKey } from "./paths";
@@ -38,6 +39,10 @@ export interface MemoryPageProps {
   openRequest?: { fileId: string; nonce: number } | null;
 }
 
+type Destination =
+  | { type: "file"; key: string; line?: number }
+  | { type: "graph"; projectId: string };
+
 export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: MemoryPageProps = {}) {
   const { t } = useI18n();
   const m = t.memory;
@@ -45,7 +50,9 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
   const [index, setIndex] = React.useState<MemoryIndex | null>(null);
   const [selectedKey, setSelectedKey] = React.useState<string | undefined>();
   const [dirty, setDirty] = React.useState(false);
-  const [pending, setPending] = React.useState<MemoryFile | null>(null);
+  const [pending, setPending] = React.useState<Destination | null>(null);
+  const [graphProjectId, setGraphProjectId] = React.useState<string>();
+  const graphCache = React.useRef(new Map<string, CachedMemoryGraph>());
   React.useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -95,6 +102,15 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
   const kept = !found && dirty && selectedKey && lastSelected.current?.key === selectedKey ? lastSelected.current.file : undefined;
   const selected = found ?? kept;
   const removed = !found && kept !== undefined;
+  const graphProject = index?.projects.find(({ project }) => project.id === graphProjectId);
+  React.useEffect(() => {
+    if (!index) return;
+    const ids = new Set(index.projects.map(({ project }) => project.id));
+    for (const id of graphCache.current.keys()) {
+      if (!ids.has(id)) graphCache.current.delete(id);
+    }
+    if (graphProjectId && !ids.has(graphProjectId)) setGraphProjectId(undefined);
+  }, [index, graphProjectId]);
   const [pendingRemove, setPendingRemove] = React.useState<(() => Promise<void>) | null>(null);
   const requestRemove = (project: Project, remove: () => Promise<void>) => {
     const open = selected && selected.scope.type === "project" && selected.scope.project_id === project.id;
@@ -102,14 +118,35 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
     else void remove();
   };
 
-  const select = React.useCallback(
-    (file: MemoryFile) => {
-      if (fileKey(file) === selectedKey) return;
-      if (dirty) setPending(file);
-      else setSelectedKey(fileKey(file));
-    },
-    [selectedKey, dirty],
-  );
+  const navigate = (destination: Destination) => {
+    if (destination.type === "graph") {
+      setSelectedKey(undefined);
+      setReveal(null);
+      setGraphProjectId(destination.projectId);
+      setSearch(null);
+    } else {
+      setGraphProjectId(undefined);
+      setSelectedKey(destination.key);
+      setReveal(destination.line === undefined ? null : {
+        key: destination.key,
+        line: destination.line,
+        nonce: ++revealNonce.current,
+      });
+    }
+  };
+  const select = (file: MemoryFile, line?: number) => {
+    const key = fileKey(file);
+    const destination: Destination = { type: "file", key, line };
+    if (key === selectedKey && line === undefined) return;
+    if (dirty && key !== selectedKey) setPending(destination);
+    else navigate(destination);
+  };
+  const openGraph = (projectId: string) => {
+    if (projectId === graphProjectId) return;
+    const destination: Destination = { type: "graph", projectId };
+    if (dirty) setPending(destination);
+    else navigate(destination);
+  };
 
   // Search result -> open the file (global occurrence first) and jump to the line.
   const openHit = (fileId: string, line: number) => {
@@ -117,8 +154,7 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
     const matches = allFiles(index).filter((f) => f.id === fileId);
     const file = matches.find((f) => f.scope.type === "global") ?? matches[0];
     if (!file) return;
-    select(file);
-    setReveal({ key: fileKey(file), line, nonce: ++revealNonce.current });
+    select(file, line);
   };
   const clearReveal = React.useCallback(() => setReveal(null), []);
 
@@ -185,6 +221,8 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
             index={index}
             selectedKey={selectedKey}
             onSelect={select}
+            graphProjectId={graphProjectId}
+            onOpenGraph={openGraph}
             onIndexChange={setIndex}
             onRemoveRequest={requestRemove}
             onSearchOpen={openSearch}
@@ -204,6 +242,8 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
                 index={index}
                 selectedKey={selectedKey}
                 onSelect={select}
+                graphProjectId={graphProjectId}
+                onOpenGraph={openGraph}
                 onIndexChange={setIndex}
                 onRemoveRequest={requestRemove}
                 pendingByProject={pendingByProject}
@@ -226,7 +266,19 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
         />
       </div>
       <div className="flex min-w-0 flex-1 border-l border-border">
-        {selected ? (
+        {graphProject ? (
+          <MemoryGraphPanel
+            key={graphProject.project.id}
+            entry={graphProject}
+            cache={graphCache.current}
+            onOpenSource={(file, line) => {
+              const current = graphProject.files.find((candidate) => fileKey(candidate) === fileKey(file));
+              if (!current?.exists) return false;
+              select(current, line);
+              return true;
+            }}
+          />
+        ) : selected ? (
           <MemoryEditor
             key={fileKey(selected)}
             file={selected}
@@ -274,14 +326,11 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
         onConfirm={() => {
           if (pending) {
             setDirty(false);
-            setSelectedKey(fileKey(pending));
+            navigate(pending);
           }
           setPending(null);
         }}
-        onCancel={() => {
-          setPending(null);
-          setReveal(null);
-        }}
+        onCancel={() => setPending(null)}
       />
     </div>
   );

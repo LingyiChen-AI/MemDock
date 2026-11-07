@@ -10,6 +10,7 @@ import { SkillsPage } from "@/pages/skills/SkillsPage";
 import { ReviewPage } from "@/pages/review/ReviewPage";
 import { UsagePage } from "@/pages/usage/UsagePage";
 import { SessionsPage, type NewRequest } from "@/pages/sessions/SessionsPage";
+import { FeishuPage } from "@/pages/feishu/FeishuPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { usePendingSummary } from "@/pages/review/usePendingSummary";
 import { ToastRegion, useToasts } from "@/pages/skills/Toasts";
@@ -89,6 +90,7 @@ function Shell() {
           ),
           chat: <SessionsPage request={newRequest} onRequestHandled={requestHandled} />,
           usage: <UsagePage />,
+          feishu: <FeishuPage />,
           settings: <SettingsPage onNavigate={navigate} />,
         }}
       >

@@ -3,6 +3,7 @@ import {
   BarChart3,
   BookOpen,
   ChevronDown,
+  Link2,
   ListChecks,
   MessagesSquare,
   Package,
@@ -44,7 +45,7 @@ import logoUrl from "@/assets/memdock-logo.svg";
 
 export const PROJECT_URL = "https://github.com/LingyiChen-AI/MemDock";
 
-export type NavKey = "chat" | "memory" | "review" | "extract" | "skills" | "sync" | "usage" | "settings";
+export type NavKey = "chat" | "memory" | "review" | "extract" | "skills" | "sync" | "usage" | "feishu" | "settings";
 
 type NavGroupKey = "work" | "memory" | "tools" | "data" | "system";
 
@@ -74,7 +75,7 @@ const NAV_GROUPS: { key: NavGroupKey; items: { key: NavKey; icon: LucideIcon }[]
       { key: "usage", icon: BarChart3 },
     ],
   },
-  { key: "system", items: [{ key: "settings", icon: Settings }] },
+  { key: "system", items: [{ key: "feishu", icon: Link2 }, { key: "settings", icon: Settings }] },
 ];
 
 const NAV = NAV_GROUPS.flatMap((g) => g.items);

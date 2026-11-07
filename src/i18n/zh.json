@@ -1,4 +1,62 @@
 {
+  "feishu": {
+    "title": "飞书连接",
+    "subtitle": "通过飞书使用本机编程助手，按项目设置访问权限。",
+    "connections": "连接列表",
+    "refresh": "刷新",
+    "add": "新增连接",
+    "edit": "编辑连接",
+    "test": "测试凭据",
+    "testOk": "飞书已接受凭据。启动连接后可验证事件是否送达。",
+    "saved": "连接已保存。",
+    "start": "启动",
+    "stop": "停止",
+    "remove": "移除连接",
+    "removeBody": "移除 {name} 和它保存的凭据？项目文件会保留。",
+    "cancel": "取消",
+    "save": "保存连接",
+    "loading": "正在加载连接…",
+    "emptyTitle": "还没有飞书连接",
+    "empty": "使用飞书企业自建应用的凭据添加连接。",
+    "formHint": "请使用飞书企业自建应用。App Secret 保存在系统凭据库。",
+    "formCredentials": "连接和应用凭据",
+    "formAccess": "聊天访问权限",
+    "name": "连接名称",
+    "engine": "执行工具",
+    "appId": "App ID",
+    "appSecret": "App Secret",
+    "keepSecret": "留空以保留已保存的密钥",
+    "tenant": "租户标识",
+    "users": "允许的用户 Open ID",
+    "groups": "允许的群聊 ID（可选）",
+    "private": "项目操作在私聊中进行。群聊里 @ 机器人只会提示转到私聊。",
+    "unavailable": "请先取消绑定不可用的项目。",
+    "unavailableShort": "不可用",
+    "projectPermissions": "绑定项目与权限",
+    "projectHint": "可以绑定多个项目。新绑定默认只读。",
+    "project": "项目",
+    "bind": "绑定 {project}",
+    "noProjects": "当前没有可用项目，请先在 MemDock 打开或添加项目。",
+    "noPermissions": "无权限",
+    "status": {
+      "stopped": "已停止",
+      "connecting": "连接中",
+      "connected": "已连接",
+      "error": "连接异常"
+    },
+    "permissions": {
+      "read": "读取",
+      "create": "新建",
+      "edit": "修改",
+      "delete": "删除"
+    },
+    "permissionLabels": {
+      "read": "读取 {project} 的文件",
+      "create": "在 {project} 新建文件",
+      "edit": "修改 {project} 的文件",
+      "delete": "删除 {project} 的文件"
+    }
+  },
   "workspaceCode": {
     "unsavedCloseBody": "选择不保存后，本次修改会丢失。",
     "saveBeforeClose": "关闭前保存更改？",
@@ -50,6 +108,7 @@
     "discard": "要丢弃该文件的未保存修改吗？"
   },
   "nav": {
+    "feishu": "飞书连接",
     "chat": "对话",
     "memory": "记忆总览",
     "review": "待审核记忆",

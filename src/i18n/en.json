@@ -1,4 +1,62 @@
 {
+  "feishu": {
+    "title": "Feishu Connections",
+    "subtitle": "Connect local coding agents to Feishu and set access for each project.",
+    "connections": "Connections",
+    "refresh": "Refresh",
+    "add": "Add connection",
+    "edit": "Edit connection",
+    "test": "Test credentials",
+    "testOk": "Feishu accepted the credentials. Start the connection to verify event delivery.",
+    "saved": "Connection saved.",
+    "start": "Start",
+    "stop": "Stop",
+    "remove": "Remove connection",
+    "removeBody": "Remove {name} and its saved credentials? Project files will remain in place.",
+    "cancel": "Cancel",
+    "save": "Save connection",
+    "loading": "Loading connections…",
+    "emptyTitle": "No Feishu connections",
+    "empty": "Add a connection with your Feishu enterprise app credentials to get started.",
+    "formHint": "Use a Feishu enterprise self-built application. The App Secret is stored in the system credential store.",
+    "formCredentials": "Connection and credentials",
+    "formAccess": "Chat access",
+    "name": "Connection name",
+    "engine": "Agent",
+    "appId": "App ID",
+    "appSecret": "App Secret",
+    "keepSecret": "Leave blank to keep the stored secret",
+    "tenant": "Tenant key",
+    "users": "Allowed user Open IDs",
+    "groups": "Allowed group chat IDs (optional)",
+    "private": "Project work runs in direct messages. Group mentions only direct users to the bot’s private chat.",
+    "unavailable": "Unbind unavailable projects before saving.",
+    "unavailableShort": "Unavailable",
+    "projectPermissions": "Project bindings and permissions",
+    "projectHint": "Select one or more projects. New bindings are read-only by default.",
+    "project": "Project",
+    "bind": "Bind {project}",
+    "noProjects": "No available projects. Add or open a project in MemDock first.",
+    "noPermissions": "No permissions",
+    "status": {
+      "stopped": "Stopped",
+      "connecting": "Connecting",
+      "connected": "Connected",
+      "error": "Error"
+    },
+    "permissions": {
+      "read": "Read",
+      "create": "Create",
+      "edit": "Modify",
+      "delete": "Delete"
+    },
+    "permissionLabels": {
+      "read": "Read files in {project}",
+      "create": "Create files in {project}",
+      "edit": "Modify files in {project}",
+      "delete": "Delete files in {project}"
+    }
+  },
   "workspaceCode": {
     "unsavedCloseBody": "Your changes will be lost if you close without saving.",
     "saveBeforeClose": "Save changes before closing?",
@@ -50,6 +108,7 @@
     "discard": "Discard unsaved changes to this file?"
   },
   "nav": {
+    "feishu": "Feishu Connections",
     "chat": "Chat",
     "memory": "Memories",
     "review": "Memory review",

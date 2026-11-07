@@ -20,7 +20,7 @@ pub mod codex;
 pub mod models;
 pub mod registry;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -292,6 +292,12 @@ fn size_of(ev: &LiveEvent) -> usize {
     serde_json::to_string(ev).map(|s| s.len()).unwrap_or(0)
 }
 
+struct PendingMessage {
+    text: String,
+    images: Vec<String>,
+    image_refs: Vec<String>,
+}
+
 /// State and log of one session; guarded by its own lock.
 struct Entry {
     info: LiveSessionInfo,
@@ -300,6 +306,7 @@ struct Entry {
     seq: u64,
     /// Index in `events` where the current turn starts (for compaction).
     turn_start: usize,
+    pending_messages: VecDeque<PendingMessage>,
     exited: bool,
     /// Epoch ms of the last event or UI call.
     last_active: i64,
@@ -384,13 +391,19 @@ impl LiveManager {
         e.info.state = state;
         Self::push(shared, e, live_id, LiveEvent::Status { state }, None);
         if state == LiveState::Exited {
+            if !e.pending_messages.is_empty() {
+                e.pending_messages.clear();
+                Self::push(shared, e, live_id, LiveEvent::Error {
+                    message: "会话已结束，排队中的消息未发送。".into(),
+                    fatal: false,
+                }, None);
+            }
             shared.registry.release_owner(&Owner::live(live_id));
         }
     }
 
-    /// Records `ev` for `live_id`, updates the summary and publishes it, all
-    /// under the session's lock. `stored` replaces the event in the log.
-    fn record_with(shared: &Shared, live_id: &str, ev: LiveEvent, stored: Option<LiveEvent>) {
+    /// Records a driver event and updates the summary under the session's lock.
+    fn record(shared: &Shared, live_id: &str, ev: LiveEvent) {
         let Some(s) = shared.get(live_id) else { return };
         let mut guard = s.entry.lock().unwrap();
         let e = &mut *guard;
@@ -414,7 +427,6 @@ impl LiveManager {
                 }
                 (e.info.state == LiveState::Starting).then_some(LiveState::Idle)
             }
-            LiveEvent::UserMessage { .. } => Some(LiveState::Running),
             LiveEvent::ApprovalRequest { .. } => Some(LiveState::WaitingApproval),
             LiveEvent::ApprovalResolved { .. } => {
                 (e.info.state == LiveState::WaitingApproval).then_some(LiveState::Running)
@@ -427,7 +439,7 @@ impl LiveManager {
         let now = now_ms();
         e.info.updated_at = now;
         e.last_active = now;
-        Self::push(shared, e, live_id, ev, stored);
+        Self::push(shared, e, live_id, ev, None);
         if let Some(st) = next_state {
             Self::set_state(shared, e, live_id, st);
         }
@@ -435,10 +447,6 @@ impl LiveManager {
             compact_turn(e);
         }
         enforce_cap(e, &shared.limits);
-    }
-
-    fn record(shared: &Shared, live_id: &str, ev: LiveEvent) {
-        Self::record_with(shared, live_id, ev, None)
     }
 
     pub fn start(&self, opts: StartOptions) -> Result<LiveSessionInfo, String> {
@@ -486,6 +494,7 @@ impl LiveManager {
             bytes: 0,
             seq: 0,
             turn_start: 0,
+            pending_messages: VecDeque::new(),
             exited: false,
             last_active: now,
             attached: false,
@@ -493,7 +502,15 @@ impl LiveManager {
         let session = Arc::new(Session { entry: Mutex::new(entry), driver: Mutex::new(None) });
         self.shared.sessions.lock().unwrap().insert(live_id.clone(), session.clone());
         let (shared, id) = (self.shared.clone(), live_id.clone());
-        let emit: Emit = Arc::new(move |ev| Self::record(&shared, &id, ev));
+        let emit: Emit = Arc::new(move |ev| {
+            let completed = matches!(ev, LiveEvent::TurnCompleted { .. });
+            Self::record(&shared, &id, ev);
+            if completed && shared.get(&id).is_some_and(|s| !s.entry.lock().unwrap().pending_messages.is_empty()) {
+                let (shared, id) = (shared.clone(), id.clone());
+                // A driver can emit synchronously while its own lock is held.
+                std::thread::spawn(move || Self::dispatch_followups(&shared, &id));
+            }
+        });
         let driver = match (self.spawner)(&opts, emit.clone()) {
             Ok(d) => d,
             Err(e) => {
@@ -557,27 +574,77 @@ impl LiveManager {
             .iter()
             .map(|uri| codex::save_image(uri).map(|p| format!("{IMAGE_REF_PREFIX}{p}")))
             .collect::<Result<Vec<_>, _>>()?;
-        let prev = {
+        let message = PendingMessage { text: text.into(), images: images.to_vec(), image_refs: refs };
+        Self::with_driver(&s, |driver| {
             let mut e = s.entry.lock().unwrap();
-            if e.info.title.is_empty() {
-                e.info.title = title_of(text);
+            match e.info.state {
+                LiveState::Exited => return Err("会话已结束".into()),
+                LiveState::Running | LiveState::WaitingApproval => {
+                    e.pending_messages.push_back(message);
+                    return Ok(());
+                }
+                _ if !e.pending_messages.is_empty() => {
+                    e.pending_messages.push_back(message);
+                    return Ok(());
+                }
+                _ => {}
             }
-            e.info.state
-        };
+            let prev = Self::begin_message(&self.shared, &mut e, live_id, &message);
+            drop(e);
+            Self::write_message(&self.shared, &s, live_id, driver, message, prev)
+        })
+    }
+
+    fn begin_message(shared: &Shared, e: &mut Entry, live_id: &str, message: &PendingMessage) -> LiveState {
+        if e.info.title.is_empty() {
+            e.info.title = title_of(&message.text);
+        }
+        let prev = e.info.state;
         let id = format!("user-{}", uuid::Uuid::new_v4());
+        e.info.updated_at = now_ms();
+        e.last_active = e.info.updated_at;
         // Recorded before the write, so the turn's own events can't overtake it.
-        Self::record_with(
-            &self.shared,
+        Self::push(
+            shared,
+            e,
             live_id,
-            LiveEvent::UserMessage { id: id.clone(), text: text.to_string(), images: images.to_vec() },
-            Some(LiveEvent::UserMessage { id, text: text.to_string(), images: refs }),
+            LiveEvent::UserMessage { id: id.clone(), text: message.text.clone(), images: message.images.clone() },
+            Some(LiveEvent::UserMessage { id, text: message.text.clone(), images: message.image_refs.clone() }),
         );
-        let r = Self::with_driver(&s, |d| d.send(text, images));
+        Self::set_state(shared, e, live_id, LiveState::Running);
+        enforce_cap(e, &shared.limits);
+        prev
+    }
+
+    fn write_message(shared: &Shared, s: &Session, live_id: &str, driver: &mut dyn Driver, message: PendingMessage, prev: LiveState) -> Result<(), String> {
+        let r = driver.send(&message.text, &message.images);
         if let Err(err) = &r {
-            let to = if prev == LiveState::Starting { LiveState::Starting } else { LiveState::Idle };
-            self.roll_back(&s, live_id, &format!("发送失败：{err}"), LiveState::Running, to);
+            let mut e = s.entry.lock().unwrap();
+            Self::push(shared, &mut e, live_id, LiveEvent::Error { message: format!("发送失败：{err}"), fatal: false }, None);
+            if e.info.state == LiveState::Running {
+                Self::set_state(shared, &mut e, live_id, prev);
+            }
         }
         r
+    }
+
+    fn dispatch_followups(shared: &Shared, live_id: &str) {
+        let Some(s) = shared.get(live_id) else { return };
+        let _ = Self::with_driver(&s, |driver| {
+            loop {
+                let mut e = s.entry.lock().unwrap();
+                if e.info.state != LiveState::Idle {
+                    break;
+                }
+                let Some(message) = e.pending_messages.pop_front() else { break };
+                let prev = Self::begin_message(shared, &mut e, live_id, &message);
+                drop(e);
+                if Self::write_message(shared, &s, live_id, driver, message, prev).is_ok() {
+                    break;
+                }
+            }
+            Ok(())
+        });
     }
 
     pub fn respond(&self, live_id: &str, request_id: &str, decision: Decision) -> Result<(), String> {

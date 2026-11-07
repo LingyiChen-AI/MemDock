@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Globe, Plus, Search, ShieldAlert } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Globe, Network, Plus, Search, ShieldAlert } from "lucide-react";
 import { ContextMenu } from "radix-ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { addManualProject, removeManualProject } from "@/api/memory";
@@ -9,12 +9,15 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ToolTag } from "./ToolTag";
 import { basename, compactNumber, fileKey, fmt } from "./paths";
+import { memoryGraphCopy } from "./memoryGraphCopy";
 
 export interface MemoryTreeProps {
   index: MemoryIndex;
   /** `fileKey()` of the opened file. */
   selectedKey?: string;
   onSelect: (file: MemoryFile) => void;
+  graphProjectId?: string;
+  onOpenGraph?: (projectId: string) => void;
   /** Called with the fresh index after adding / removing a manual project. */
   onIndexChange?: (index: MemoryIndex) => void;
   /**
@@ -101,6 +104,8 @@ export function MemoryTree({
   index,
   selectedKey,
   onSelect,
+  graphProjectId,
+  onOpenGraph,
   onIndexChange,
   onRemoveRequest,
   onSearchOpen,
@@ -250,6 +255,7 @@ export function MemoryTree({
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
     if (!target) return;
+    if (e.target !== target && (e.key === "Enter" || e.key === " ")) return;
     const i = rows.findIndex((r) => r.key === target.dataset.key);
     if (i < 0) return;
     const row = rows[i];
@@ -372,6 +378,8 @@ export function MemoryTree({
               onActivate={() => activate(item)}
               onFocus={() => setFocusKey(item.key)}
               onRemove={removeProject}
+              onOpenGraph={onOpenGraph}
+              graphActive={item.kind === "project" && item.entry.project.id === graphProjectId}
               hidden={item.kind === "project" && hidden.has(item.entry.project.id)}
               onToggleHidden={toggleHidden}
               pending={item.kind === "project" ? (pendingByProject?.[item.entry.project.id] ?? 0) : 0}
@@ -429,6 +437,8 @@ function TreeRow({
   onActivate,
   onFocus,
   onRemove,
+  onOpenGraph,
+  graphActive,
   pending,
   hidden = false,
   onToggleHidden,
@@ -444,8 +454,10 @@ function TreeRow({
   onActivate: () => void;
   onFocus: () => void;
   onRemove: (project: Project) => void;
+  onOpenGraph?: (projectId: string) => void;
+  graphActive: boolean;
 }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const m = t.memory;
 
   const base =
@@ -460,6 +472,7 @@ function TreeRow({
 
   if (row.kind === "project") {
     const { project } = row.entry;
+    const graphLabel = `${project.name} · ${memoryGraphCopy[language].title}`;
     const Chevron = row.expanded ? ChevronDown : ChevronRight;
     const node = (
       <div
@@ -475,6 +488,25 @@ function TreeRow({
           <span className="ml-auto shrink-0 text-xs font-normal text-muted-foreground">{m.missingDir}</span>
         ) : null}
         <PendingDot n={pending} push={project.exists} />
+        {onOpenGraph ? (
+          <button
+            type="button"
+            aria-label={graphLabel}
+            aria-pressed={graphActive}
+            title={graphLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenGraph(project.id);
+            }}
+            className={cn(
+              "grid size-5 shrink-0 cursor-pointer place-items-center rounded outline-none hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+              !pending && project.exists && "ml-auto",
+              graphActive ? "bg-primary/10 text-primary" : "text-muted-foreground",
+            )}
+          >
+            <Network className="size-3.5" aria-hidden="true" />
+          </button>
+        ) : null}
         {onToggleHidden ? (
           <button
             type="button"
@@ -501,6 +533,11 @@ function TreeRow({
         <ContextMenu.Trigger asChild>{node}</ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content className="z-50 min-w-36 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md">
+            {onOpenGraph ? (
+              <ContextMenu.Item onSelect={() => onOpenGraph(project.id)} className={item}>
+                {memoryGraphCopy[language].title}
+              </ContextMenu.Item>
+            ) : null}
             {onToggleHidden ? (
               <ContextMenu.Item onSelect={() => onToggleHidden(project.id)} className={item}>
                 {hidden ? m.unhideProject : m.hideProject}

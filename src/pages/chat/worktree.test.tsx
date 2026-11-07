@@ -247,6 +247,22 @@ describe("/worktree in the composer", () => {
 });
 
 describe("project ＋ menu", () => {
+  it("starts a Codex draft from a Codex project even when Claude was last used", async () => {
+    saveChatPrefs({ ...DEFAULT_PREFS, agent: "claude", cwd: "/work/demo" });
+    (listSessions as Mock).mockResolvedValue([mk({ id: "codex-1", tool: "codex" })]);
+    renderApp(<SessionsPage />);
+    await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    const project = await screen.findByRole("region", { name: "demo" });
+    await userEvent.click(within(project).getByRole("button", { name: "新建" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /新建会话 · Codex/ }));
+    await userEvent.type(screen.getByRole("textbox"), "hello Codex{Enter}");
+    await waitFor(() => expect(liveStart).toHaveBeenCalledWith(expect.objectContaining({
+      agent: "codex",
+      cwd: "/work/demo",
+      prompt: "hello Codex",
+    })));
+  });
+
   it("offers three actions; the worktree one is disabled outside git repos", async () => {
     renderApp(<SessionsPage />);
     const demo = await screen.findByRole("region", { name: "demo" });

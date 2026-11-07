@@ -15,6 +15,7 @@ vi.mock("@/api/memory", () => ({
   onMemoryChanged: vi.fn(),
   searchMemories: vi.fn(),
 }));
+vi.mock("@/api/memoryGraph", () => ({ extractMemoryGraph: vi.fn(), getMemoryGraph: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 const fakeView = vi.hoisted(() => ({
   dom: { isConnected: true },
@@ -31,6 +32,7 @@ vi.mock("@uiw/react-codemirror", () => ({
 }));
 
 import { listMemories, onMemoryChanged, readCodexDb, readMemoryFile, removeManualProject, searchMemories } from "@/api/memory";
+import { extractMemoryGraph, getMemoryGraph, type MemoryGraph, type SavedMemoryGraph } from "@/api/memoryGraph";
 import type { MemoryIndex } from "@/api/types";
 import { renderApp, sampleIndex, globalClaude, projClaude, mkProject } from "@/test/fixtures";
 import { MemoryPage } from "./MemoryPage";
@@ -38,7 +40,19 @@ import { MemoryPage } from "./MemoryPage";
 const listeners: ((p: { paths: string[] }) => void)[] = [];
 const emit = () => listeners.forEach((cb) => cb({ paths: [] }));
 
+const semanticGraph: MemoryGraph = {
+  nodes: [
+    { id: "n1", label: "Project workflow", kind: "process", sourceFileIds: [projClaude.id] },
+    { id: "n2", label: "Codex", kind: "tool", sourceFileIds: [projClaude.id] },
+  ],
+  relationships: [{ fromNodeId: "n1", toNodeId: "n2", label: "uses", sourceFileIds: [projClaude.id] }],
+  sources: [{ fileId: projClaude.id, title: "Project source", line: 2 }],
+  unread: 3,
+};
+
 beforeEach(() => {
+  vi.mocked(extractMemoryGraph).mockReset().mockResolvedValue(semanticGraph);
+  vi.mocked(getMemoryGraph).mockReset().mockResolvedValue(null);
   localStorage.clear();
   listeners.length = 0;
   (onMemoryChanged as Mock).mockImplementation(async (cb: (p: { paths: string[] }) => void) => {
@@ -137,6 +151,95 @@ describe("MemoryPage", () => {
     expect(await screen.findByDisplayValue("text of /work/jev-rpa/CLAUDE.md")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
     expect(screen.getByRole("tree")).toBeInTheDocument();
+  });
+
+  it("opens the graph through the project row after confirming dirty edits, then reveals a saved source", async () => {
+    (readMemoryFile as Mock).mockClear();
+    (readMemoryFile as Mock).mockImplementation(async (path: string) => ({
+      text: path === projClaude.path ? "\n# Project source" : "Other file",
+      imports: [],
+      hash: "h",
+    }));
+    fakeView.dispatch.mockClear();
+    renderApp(<MemoryPage />);
+    const editor = await screen.findByLabelText("editor");
+    await userEvent.type(editor, "!");
+    const action = screen.getByRole("button", { name: "jev-rpa · 记忆图谱" });
+    expect(action.nextElementSibling).toHaveAccessibleName(/隐藏/);
+    action.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(await screen.findByRole("button", { name: "继续编辑" }));
+    expect(editor).toHaveValue("Other file!");
+    await userEvent.click(action);
+    await userEvent.click(await screen.findByRole("button", { name: "放弃修改并切换" }));
+    expect(screen.queryByLabelText("editor")).not.toBeInTheDocument();
+    expect(readMemoryFile).not.toHaveBeenCalledWith(projClaude.path);
+    await userEvent.click(screen.getByRole("button", { name: "生成图谱" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Project workflow" }));
+    await userEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    expect(await screen.findByDisplayValue(/Project source/)).toBeInTheDocument();
+    await waitFor(() => expect(fakeView.dispatch).toHaveBeenCalledWith(expect.objectContaining({ selection: { anchor: 200 } })));
+    await userEvent.click(action);
+    expect(screen.getByRole("button", { name: "刷新图谱" })).toBeInTheDocument();
+  });
+
+  it("extracts a semantic relationship using the selected CLI and retains the graph after a failed refresh", async () => {
+    renderApp(<MemoryPage />);
+    await screen.findByLabelText("editor");
+    await userEvent.click(screen.getByRole("button", { name: "jev-rpa · 记忆图谱" }));
+    expect(extractMemoryGraph).not.toHaveBeenCalled();
+    const toolPicker = screen.getByRole("combobox", { name: "提取工具" });
+    toolPicker.focus();
+    await userEvent.keyboard("{Enter}{End}{Enter}");
+    let finish!: (result: MemoryGraph) => void;
+    vi.mocked(extractMemoryGraph).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await userEvent.click(screen.getByRole("button", { name: "生成图谱" }));
+    expect(extractMemoryGraph).toHaveBeenCalledWith("/work/jev-rpa", "codex", "zh");
+    const loading = screen.getByRole("status");
+    expect(loading).toHaveTextContent("正在生成知识图谱");
+    expect(loading).toHaveTextContent("Codex");
+    await act(async () => finish(semanticGraph));
+    expect(await screen.findByText("未纳入提取的记忆文件 3")).toBeInTheDocument();
+    const edge = screen.getByRole("button", { name: "Project workflow → uses → Codex" });
+    edge.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(edge).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("list", { name: "记忆来源" })).toHaveTextContent("Project source");
+    vi.mocked(extractMemoryGraph).mockRejectedValueOnce(new Error("CLI unavailable"));
+    await userEvent.click(screen.getByRole("button", { name: "刷新图谱" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("CLI unavailable");
+    expect(edge).toBeInTheDocument();
+  });
+
+  it("restores a saved graph on a fresh page without calling the agent", async () => {
+    vi.mocked(getMemoryGraph).mockResolvedValue({ graph: semanticGraph, tool: "codex" });
+    renderApp(<MemoryPage />);
+    await screen.findByLabelText("editor");
+    await userEvent.click(screen.getByRole("button", { name: "jev-rpa · 记忆图谱" }));
+    expect(await screen.findByRole("button", { name: "Project workflow" })).toBeInTheDocument();
+    expect(getMemoryGraph).toHaveBeenCalledWith("/work/jev-rpa");
+    expect(extractMemoryGraph).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "提取工具" })).toHaveTextContent("Codex");
+    const node = screen.getByRole("button", { name: "Project workflow" });
+    expect(screen.queryByRole("complementary", { name: "图谱详情" })).not.toBeInTheDocument();
+    await userEvent.click(node);
+    expect(screen.getByRole("heading", { name: "Project workflow" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "关闭图谱详情" }));
+    expect(screen.queryByRole("complementary", { name: "图谱详情" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "记忆图谱" })).toBeInTheDocument();
+  });
+
+  it("keeps a newly generated graph when a pending restore completes later", async () => {
+    let restore!: (saved: SavedMemoryGraph | null) => void;
+    vi.mocked(getMemoryGraph).mockImplementation(() => new Promise((resolve) => { restore = resolve; }));
+    renderApp(<MemoryPage />);
+    await screen.findByLabelText("editor");
+    await userEvent.click(screen.getByRole("button", { name: "jev-rpa · 记忆图谱" }));
+    await userEvent.click(screen.getByRole("button", { name: "生成图谱" }));
+    expect(await screen.findByRole("button", { name: "Project workflow" })).toBeInTheDocument();
+    await act(async () => restore({ graph: { ...semanticGraph, nodes: [], relationships: [] }, tool: "codex" }));
+    expect(screen.getByRole("button", { name: "Project workflow" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "提取工具" })).toHaveTextContent("Claude Code");
   });
 
   it("a search jump is consumed: A -> B -> A does not scroll again", async () => {

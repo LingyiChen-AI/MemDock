@@ -131,6 +131,46 @@ fn start_send_and_state_flow() {
 }
 
 #[test]
+fn followups_wait_for_the_current_turn_and_keep_transcript_order() {
+    for agent in [Agent::Claude, Agent::Codex] {
+        let dir = tempfile::tempdir().unwrap();
+        let h = harness();
+        let mut options = opts(dir.path().to_str().unwrap());
+        options.agent = agent;
+        options.prompt = Some("first".into());
+        let info = h.mgr.start(options).unwrap();
+        let emit = h.emits.lock().unwrap()[0].clone();
+
+        h.mgr.send(&info.live_id, "second", &[]).unwrap();
+        h.mgr.send(&info.live_id, "fast-turn", &[]).unwrap();
+        assert_eq!(h.calls.lock().unwrap().sent, ["first"]);
+        emit(delta("a1", "first reply"));
+        emit(LiveEvent::TurnCompleted { usage: TurnUsage::default(), is_error: false });
+        wait_for_sent(&h, 2);
+        assert_eq!(h.calls.lock().unwrap().sent, ["first", "second"]);
+        emit(delta("a2", "second reply"));
+        emit(LiveEvent::TurnCompleted { usage: TurnUsage::default(), is_error: false });
+        wait_for_sent(&h, 3);
+
+        let ordered: Vec<_> = h.mgr.transcript(&info.live_id).unwrap().into_iter().filter_map(|env| {
+            match env.event {
+                LiveEvent::UserMessage { text, .. } | LiveEvent::AssistantDelta { text, .. } => Some(text),
+                _ => None,
+            }
+        }).collect();
+        assert_eq!(ordered, ["first", "first reply", "second", "second reply", "fast-turn"]);
+    }
+}
+
+fn wait_for_sent(h: &Harness, count: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while h.calls.lock().unwrap().sent.len() < count {
+        assert!(std::time::Instant::now() < deadline, "queued message was not dispatched");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
 fn stop_marks_exited_and_rejects_further_sends() {
     let dir = tempfile::tempdir().unwrap();
     let h = harness();
@@ -215,7 +255,11 @@ fn second_start_with_same_resume_id_reuses_the_session() {
     let again = h.mgr.start(o.clone()).unwrap();
     assert_eq!(again.live_id, first.live_id);
     assert_eq!(h.emits.lock().unwrap().len(), 1, "no second process");
-    assert_eq!(h.calls.lock().unwrap().sent, vec!["a", "b"], "the prompt goes to the running session");
+    assert_eq!(h.calls.lock().unwrap().sent, ["a"]);
+    let emit = h.emits.lock().unwrap()[0].clone();
+    emit(LiveEvent::TurnCompleted { usage: TurnUsage::default(), is_error: false });
+    wait_for_sent(&h, 2);
+    assert_eq!(h.calls.lock().unwrap().sent, ["a", "b"], "the next turn uses the same session");
     // Released after the process ends; the next start is a new process.
     h.mgr.stop(&first.live_id).unwrap();
     assert_eq!(h.mgr.registry().owner(Agent::Claude, "sess-r"), None);
@@ -279,8 +323,8 @@ fn publish_order_is_seq_order_under_concurrency() {
     for _ in 0..2 {
         let (mgr, id) = (h.mgr.clone(), info.live_id.clone());
         handles.push(std::thread::spawn(move || {
-            for i in 0..50 {
-                mgr.send(&id, &format!("msg {i}"), &[]).unwrap();
+            for _ in 0..50 {
+                mgr.send(&id, "fast-turn", &[]).unwrap();
             }
         }));
     }

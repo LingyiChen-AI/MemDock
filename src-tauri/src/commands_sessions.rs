@@ -1,6 +1,7 @@
 //! Session list / preview / conversion commands (Claude Code <-> Codex).
 
 use std::collections::HashMap;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +22,8 @@ const PREVIEW_CHARS: usize = 1200;
 /// Tool input / output kept per call in the preview timeline.
 const TIMELINE_IO_CHARS: usize = 4000;
 
-type CacheEntry = (u64, i64, SessionSummary);
+type CacheEntry = (u64, i64, Option<SessionSummary>);
+const INDEX_VERSION: u32 = 2;
 
 /// Parsed previews kept for quick re-opening (keyed by path, checked by size + mtime).
 const PREVIEW_CACHE: usize = 6;
@@ -53,13 +55,21 @@ struct IndexEntry {
     path: PathBuf,
     len: u64,
     mtime: i64,
-    summary: SessionSummary,
+    summary: Option<SessionSummary>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SessionIndex {
+    version: u32,
+    entries: Vec<IndexEntry>,
 }
 
 fn load_index(data_dir: &Path) -> HashMap<PathBuf, CacheEntry> {
     let Ok(text) = std::fs::read_to_string(index_path(data_dir)) else { return HashMap::new() };
-    serde_json::from_str::<Vec<IndexEntry>>(&text)
-        .map(|v| v.into_iter().map(|e| (e.path, (e.len, e.mtime, e.summary))).collect())
+    serde_json::from_str::<SessionIndex>(&text)
+        .ok()
+        .filter(|index| index.version == INDEX_VERSION)
+        .map(|index| index.entries.into_iter().map(|e| (e.path, (e.len, e.mtime, e.summary))).collect())
         .unwrap_or_default()
 }
 
@@ -68,13 +78,33 @@ fn save_index(data_dir: &Path, cache: &HashMap<PathBuf, CacheEntry>) {
         .iter()
         .map(|(p, (len, mtime, s))| IndexEntry { path: p.clone(), len: *len, mtime: *mtime, summary: s.clone() })
         .collect();
-    if let Ok(json) = serde_json::to_vec(&entries) {
+    if let Ok(json) = serde_json::to_vec(&SessionIndex { version: INDEX_VERSION, entries }) {
         let path = index_path(data_dir);
         let tmp = path.with_extension("json.tmp");
         if std::fs::write(&tmp, json).is_ok() {
             let _ = std::fs::rename(&tmp, &path);
         }
     }
+}
+
+fn summarize_indexed(tool: Tool, path: &Path) -> Option<SessionSummary> {
+    if tool == Tool::Codex && codex_subagent(path) {
+        return None;
+    }
+    Some(convert::summarize(&convert::parse(tool, path), path))
+}
+
+fn codex_subagent(path: &Path) -> bool {
+    let Ok(reader) = crate::projects::open_jsonl(path) else { return false };
+    let mut header = Vec::new();
+    if reader.take(1024 * 1024).read_until(b'\n', &mut header).is_err() {
+        return false;
+    }
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&header) else { return false };
+    record["type"] == "session_meta"
+        && record.pointer("/payload/source").is_some_and(|source| {
+            source.as_str() == Some("subagent") || source.get("subagent").is_some()
+        })
 }
 
 /// Titles set in MemDock (`tool:id` -> title); they win over the tools' own names.
@@ -102,7 +132,7 @@ fn parse_parallel(jobs: Vec<(Tool, PathBuf, u64, i64)>) -> Vec<(PathBuf, CacheEn
         return jobs
             .into_iter()
             .map(|(tool, path, len, mtime)| {
-                let s = convert::summarize(&convert::parse(tool, &path), &path);
+                let s = summarize_indexed(tool, &path);
                 (path, (len, mtime, s))
             })
             .collect();
@@ -113,7 +143,7 @@ fn parse_parallel(jobs: Vec<(Tool, PathBuf, u64, i64)>) -> Vec<(PathBuf, CacheEn
         for _ in 0..PARSE_THREADS {
             scope.spawn(|| loop {
                 let Some((tool, path, len, mtime)) = lock(&queue).pop() else { break };
-                let s = convert::summarize(&convert::parse(tool, &path), &path);
+                let s = summarize_indexed(tool, &path);
                 lock(&out).push((path, (len, mtime, s)));
             });
         }
@@ -134,7 +164,7 @@ fn load_store(data_dir: &Path) -> ConvertStore {
 }
 
 /// Lists sessions of both tools, newest first. Parsed summaries are cached by
-/// (path, size, mtime). Sessions without a user message are skipped.
+/// (path, size, mtime). Codex subagents and sessions without a user message are skipped.
 pub fn list_sessions_impl(
     paths: &AgentPaths,
     data_dir: &Path,
@@ -167,8 +197,9 @@ pub fn list_sessions_impl(
     let titles = load_titles(data_dir);
     let mut out: Vec<SessionSummary> = fresh
         .values()
-        .filter(|(_, _, s)| !s.first_prompt.is_empty())
-        .map(|(_, _, s)| {
+        .filter_map(|(_, _, s)| s.as_ref())
+        .filter(|s| !s.first_prompt.is_empty())
+        .map(|s| {
             let mut s = s.clone();
             let me = SessionRef { tool: s.tool, id: s.id.clone() };
             s.converted_from = store.source_of(&me).cloned();
@@ -680,8 +711,9 @@ pub fn session_context_by_id(ss: Ss, tool: Tool, id: String) -> Result<Option<Se
     let find = || {
         lock(&ss.cache)
             .values()
-            .find(|(_, _, s)| s.tool == tool && s.id == id)
-            .map(|(_, _, s)| s.path.clone())
+            .filter_map(|(_, _, summary)| summary.as_ref())
+            .find(|summary| summary.tool == tool && summary.id == id)
+            .map(|summary| summary.path.clone())
     };
     let path = match find() {
         Some(p) => Some(p),

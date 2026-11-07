@@ -158,8 +158,10 @@ function MenuAction({
 }
 
 /** The project group's single "＋": new session / new session in a worktree / new terminal. */
-function ProjectAddMenu({ name, cwd, onNew, onNewWorktree, onTerminal, c }: { name: string; cwd: string; onNew: () => void; onNewWorktree: () => void; onTerminal: () => void; c: C }) {
+function ProjectAddMenu({ name, cwd, tool, onNew, onNewWorktree, onTerminal, c }: { name: string; cwd: string; tool: ToolFilter; onNew: () => void; onNewWorktree: () => void; onTerminal: () => void; c: C }) {
   const w = c.worktree;
+  const agent = tool === "all" ? "" : tool === "codex" ? "Codex" : "Claude Code";
+  const newLabel = agent ? `${w.menuNew} · ${agent}` : w.menuNew;
   const [open, setOpen] = React.useState(false);
   const git = useGitRepo(cwd, open);
   const run = (f: () => void) => {
@@ -184,7 +186,7 @@ function ProjectAddMenu({ name, cwd, onNew, onNewWorktree, onTerminal, c }: { na
       </Tooltip>
       <PopoverContent align="end" className="w-72 p-1">
         <div role="menu" aria-label={name}>
-          <MenuAction autoFocus icon={<SquarePen aria-hidden="true" />} label={w.menuNew} sub={fmt(w.menuNewSub, { name })} kbd="Enter" onClick={() => run(onNew)} />
+          <MenuAction autoFocus icon={<SquarePen aria-hidden="true" />} label={newLabel} sub={fmt(w.menuNewSub, { name })} kbd="Enter" onClick={() => run(onNew)} />
           <MenuAction
             violet
             icon={<GitBranch aria-hidden="true" />}
@@ -1495,7 +1497,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     const dir = cwd ?? (await resolveNewChatDir(selected?.cwd ?? selectedLive?.cwd ?? null, p.cwd));
     const key = newDraftKey();
     if (worktree) patchConvUi(key, { worktree: true });
-    setDraft({ key, agent: p.agent, cwd: dir });
+    setDraft({ key, agent: tool === "all" ? p.agent : tool, cwd: dir });
     setSelectedKey(key);
     resetPane();
   };
@@ -1763,6 +1765,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                         <ProjectAddMenu
                           name={g.name}
                           cwd={g.cwd}
+                          tool={tool}
                           onNew={() => openDraft(g.cwd)}
                           onNewWorktree={() => openDraft(g.cwd, true)}
                           onTerminal={() => openShell(g.cwd)}

@@ -1,0 +1,28 @@
+export const memoryGraphCopy = {
+  zh: {
+    title: "记忆图谱", scope: "当前项目", tool: "提取工具", generate: "生成图谱", refresh: "刷新图谱",
+    loading: "正在生成知识图谱", extracting: "正在提取项目记忆里的实体和关系。", refreshing: "正在更新",
+    restoring: "正在读取已保存的图谱", restoreFailed: "读取已保存的图谱失败",
+    failed: "图谱提取失败", partial: "未纳入提取的记忆文件",
+    ready: "选择本机 Claude Code 或 Codex，从项目记忆中提取实体和关系。",
+    noFiles: "当前项目没有可提取的记忆文件。", empty: "模型未在当前记忆中提取到可展示的实体。",
+    sources: "记忆来源",
+    source: "查看原文", unavailable: "该记忆文件已移除。", nodes: "个节点", edges: "条关系",
+    inspector: "图谱详情", closeInspector: "关闭图谱详情", relationships: "关联关系", relationship: "关系", noRelationships: "此节点暂无关联关系。",
+    noSources: "未关联记忆来源。", zoomIn: "放大图谱", zoomOut: "缩小图谱", resetZoom: "适应画布", line: "行",
+    kinds: { entity: "实体", concept: "概念", decision: "决策", tool: "工具", process: "流程" },
+  },
+  en: {
+    title: "Memory graph", scope: "Current project", tool: "Extraction tool", generate: "Generate graph", refresh: "Refresh graph",
+    loading: "Generating knowledge graph", extracting: "Extracting entities and relationships from project memories.", refreshing: "Updating",
+    restoring: "Loading saved graph", restoreFailed: "Could not load the saved graph",
+    failed: "Graph extraction failed", partial: "Memory files skipped",
+    ready: "Choose your local Claude Code or Codex to extract entities and relationships from project memories.",
+    noFiles: "This project has no memory files to extract.", empty: "The model found no entities to display in these memories.",
+    sources: "Memory sources",
+    source: "Open source", unavailable: "This memory file has been removed.", nodes: "nodes", edges: "relationships",
+    inspector: "Graph details", closeInspector: "Close graph details", relationships: "Relationships", relationship: "Relationship", noRelationships: "This node has no relationships.",
+    noSources: "No linked memory sources.", zoomIn: "Zoom in", zoomOut: "Zoom out", resetZoom: "Fit to canvas", line: "Line",
+    kinds: { entity: "Entity", concept: "Concept", decision: "Decision", tool: "Tool", process: "Process" },
+  },
+};

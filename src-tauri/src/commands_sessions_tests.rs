@@ -357,3 +357,33 @@ fn preview_limit_keeps_the_newest_entries() {
     assert_eq!(two.timeline.len(), 2);
     assert_eq!(two.timeline, all.timeline[all.timeline.len() - 2..]);
 }
+
+#[test]
+fn session_list_hides_codex_subagents_but_keeps_explicit_user_forks() {
+    let e = env();
+    let parent_id = "11111111-2222-3333-4444-555555555555";
+    let child_id = "11111111-2222-3333-4444-555555555556";
+    let fork_id = "11111111-2222-3333-4444-555555555557";
+    let child = e.codex_src.with_file_name(format!("rollout-2026-11-02T08-00-01-{child_id}.jsonl"));
+    let fork = e.codex_src.with_file_name(format!("rollout-2026-11-02T08-00-02-{fork_id}.jsonl"));
+    let mut lines = codex_sample();
+    lines[0]["payload"]["forked_from_id"] = json!(parent_id);
+    lines[0]["payload"]["id"] = json!(fork_id);
+    lines[0]["payload"]["source"] = json!("vscode");
+    write_lines(&fork, &lines);
+    lines[0]["payload"]["id"] = json!(child_id);
+    lines[0]["payload"]["source"] = json!({"subagent":{"thread_spawn":{"parent_thread_id":parent_id}}});
+    write_lines(&child, &lines);
+
+    let (len, mtime) = file_key(&child).unwrap();
+    let summary = convert::summarize(&convert::parse(Tool::Codex, &child), &child);
+    fs::write(index_path(&e.data), json!([{"path":child,"len":len,"mtime":mtime,"summary":summary}]).to_string()).unwrap();
+    let cache = Mutex::new(load_index(&e.data));
+    let list = list_sessions_impl(&e.paths, &e.data, &cache);
+    assert!(list.iter().any(|s| s.id == parent_id));
+    assert!(list.iter().any(|s| s.id == fork_id));
+    assert!(!list.iter().any(|s| s.id == child_id));
+    let reloaded = Mutex::new(load_index(&e.data));
+    assert_eq!(list_sessions_impl(&e.paths, &e.data, &reloaded), list);
+    assert!(child.is_file());
+}

@@ -135,6 +135,18 @@ pub(crate) fn exec(
     timeout: Duration,
     cancel: &AtomicBool,
 ) -> Result<Output, RunError> {
+    exec_with_env(program, args, cwd, stdin_text, timeout, cancel, &[])
+}
+
+pub(crate) fn exec_with_env(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    stdin_text: &str,
+    timeout: Duration,
+    cancel: &AtomicBool,
+    env: &[(&str, &str)],
+) -> Result<Output, RunError> {
     if cancel.load(Ordering::SeqCst) {
         return Err(RunError::Cancelled);
     }
@@ -163,6 +175,7 @@ pub(crate) fn exec(
             cmd.env("PATH", p);
         }
     }
+    cmd.envs(env.iter().copied());
     let mut child = proc::spawn_hidden(&mut cmd).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RunError::NotInstalled

@@ -11,10 +11,14 @@ pub mod commands_usage;
 pub mod convert;
 pub mod env;
 pub mod extract;
+mod feishu_agent;
+mod feishu_bridge;
+mod feishu_transport;
 pub mod live;
 pub mod fsutil;
 pub mod ghimport;
 pub mod memory;
+mod memory_graph;
 pub mod model;
 pub mod paths;
 pub mod proc;
@@ -131,6 +135,7 @@ pub fn run() {
             app.manage(usage);
             app.manage(env_state);
             app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
+            app.manage(Arc::new(feishu_bridge::Bridge::new(state.clone())));
             app.manage(state);
             app.manage(handle);
             app.manage(extract);
@@ -140,6 +145,8 @@ pub fn run() {
             commands::list_memories,
             commands::refresh_memories,
             commands::read_memory_file,
+            memory_graph::memory_graph_extract,
+            memory_graph::memory_graph_get,
             commands::write_memory_file,
             commands::search_memories,
             commands::list_snapshots,
@@ -215,6 +222,13 @@ pub fn run() {
             commands_env::env_detect,
             commands_env::env_install,
             commands_env::open_data_dir,
+            feishu_bridge::feishu_projects,
+            feishu_bridge::feishu_list,
+            feishu_bridge::feishu_save,
+            feishu_bridge::feishu_remove,
+            feishu_bridge::feishu_start,
+            feishu_bridge::feishu_stop,
+            feishu_bridge::feishu_test,
             workspace_code::code_trash_file,
             workspace_code::code_create_file,
             workspace_code::code_entries,
@@ -278,6 +292,9 @@ pub fn run() {
                 }
                 if let Some(live) = app.try_state::<Arc<live::LiveManager>>() {
                     live.stop_all();
+                }
+                if let Some(bridge) = app.try_state::<Arc<feishu_bridge::Bridge>>() {
+                    bridge.stop_all();
                 }
                 if let Some(pty) = app.try_state::<Arc<pty::PtyManager>>() {
                     pty.close_all();

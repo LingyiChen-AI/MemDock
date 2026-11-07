@@ -1341,7 +1341,7 @@ mod tests {
             projects: Vec::new(),
             appdata: root.join("appdata"),
             git: Arc::new(SystemGit::new()),
-            registry_path: root.join("appdata").join("skills-registry.json"),
+            registry_path: root.join("registry").join("skills-registry.json"),
             cache_lock: Arc::new(Mutex::new(())),
         };
         Env {

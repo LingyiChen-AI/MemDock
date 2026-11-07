@@ -88,7 +88,14 @@ pub fn read_skill_lock(home: &Path) -> Vec<(String, SkillSource)> {
 
 /// Path of `dir` relative to `root`, `/`-separated; `""` when equal.
 fn rel_path(root: &Path, dir: &Path) -> Option<String> {
-    if let Ok(r) = dir.strip_prefix(root) {
+    // Git can report the physical path while the scanned directory uses an alias
+    // such as macOS's /var or a Windows verbatim path.
+    let relative = dir.strip_prefix(root).ok().map(Path::to_path_buf).or_else(|| {
+        dir.canonicalize().ok()?
+            .strip_prefix(root.canonicalize().ok()?).ok()
+            .map(Path::to_path_buf)
+    });
+    if let Some(r) = relative {
         return Some(
             r.components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())

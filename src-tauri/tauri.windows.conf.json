@@ -1,4 +1,12 @@
 {
+  "bundle": {
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "sidebarImage": "icons/nsis-sidebar.bmp"
+      }
+    }
+  },
   "app": {
     "windows": [
       {

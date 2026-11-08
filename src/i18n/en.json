@@ -1386,7 +1386,7 @@
     "continueFailed": "Failed to continue: {error}"
   },
   "tray": {
-    "show": "Show MemDock",
+    "show": "Open Main Window",
     "quit": "Quit MemDock"
   },
   "chat": {

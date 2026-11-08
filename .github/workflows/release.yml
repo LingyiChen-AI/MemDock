@@ -133,10 +133,17 @@ jobs:
           ' latest.json > verified.json
           jq -e --arg version "${GITHUB_REF_NAME#v}" --arg prefix "$prefix" '
             .version == $version and (
-              .platforms | [.["darwin-aarch64"], .["darwin-x86_64"], .["windows-x86_64"]]
-              | all(. != null and (.signature | length > 0) and (.url | startswith($prefix)))
+              .platforms
+              | has("darwin-aarch64") and has("darwin-x86_64") and has("windows-x86_64")
+                and all(.[]; (.signature | length > 0)
+                  and (.url | startswith($prefix) and (endswith(".sig") | not)))
             )
           ' verified.json
           mv verified.json latest.json
           gh release upload "$GITHUB_REF_NAME" latest.json --clobber
+          # The updater reads signatures from latest.json; keep only the packages it downloads.
+          jq -r '.[] | select(.name | endswith(".sig")) | .name' assets.json |
+            while IFS= read -r asset; do
+              gh release delete-asset "$GITHUB_REF_NAME" "$asset" --yes
+            done
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest

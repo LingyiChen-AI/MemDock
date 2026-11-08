@@ -1,6 +1,6 @@
 //! System tray: closing the main window hides it here instead of quitting.
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{IconMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime, Window, WindowEvent};
 
@@ -17,10 +17,15 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+fn tray_menu<R: Runtime>(app: &AppHandle<R>, show: &str, quit: &str) -> tauri::Result<Menu<R>> {
+    let open = IconMenuItem::with_id(app, SHOW_ID, show, true, app.default_window_icon().cloned(), None::<&str>)?;
+    let divider = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, QUIT_ID, quit, true, None::<&str>)?;
+    Menu::with_items(app, &[&open, &divider, &quit])
+}
+
 pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, SHOW_ID, "显示 MemDock", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, QUIT_ID, "退出 MemDock", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = tray_menu(app, "打开主窗口", "退出 MemDock")?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("MemDock")
         .menu(&menu)
@@ -45,10 +50,8 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 /// Relabels the tray menu when the UI language changes.
 #[tauri::command]
 pub fn set_tray_labels(app: AppHandle, show: String, quit: String) -> Result<(), String> {
-    let show_item = MenuItem::with_id(&app, SHOW_ID, &show, true, None::<&str>).map_err(|e| e.to_string())?;
-    let quit_item = MenuItem::with_id(&app, QUIT_ID, &quit, true, None::<&str>).map_err(|e| e.to_string())?;
-    let menu = Menu::with_items(&app, &[&show_item, &quit_item]).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let menu = tray_menu(&app, &show, &quit).map_err(|e| e.to_string())?;
         tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
     }
     Ok(())

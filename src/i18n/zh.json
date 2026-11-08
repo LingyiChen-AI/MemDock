@@ -1386,7 +1386,7 @@
     "continueFailed": "继续对话失败：{error}"
   },
   "tray": {
-    "show": "显示 MemDock",
+    "show": "打开主窗口",
     "quit": "退出 MemDock"
   },
   "chat": {

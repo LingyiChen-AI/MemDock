@@ -149,10 +149,6 @@ src-tauri/src/       后端（Rust）
 
 ## 许可协议 / License
 
-本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，**源码公开，但不允许商业使用**：
+本项目采用 [MIT 许可证](LICENSE)。允许使用、修改和分发，包括商业用途。分发软件的副本或主要部分时，请保留版权声明和许可声明。
 
-- ✅ 个人学习、研究、自用，以及学校、公益组织、政府机构等非营利用途，可以免费使用、修改和分发（需保留 LICENSE 及其中的 `Required Notice`）。
-- ❌ 任何商业用途（包括在公司内部用于营利业务、集成进收费产品或服务、二次打包销售等）都需要事先取得作者的书面授权。
-- 商业授权请联系作者：https://github.com/LingyiChen-AI
-
-> Licensed under the PolyForm Noncommercial License 1.0.0. Source-available; noncommercial use only. Commercial use requires a separate written license from the author — contact https://github.com/LingyiChen-AI.
+Licensed under the [MIT License](LICENSE).

@@ -4,7 +4,7 @@ version = "0.1.5"
 description = "Memdock: manage Claude Code and Codex memories"
 authors = ["Memdock contributors"]
 edition = "2024"
-license = "PolyForm-Noncommercial-1.0.0"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

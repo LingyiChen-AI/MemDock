@@ -140,7 +140,7 @@ export function FeishuPage() {
             </div>
           )}
           {bots.length > 0 && (
-            <ul className="flex flex-wrap items-start gap-4">
+            <ul className="flex flex-wrap gap-4">
               {bots.map((bot) => <BotCard key={bot.id} bot={bot} projects={projects} l={l} busy={busy}
                 onRun={(action) => void run(bot, action)} onEdit={() => setEditing(bot)} onRemove={() => setRemoving(bot)} />)}
             </ul>
@@ -178,7 +178,7 @@ function BotCard({ bot, projects, l, busy, onRun, onEdit, onRemove }: {
     stopped: "bg-muted text-muted-foreground",
   }[bot.status];
   return (
-    <li className="w-[22rem] max-w-full min-w-0 rounded-lg border border-border bg-card" aria-busy={activeAction !== null}>
+    <li className="flex w-[22rem] max-w-full min-w-0 flex-col rounded-lg border border-border bg-card" aria-busy={activeAction !== null}>
       <div className="flex flex-wrap items-start justify-between gap-3 px-3.5 py-3">
         <div className="flex min-w-0 items-start gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><Bot className="size-4" aria-hidden="true" /></span>
@@ -201,10 +201,10 @@ function BotCard({ bot, projects, l, busy, onRun, onEdit, onRemove }: {
         </Button>
       </div>
       {bot.error && <p role="status" className="mx-3.5 mb-3 break-words rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{bot.error}</p>}
-      {bot.projects.length > 0 && (
-        <div className="mx-3.5 mb-3 rounded-md border border-border">
-          <p className="border-b border-border bg-muted/45 px-2.5 py-1.5 text-xs font-medium text-muted-foreground">{l.projectPermissions}</p>
-          <ul className="divide-y divide-border">
+      <div className="mx-3.5 mb-3 overflow-hidden rounded-md border border-border">
+        <p className="border-b border-border bg-muted/45 px-2.5 py-1.5 text-xs font-medium text-muted-foreground">{l.projectPermissions}</p>
+        {bot.projects.length > 0 ? (
+          <ul aria-label={l.projectPermissions} tabIndex={0} className="h-[calc(4rem+1px)] divide-y divide-border overflow-y-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
             {bot.projects.map((grant) => (
               <li key={grant.path} title={grant.path} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2.5 py-1.5">
                 <span className="flex min-w-0 items-center gap-2 text-sm">
@@ -215,9 +215,11 @@ function BotCard({ bot, projects, l, busy, onRun, onEdit, onRemove }: {
               </li>
             ))}
           </ul>
-        </div>
-      )}
-      <div className="flex flex-wrap gap-2 border-t border-border px-3.5 py-2.5">
+        ) : (
+          <p className="h-[calc(4rem+1px)] px-2.5 py-1.5 text-xs text-muted-foreground">{l.noProjects}</p>
+        )}
+      </div>
+      <div className="mt-auto flex flex-wrap gap-2 border-t border-border px-3.5 py-2.5">
         <Button size="sm" type="button" variant="outline" disabled={busy !== null} onClick={() => onRun("test")}>
           {activeAction === "test" && <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}{l.test}
         </Button>

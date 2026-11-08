@@ -4,6 +4,10 @@ import { vi, type Mock } from "vitest";
 import type { SessionPreview, SessionSummary } from "@/api/types";
 import type { LiveSessionInfo } from "@/api/live";
 
+vi.mock("@/api/env", () => ({
+  envDetect: vi.fn().mockResolvedValue({ tools: [{ name: "claude", installed: true }] }),
+}));
+
 vi.mock("@/api/memory", () => ({
   getSettings: vi.fn().mockResolvedValue({ language: "zh", theme: null, accent: null, manual_projects: [] }),
   updateUiPrefs: vi.fn(),

@@ -49,7 +49,7 @@ import { agentSettings, isActive, loadChatPrefs, parseExtraArgs, rememberLast } 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { closeLive, ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
 import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
-import { loadProjectChatAgent, resolveProjectChatAgent } from "@/pages/chat/newChatAgent";
+import { loadNewChatAgent, resolveNewChatAgent } from "@/pages/chat/newChatAgent";
 import { resolveNewChatDir } from "@/pages/chat/newChatDir";
 import { ContextMeters } from "@/pages/chat/ContextMeter";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
@@ -1495,20 +1495,16 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     const p = loadChatPrefs();
     // Folder: the given one (project "＋"), else per the "new chat folder" setting.
     const dir = cwd ?? (await resolveNewChatDir(selected?.cwd ?? selectedLive?.cwd ?? null, p.cwd));
-    let agent = tool === "all" ? p.agent : tool;
-    if (cwd !== undefined) {
-      try {
-        const report = await envDetect();
-        const projectAgent = resolveProjectChatAgent(report, loadProjectChatAgent());
-        if (!projectAgent) {
-          setPageError(t.settings.newChatAgent.noneInstalled);
-          return;
-        }
-        agent = projectAgent;
-      } catch (e) {
-        setPageError(fmt(c.actionFailed, { error: errorMessage(e) }));
-        return;
-      }
+    let agent: LiveAgent | null;
+    try {
+      agent = resolveNewChatAgent(await envDetect(), loadNewChatAgent());
+    } catch (e) {
+      setPageError(fmt(c.actionFailed, { error: errorMessage(e) }));
+      return;
+    }
+    if (!agent) {
+      setPageError(t.settings.newChatAgent.noneInstalled);
+      return;
     }
     const key = newDraftKey();
     if (worktree) patchConvUi(key, { worktree: true });

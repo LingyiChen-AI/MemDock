@@ -2,9 +2,9 @@ import type { LiveAgent } from "@/api/live";
 import type { EnvReport } from "@/api/types";
 
 const KEY = "memdock.chat.projectDefaultAgent";
-export const PROJECT_CHAT_AGENTS = ["claude", "codex"] as const;
+export const NEW_CHAT_AGENTS = ["claude", "codex"] as const;
 
-export function loadProjectChatAgent(): LiveAgent | null {
+export function loadNewChatAgent(): LiveAgent | null {
   try {
     const value = localStorage.getItem(KEY);
     return value === "claude" || value === "codex" ? value : null;
@@ -13,7 +13,7 @@ export function loadProjectChatAgent(): LiveAgent | null {
   }
 }
 
-export function saveProjectChatAgent(agent: LiveAgent): void {
+export function saveNewChatAgent(agent: LiveAgent): void {
   localStorage.setItem(KEY, agent);
 }
 
@@ -21,7 +21,7 @@ export function isChatAgentInstalled(env: EnvReport | null, agent: LiveAgent): b
   return env?.tools.some((tool) => tool.name === agent && tool.installed) ?? false;
 }
 
-export function resolveProjectChatAgent(env: EnvReport | null, preferred: LiveAgent | null): LiveAgent | null {
+export function resolveNewChatAgent(env: EnvReport | null, preferred: LiveAgent | null): LiveAgent | null {
   if (preferred && isChatAgentInstalled(env, preferred)) return preferred;
-  return PROJECT_CHAT_AGENTS.find((agent) => isChatAgentInstalled(env, agent)) ?? null;
+  return NEW_CHAT_AGENTS.find((agent) => isChatAgentInstalled(env, agent)) ?? null;
 }

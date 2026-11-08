@@ -1147,12 +1147,13 @@
     "autostart": {
       "title": "开机自启",
       "description": "登录系统时自动启动 MemDock。",
+      "installRequired": "请在安装版 MemDock 中开启登录系统时自动启动。",
       "readError": "无法读取开机自启状态。",
       "writeError": "无法更改开机自启设置。"
     },
     "newChatAgent": {
-      "title": "项目新会话的默认工具",
-      "desc": "应用于项目菜单的「新建会话」和「在独立工作区新建会话」。只安装了一个工具时自动选用。两个都安装时，默认使用 Claude Code。",
+      "title": "新对话默认助手",
+      "desc": "应用于侧栏、对话页、快捷键和项目菜单的新对话，包括独立工作区。只安装了一个助手时自动选用，两个都安装且未设置时使用 Claude Code。",
       "noneInstalled": "请先在本机安装 Claude Code 或 Codex CLI。"
     },
     "newChatDir": {

@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
@@ -14,24 +13,18 @@ vi.mock("@/api/skills", () => ({
   writeSkillFile: vi.fn(),
   onSkillsChanged: vi.fn(),
 }));
-const cmProps = vi.hoisted(() => ({ lastExtLength: -1, lengths: [] as number[] }));
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({
-    extensions,
     value,
     onChange,
     editable,
     readOnly,
   }: {
-    extensions?: unknown[];
     value: string;
     onChange?: (v: string) => void;
     editable?: boolean;
     readOnly?: boolean;
   }) => {
-    useEffect(() => {
-      cmProps.lengths.push((extensions ?? []).length);
-    }, [extensions]);
     return (
       <textarea
         aria-label="editor"
@@ -46,7 +39,7 @@ vi.mock("@uiw/react-codemirror", () => ({
 
 import { listSkillFiles, onSkillsChanged, readSkillFile, writeSkillFile } from "@/api/skills";
 import { renderApp } from "@/test/fixtures";
-import { SkillFiles, isMarkdownPath } from "./SkillFiles";
+import { SkillFiles } from "./SkillFiles";
 
 const dto = (over: Partial<SkillFileDto> = {}): SkillFileDto => ({
   text: "# hello",
@@ -86,8 +79,8 @@ describe("SkillFiles", () => {
     renderApp(<SkillFiles skillId="s1" readonly={false} />);
     expect(await screen.findByDisplayValue("# hello")).toBeInTheDocument();
     expect(readSkillFile).toHaveBeenCalledWith("s1", "SKILL.md");
-    expect(screen.getByRole("treeitem", { name: /scripts/ })).toBeInTheDocument();
-    expect(screen.getByRole("treeitem", { name: /logo.png/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /scripts/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /logo.png/ })).toBeInTheDocument();
   });
 
   it("files editor saves with expected hash", async () => {
@@ -97,9 +90,9 @@ describe("SkillFiles", () => {
     const ed = await screen.findByDisplayValue("# hello");
     await userEvent.clear(ed);
     await userEvent.type(ed, "# changed");
-    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存 (Ctrl+S)" }));
     expect(writeSkillFile).toHaveBeenCalledWith("s1", "SKILL.md", "# changed", "h1");
-    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存 (Ctrl+S)" })).toBeDisabled());
   });
 
   it("disk_changed opens the conflict dialog", async () => {
@@ -108,8 +101,8 @@ describe("SkillFiles", () => {
     renderApp(<SkillFiles skillId="s1" readonly={false} />);
     const ed = await screen.findByDisplayValue("# hello");
     await userEvent.type(ed, "!");
-    await userEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("文件在磁盘上已被修改，重新加载会丢弃编辑器里未保存的内容。")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "保存 (Ctrl+S)" }));
+    expect(await screen.findByRole("dialog", { name: "重新读取文件" })).toBeInTheDocument();
   });
 
   it("binary file shows a notice and no editor", async () => {
@@ -118,7 +111,7 @@ describe("SkillFiles", () => {
     );
     renderApp(<SkillFiles skillId="s1" readonly={false} />);
     await screen.findByDisplayValue("# hello");
-    await userEvent.click(screen.getByRole("treeitem", { name: /logo.png/ }));
+    await userEvent.click(screen.getByRole("button", { name: /logo.png/ }));
     expect(await screen.findByText("二进制文件，不能预览或编辑")).toBeInTheDocument();
     expect(screen.queryByLabelText("editor")).toBeNull();
   });
@@ -129,7 +122,7 @@ describe("SkillFiles", () => {
     );
     renderApp(<SkillFiles skillId="s1" readonly={false} />);
     await screen.findByDisplayValue("# hello");
-    await userEvent.click(screen.getByRole("treeitem", { name: /logo.png/ }));
+    await userEvent.click(screen.getByRole("button", { name: /logo.png/ }));
     expect(await screen.findByText("文件太大，不能在这里打开")).toBeInTheDocument();
   });
 
@@ -138,17 +131,20 @@ describe("SkillFiles", () => {
     renderApp(<SkillFiles skillId="s1" readonly />);
     const ed = await screen.findByDisplayValue("# hello");
     expect(ed).toHaveAttribute("readonly");
-    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存 (Ctrl+S)" })).toBeNull();
   });
 
-  it("switching files with unsaved edits asks first", async () => {
+  it("keeps edits in an inactive tab and reports them to the Skill page", async () => {
     (readSkillFile as Mock).mockResolvedValue(dto());
-    renderApp(<SkillFiles skillId="s1" readonly={false} />);
-    const ed = await screen.findByDisplayValue("# hello");
-    await userEvent.type(ed, "x");
-    await userEvent.click(screen.getByRole("treeitem", { name: /logo.png/ }));
-    expect(await screen.findByText("放弃未保存的修改？")).toBeInTheDocument();
-    expect(readSkillFile).toHaveBeenCalledTimes(1);
+    const onDirtyChange = vi.fn();
+    renderApp(<SkillFiles skillId="s1" readonly={false} onDirtyChange={onDirtyChange} />);
+    await userEvent.type(await screen.findByDisplayValue("# hello"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "scripts" }));
+    await userEvent.click(await screen.findByRole("button", { name: "run.py" }));
+    expect(await screen.findByDisplayValue("# hello")).toBeInTheDocument();
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    await userEvent.click(screen.getByRole("button", { name: "SKILL.md", pressed: false }));
+    expect(await screen.findByDisplayValue("# hellox")).toBeInTheDocument();
   });
 
   it("external change reloads a clean editor", async () => {
@@ -160,17 +156,30 @@ describe("SkillFiles", () => {
     expect(await screen.findByDisplayValue("# remote")).toBeInTheDocument();
   });
 
-  it("markdown language only for .md files", async () => {
-    expect(isMarkdownPath("SKILL.md")).toBe(true);
-    expect(isMarkdownPath("docs/a.MD")).toBe(true);
-    expect(isMarkdownPath("scripts/run.py")).toBe(false);
-    expect(isMarkdownPath("notes.mdx")).toBe(false);
+  it("refreshes an inactive clean tab when it is selected again", async () => {
     (readSkillFile as Mock).mockResolvedValue(dto());
-    cmProps.lengths.length = 0;
     renderApp(<SkillFiles skillId="s1" readonly={false} />);
     await screen.findByDisplayValue("# hello");
-    const mdLen = cmProps.lengths[cmProps.lengths.length - 1];
-    await userEvent.click(screen.getByRole("treeitem", { name: /run.py/ }));
-    await waitFor(() => expect(cmProps.lengths[cmProps.lengths.length - 1]).toBe(mdLen - 1));
+    await userEvent.click(screen.getByRole("button", { name: "scripts" }));
+    await userEvent.click(await screen.findByRole("button", { name: "run.py" }));
+    await screen.findByDisplayValue("# hello");
+    (readSkillFile as Mock).mockResolvedValue(dto({ text: "# externally updated", hash: "h2" }));
+    await userEvent.click(screen.getByRole("button", { name: "SKILL.md", pressed: false }));
+    expect(await screen.findByDisplayValue("# externally updated")).toBeInTheDocument();
+  });
+
+  it("opens a script from the shared file finder and saves through the Skill API", async () => {
+    (readSkillFile as Mock).mockResolvedValue(dto({ text: "print(1)" }));
+    (writeSkillFile as Mock).mockResolvedValue(dto({ text: "print(12)", hash: "h2" }));
+    renderApp(<SkillFiles skillId="s1" readonly={false} />);
+    await screen.findByDisplayValue("print(1)");
+    await userEvent.click(screen.getByRole("button", { name: "找文件" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "找文件" }), "run.py");
+    await userEvent.click(await screen.findByRole("button", { name: "scripts/run.py" }));
+    const editor = await screen.findByDisplayValue("print(1)");
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "print(12)");
+    await userEvent.keyboard("{Control>}s{/Control}");
+    await waitFor(() => expect(writeSkillFile).toHaveBeenCalledWith("s1", "scripts/run.py", "print(12)", "h1"));
   });
 });

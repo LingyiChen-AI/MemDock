@@ -27,27 +27,36 @@ type TextSource = Extract<CodeFile, { kind: "text" }>;
 type Draft = { source: TextSource; text: string };
 type Tab = { path: string; file?: CodeFile; text?: string; error?: string };
 type Labels = ReturnType<typeof useI18n>["t"]["workspaceCode"];
-const drafts = new Map<string, Draft>();
+const workspaceDrafts = new Map<string, Draft>();
 const widthKey = "memdock.workspaceCode.widthPercent";
 const defaultWidth = 60;
 const minWidth = 25;
 const maxWidth = 80;
 const parentOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 const nameOf = (path: string) => path.split("/").pop() ?? path;
-const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
+const errorText = (e: unknown) => typeof e === "object" && e !== null && "message" in e ? String(e.message) : String(e);
 const isAdded = (mark: string) => /^[AU]+$/.test(mark);
 const isUntitled = (path: string) => path.startsWith("\0");
 const tabName = (path: string, l: Labels) => isUntitled(path) ? l.untitled + "-" + path.slice(1) : nameOf(path);
 const isDirty = (tab: Tab) => tab.file?.kind === "text" && tab.file.text !== tab.text;
 
 type ExplorerActions = {
-  newFile: (directory: string) => void;
+  newFile?: (directory: string) => void;
   focusNewFile: () => void;
   open: (path: string) => void;
-  vscode: (path: string) => void;
+  vscode?: (path: string) => void;
   copyPath: (path: string, relative: boolean) => void;
-  remove: (path: string) => void;
+  remove?: (path: string) => void;
 };
+
+export interface CodePanelSource {
+  entries: (path: string) => Promise<CodeEntry[]>;
+  read: (path: string) => Promise<CodeFile>;
+  save?: (path: string, revision: string, text: string) => Promise<string>;
+  search: (query: string) => Promise<CodeMatch[]>;
+  invalidate: () => void;
+  watch: (refresh: () => void) => Promise<() => void>;
+}
 
 function WorkspaceMenu({ trigger, children, onCloseAutoFocus }: {
   trigger: React.ReactElement; children: React.ReactNode; onCloseAutoFocus?: (event: Event) => void;
@@ -85,8 +94,7 @@ function MenuSeparator() {
 function PathMenuItems({ path, actions, l }: { path: string; actions: ExplorerActions; l: Labels }) {
   return (
     <>
-      <MenuItem onSelect={() => actions.vscode(path)}>{l.vscode}</MenuItem>
-      <MenuSeparator />
+      {actions.vscode && <><MenuItem onSelect={() => actions.vscode?.(path)}>{l.vscode}</MenuItem><MenuSeparator /></>}
       <MenuItem onSelect={() => actions.copyPath(path, false)}>{l.copyPath}</MenuItem>
       <MenuItem onSelect={() => actions.copyPath(path, true)}>{l.copyRelativePath}</MenuItem>
     </>
@@ -105,19 +113,19 @@ function ExplorerMenu({ path, directory, actions, l, children }: {
       }
       creating.current = false;
     }}>
-      <MenuItem onSelect={() => {
+      {(!directory || actions.newFile) && <MenuItem onSelect={() => {
         if (directory) {
           creating.current = true;
-          actions.newFile(path);
+          actions.newFile?.(path);
         } else {
           actions.open(path);
         }
-      }}>{directory ? l.newFile : l.open}</MenuItem>
+      }}>{directory ? l.newFile : l.open}</MenuItem>}
       <PathMenuItems path={path} actions={actions} l={l} />
-      {!directory && (
+      {!directory && actions.remove && (
         <>
           <MenuSeparator />
-          <MenuItem destructive onSelect={() => actions.remove(path)}>{l.deleteFile}</MenuItem>
+          <MenuItem destructive onSelect={() => actions.remove?.(path)}>{l.deleteFile}</MenuItem>
         </>
       )}
     </WorkspaceMenu>
@@ -125,26 +133,26 @@ function ExplorerMenu({ path, directory, actions, l, children }: {
 }
 
 type TreeProps = {
-  cwd: string; path: string; refresh: number; status: Record<string, string>; active: string | null;
+  entriesFor: (path: string) => Promise<CodeEntry[]>; path: string; refresh: number; status: Record<string, string>; active: string | null;
   directory: string; expanded: ReadonlySet<string>; folderMarks: ReadonlyMap<string, boolean>;
   toggleDirectory: (path: string) => void; actions: ExplorerActions; l: Labels;
   newFileDirectory: string | undefined; inlineFile: React.ReactNode;
 };
 
 function Tree(props: TreeProps) {
-  const { cwd, path, refresh, status, active, directory, expanded, folderMarks, toggleDirectory, actions, newFileDirectory, inlineFile, l } = props;
+  const { entriesFor, path, refresh, status, active, directory, expanded, folderMarks, toggleDirectory, actions, newFileDirectory, inlineFile, l } = props;
   const [entries, setEntries] = React.useState<CodeEntry[]>([]);
   const [error, setError] = React.useState("");
   React.useEffect(() => {
     let current = true;
     setError("");
-    void codeEntries(cwd, path).then((value) => {
+    void entriesFor(path).then((value) => {
       if (current) setEntries(value);
     }, (e) => {
       if (current) setError(errorText(e));
     });
     return () => { current = false; };
-  }, [cwd, path, refresh]);
+  }, [entriesFor, path, refresh]);
 
   if (error) return <p role="alert" className="break-words px-2 py-1 text-red-300">{error}</p>;
   return (
@@ -440,10 +448,16 @@ function PromptButton({ tone = "primary", className, ...props }: React.Component
   );
 }
 
-export function WorkspaceCodePanel({ cwd, base, shown, request }: {
+export function WorkspaceCodePanel({ cwd, base, shown, request, source, onDirtyChange }: {
   cwd: string; base: WorktreeInfo | null; shown: boolean; request: CodeLocation | null;
+  source?: CodePanelSource; onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const { t: { workspaceCode: l } } = useI18n();
+  const { t: { workspaceCode: l, skills } } = useI18n();
+  const [localDrafts] = React.useState(() => new Map<string, Draft>());
+  const drafts = source ? localDrafts : workspaceDrafts;
+  const readOnly = !!source && !source.save;
+  const entriesFor = React.useCallback((path: string) => source ? source.entries(path) : codeEntries(cwd, path), [source, cwd]);
+  const readFile = React.useCallback((path: string) => source ? source.read(path) : readCode(cwd, path, base), [source, cwd, base]);
   const [width, setWidth] = React.useState(() => {
     const saved = Number(localStorage.getItem(widthKey));
     return saved >= minWidth && saved <= maxWidth ? saved : defaultWidth;
@@ -500,8 +514,12 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
   const file = tab?.file;
   const closing = tabs.find((item) => item.path === pendingClose[0]);
   const dirty = tab ? isDirty(tab) : false;
+  const hasDirtyTabs = tabs.some(isDirty);
+  React.useEffect(() => { onDirtyChange?.(hasDirtyTabs); }, [onDirtyChange, hasDirtyTabs]);
+  React.useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const update = (next: Tab) => setTabs((value) => value.map((item) => item.path === next.path ? next : item));
   const refreshStatus = React.useCallback(() => {
+    if (source) return;
     const request = ++statusRequest.current;
     const marks = base
       ? worktreeStatus(base.path).then(({ files }) => Object.fromEntries(files.map(({ path, status }) => [path, status])))
@@ -511,24 +529,32 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       setStatus((current) => Object.keys(current).length === Object.keys(next).length &&
         Object.entries(next).every(([path, mark]) => current[path] === mark) ? current : next);
     }, () => { /* Keep the last successful Git status. */ });
-  }, [base, cwd]);
+  }, [base, cwd, source]);
 
   React.useEffect(() => {
-    if (!shown) return;
+    if (!shown || source) return;
     refreshStatus();
     const timer = window.setInterval(() => {
       if (!document.hidden && document.hasFocus()) refreshStatus();
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [shown, refreshStatus]);
+  }, [shown, refreshStatus, source]);
 
   const refreshExplorer = React.useCallback(() => {
     refreshStatus();
+    source?.invalidate();
     setRefresh((value) => value + 1);
-    if (!tab?.file || isUntitled(tab.path) || isDirty(tab) || saveLock.current) return;
+    if (!tab?.file || isUntitled(tab.path) || saveLock.current) return;
+    const dirty = isDirty(tab);
+    if (dirty && !source) return;
     const token = loads.current.get(tab.path);
-    void readCode(cwd, tab.path, base).then((file) => {
-      if (loads.current.get(tab.path) !== token) return;
+    void readFile(tab.path).then((file) => {
+      if (loads.current.get(tab.path) !== token || saveLock.current) return;
+      if (dirty) {
+        if (file.kind === "text" && tab.file?.kind === "text" && file.revision !== tab.file.revision &&
+          drafts.get(cwd + "\0" + tab.path)?.source.revision === tab.file.revision) setError(skills.externalChanged);
+        return;
+      }
       setTabs((current) => current.map((item) => {
         if (item !== tab) return item;
         if (file.kind === "text" && item.file?.kind === "text" &&
@@ -537,7 +563,20 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
         return { path: item.path, file, text: file.kind === "text" ? file.text : undefined };
       }));
     }, () => { /* The reload action can show any file access error. */ });
-  }, [base, cwd, refreshStatus, tab]);
+  }, [cwd, drafts, readFile, refreshStatus, skills.externalChanged, source, tab]);
+
+  const latestRefresh = React.useRef(refreshExplorer);
+  latestRefresh.current = refreshExplorer;
+  React.useEffect(() => {
+    if (!source) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void source.watch(() => { if (active) latestRefresh.current(); }).then((stop) => {
+      if (active) unlisten = stop;
+      else stop();
+    }, () => {});
+    return () => { active = false; unlisten?.(); };
+  }, [source]);
 
   React.useEffect(() => {
     if (!shown) return;
@@ -560,7 +599,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
     setTabs((value) => value.some((item) => item.path === path)
       ? value.map((item) => item.path === path ? { path } : item)
       : [...value, { path }]);
-    void readCode(cwd, path, base).then((file) => {
+    void readFile(path).then((file) => {
       if (loads.current.get(path) !== token) return;
       if (reload && drafts.get(key) === draft) drafts.delete(key);
       update({ path, file, text: file.kind === "text" ? file.text : undefined });
@@ -568,16 +607,24 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       if (loads.current.get(path) !== token) return;
       update({ path, file: draft?.source, text: draft?.text, error: errorText(e) });
     });
-  }, [cwd, base]);
+  }, [cwd, drafts, readFile]);
 
+  const openState = React.useRef({ active, tabs, saving });
+  openState.current = { active, tabs, saving };
   const open = React.useCallback((location: CodeLocation) => {
     setError("");
     setActive(location.path);
     setReveal(location);
     setMode("code");
     setFinder((current) => current === "files" ? null : current);
-    if (!isUntitled(location.path)) load(location.path);
-  }, [load]);
+    if (!isUntitled(location.path)) {
+      const state = openState.current;
+      const cached = state.tabs.find((item) => item.path === location.path);
+      const refreshCleanTab = !!source && state.active !== location.path && state.saving !== location.path &&
+        !!cached && !!(cached.file || cached.error) && !isDirty(cached);
+      load(location.path, refreshCleanTab);
+    }
+  }, [load, source]);
 
   const openUntitled = () => {
     let number = 1;
@@ -594,7 +641,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
   }, [request, open]);
 
   const saveTab = React.useCallback(async (target: Tab, closeAfter = false) => {
-    if (target.file?.kind !== "text" || target.text === undefined || deleting === target.path || saveLock.current) return;
+    if (readOnly || target.file?.kind !== "text" || target.text === undefined || deleting === target.path || saveLock.current) return;
     if (isUntitled(target.path)) {
       setSaveAs((current) => current ?? { tab: target.path, directory, name: "", closeAfter });
       return;
@@ -607,7 +654,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
     setSaving(path);
     setError("");
     try {
-      const revision = await saveCode(cwd, path, file.revision, text);
+      const revision = source?.save ? await source.save(path, file.revision, text) : await saveCode(cwd, path, file.revision, text);
       if (drafts.get(draftKey) === draft) drafts.delete(draftKey);
       if (closeAfter) {
         loads.current.delete(path);
@@ -620,11 +667,12 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       refreshStatus();
     } catch (e) {
       setError(errorText(e));
+      if (!closeAfter && typeof e === "object" && e !== null && "code" in e && e.code === "disk_changed") setReloadTarget(path);
     } finally {
       saveLock.current = false;
       setSaving(null);
     }
-  }, [cwd, deleting, directory, refreshStatus]);
+  }, [cwd, deleting, directory, drafts, readOnly, refreshStatus, source]);
 
   const save = React.useCallback(() => {
     if (tab && !pendingClose.length) return saveTab(tab);
@@ -638,7 +686,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       if (key === "s" && !event.shiftKey) {
         event.preventDefault();
         void save();
-      } else if ((key === "p" && !event.shiftKey) || (key === "f" && event.shiftKey)) {
+      } else if ((key === "p" && !event.shiftKey) || (!source && key === "f" && event.shiftKey)) {
         event.preventDefault();
         setFinder(key === "p" ? "files" : "content");
         searchInput.current?.focus();
@@ -646,7 +694,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [closing, deleteTarget, reloadTarget, save, saveAs, shown]);
+  }, [closing, deleteTarget, reloadTarget, save, saveAs, shown, source]);
 
   React.useEffect(() => {
     setMatches([]);
@@ -657,7 +705,8 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
     let current = true;
     setSearching(true);
     const timer = window.setTimeout(() => {
-      void searchCode(cwd, query, finder === "content").then((value) => {
+      const pending = source ? source.search(query) : searchCode(cwd, query, finder === "content");
+      void pending.then((value) => {
         if (current) setMatches(value);
       }, (e) => {
         if (current) setError(errorText(e));
@@ -666,7 +715,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       });
     }, 250);
     return () => { current = false; window.clearTimeout(timer); };
-  }, [cwd, finder, query, shown]);
+  }, [cwd, finder, query, shown, source]);
 
   const removeTab = (path: string) => {
     loads.current.delete(path);
@@ -752,9 +801,9 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
   };
 
   const explorerActions: ExplorerActions = {
-    newFile: startNewFile,
+    newFile: source ? undefined : startNewFile,
     focusNewFile: () => newFileInput.current?.focus(),
-    remove: (path) => {
+    remove: source ? undefined : (path) => {
       if (deleting || saving === path) return;
       if (drafts.has(cwd + "\0" + path) || tabs.some((item) => item.path === path && isDirty(item))) {
         setDeleteTarget(path);
@@ -763,7 +812,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       }
     },
     open: (path) => open({ path }),
-    vscode: (path) => void openCodeInVSCode(cwd, path).catch((e) => setError(errorText(e))),
+    vscode: source ? undefined : (path) => void openCodeInVSCode(cwd, path).catch((e) => setError(errorText(e))),
     copyPath: async (path, relative) => {
       const separator = cwd.includes("\\") ? "\\" : "/";
       const absolute = path ? cwd.replace(/[\\/]+$/, "") + separator + path.split("/").join(separator) : cwd;
@@ -838,10 +887,10 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       onContextMenu={(event) => event.preventDefault()}
       hidden={!shown}
       aria-label={l.title}
-      className={cn("relative min-h-0 min-w-0 shrink-0 flex-col border-l border-zinc-700 bg-zinc-900 text-zinc-100", shown ? "flex" : "hidden")}
-      style={{ width: `${width}%`, minWidth: "min(270px, 80%)" }}
+      className={cn("relative min-h-0 min-w-0 shrink-0 flex-col border-l border-zinc-700 bg-zinc-900 text-zinc-100", source && "w-full", shown ? "flex" : "hidden")}
+      style={source ? undefined : { width: `${width}%`, minWidth: "min(270px, 80%)" }}
     >
-      <div
+      {!source && <div
         role="separator"
         aria-label={l.resize}
         aria-orientation="vertical"
@@ -864,7 +913,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
             resize(visibleWidth + (event.key === "ArrowLeft" ? 3 : -3));
           }
         }}
-      />
+      />}
       {shown && saveAs ? (
         <PanelPrompt key="save-as" title={l.saveAs} onCancel={cancelSaveAs}>
           <p className="break-all text-xs text-zinc-300">{cwd}{saveAs.directory && " / " + saveAs.directory}</p>
@@ -901,7 +950,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
         </PanelPrompt>
       ) : shown && reloadTarget !== null ? (
         <PanelPrompt warning title={l.reload} onCancel={() => setReloadTarget(null)}>
-          <p className="text-zinc-300">{l.discard}</p>
+          <p className="text-zinc-300">{source && error ? skills.conflictBody : l.discard}</p>
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <PromptButton type="button" data-initial-focus tone="secondary" onClick={() => setReloadTarget(null)}>{l.cancel}</PromptButton>
             <PromptButton type="button" tone="danger" onClick={() => reload(reloadTarget)}>{l.reload}</PromptButton>
@@ -920,17 +969,17 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
       <div className="flex min-h-0 flex-1">
         <div className="flex w-8 shrink-0 flex-col items-center gap-1 border-r border-zinc-700 bg-zinc-950 py-1">
           <PanelButton label={l.files} icon={<Files size={17} />} pressed={!finder} onClick={() => setFinder(null)} />
-          <PanelButton label={l.findText} icon={<Search size={17} />} pressed={finder === "content"} onClick={() => {
+          {!source && <PanelButton label={l.findText} icon={<Search size={17} />} pressed={finder === "content"} onClick={() => {
             setFinder("content");
             searchInput.current?.focus();
-          }} />
-          <PanelButton label={l.vscode} icon={<ExternalLink size={16} />} onClick={() => void openCodeInVSCode(cwd, active && !isUntitled(active) ? active : "", reveal?.line).catch((e) => setError(errorText(e)))} />
+          }} />}
+          {!source && <PanelButton label={l.vscode} icon={<ExternalLink size={16} />} onClick={() => void openCodeInVSCode(cwd, active && !isUntitled(active) ? active : "", reveal?.line).catch((e) => setError(errorText(e)))} />}
         </div>
         <div className="flex w-[29%] max-w-60 min-w-24 shrink-0 flex-col border-r border-zinc-700 bg-zinc-900 text-xs">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-0.5 px-2 py-1">
             <span className="min-w-0 truncate font-semibold">{finder === "content" ? l.findText : finder === "files" ? l.findFile : l.files}</span>
             <div className="ml-auto flex items-center">
-              {!finder && (
+              {!finder && !source && (
                 <PanelButton label={l.newFile} icon={<FilePlus size={14} />} disabled={creating} onClick={() => startNewFile(directory)} />
               )}
               <PanelButton label={l.findFile} icon={<Search size={14} />} pressed={finder === "files"} onClick={() => {
@@ -973,7 +1022,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
                   title={cwd} onClick={() => setDirectory("")}>{cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd}</button>
               </ExplorerMenu>
               <div className="min-h-0 flex-1 overflow-auto py-1">
-                <Tree cwd={cwd} path="" refresh={refresh} status={status} active={active} directory={directory} expanded={expanded}
+                <Tree entriesFor={entriesFor} path="" refresh={refresh} status={status} active={active} directory={directory} expanded={expanded}
                   folderMarks={folderMarks} toggleDirectory={toggleDirectory} actions={explorerActions} l={l}
                   newFileDirectory={newFile?.directory}
                   inlineFile={newFile && (
@@ -1031,7 +1080,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
                 )}
               </WorkspaceMenu>
             ))}
-            <WorkspaceMenu trigger={
+            {!source && <WorkspaceMenu trigger={
               <button
                 type="button"
                 aria-label={l.newFileFromTabs}
@@ -1049,7 +1098,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
             }}>
               <MenuItem disabled={creating} onSelect={openUntitled}>{l.newFile}</MenuItem>
               <MenuItem disabled={!tabs.length} onSelect={() => closeTabs(tabs)}>{l.closeAll}</MenuItem>
-            </WorkspaceMenu>
+            </WorkspaceMenu>}
           </div>
           {tab && (
             <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1 border-b border-zinc-700 px-2 py-1">
@@ -1070,7 +1119,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
                 <>
                   {file.baseline !== null && <PanelButton label={l.changes} pressed={mode === "diff"} onClick={() => setMode(mode === "diff" ? "code" : "diff")} />}
                   {/\.(md|markdown)$/i.test(tab.path) && <PanelButton label={l.preview} pressed={mode === "preview"} onClick={() => setMode(mode === "preview" ? "code" : "preview")} />}
-                  <PanelButton label={l.save} icon={<Save size={14} />} disabled={(!dirty && !isUntitled(tab.path)) || saving !== null || deleting === tab.path} onClick={() => void save()} />
+                  {!readOnly && <PanelButton label={l.save} icon={<Save size={14} />} disabled={(!dirty && !isUntitled(tab.path)) || saving !== null || deleting === tab.path} onClick={() => void save()} />}
                 </>
               )}
             </div>
@@ -1087,8 +1136,8 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
                   </ReactMarkdown>
                 </div>
               ) : (
-                <CodeEditor key={tab.path} path={tab.path} value={tab.text ?? ""} baseline={file.baseline} readOnly={saving === tab.path || deleting === tab.path} reveal={reveal} l={l} onError={setError} onSave={() => void save()} onChange={(text) => {
-                  if (text === tab.text || saving === tab.path || deleting === tab.path) return;
+                <CodeEditor key={tab.path} path={tab.path} value={tab.text ?? ""} baseline={file.baseline} readOnly={readOnly || saving === tab.path || deleting === tab.path} reveal={reveal} l={l} onError={setError} onSave={() => void save()} onChange={(text) => {
+                  if (readOnly || text === tab.text || saving === tab.path || deleting === tab.path) return;
                   const key = cwd + "\0" + tab.path;
                   if (text === file.text && !isUntitled(tab.path)) drafts.delete(key);
                   else drafts.set(key, { source: file, text });
@@ -1096,7 +1145,7 @@ export function WorkspaceCodePanel({ cwd, base, shown, request }: {
                 }} />
               )
           ) : !tab?.error && <p className="grid flex-1 place-items-center p-3 text-center text-xs text-zinc-400">{tab ? l.loading : l.select}</p>}
-          {file?.kind === "text" && <div className="shrink-0 border-t border-zinc-700 px-2 py-1 text-[11px] text-zinc-300">{base?.base_branch || "HEAD"} · UTF-8 · {saving ? l.saving : dirty ? l.unsaved : l.editable}</div>}
+          {file?.kind === "text" && <div className="shrink-0 border-t border-zinc-700 px-2 py-1 text-[11px] text-zinc-300">{!source && `${base?.base_branch || "HEAD"} · `}UTF-8 · {readOnly ? skills.readonlyGroup : saving ? l.saving : dirty ? l.unsaved : l.editable}</div>}
         </div>
       </div>
     </aside>

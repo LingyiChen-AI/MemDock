@@ -1147,12 +1147,13 @@
     "autostart": {
       "title": "Launch at login",
       "description": "Start MemDock when you log in.",
+      "installRequired": "Use the installed MemDock app to start it automatically when you log in.",
       "readError": "Could not read launch-at-login status.",
       "writeError": "Could not change the launch-at-login setting."
     },
     "newChatAgent": {
-      "title": "Default tool for new project chats",
-      "desc": "Applies to both new chat options in the project menu. If only one CLI is installed, it is selected automatically. When both are installed, the default is Claude Code.",
+      "title": "Default assistant for new chats",
+      "desc": "Applies to new chats from the sidebar, chat page, keyboard shortcut, and project menu, including worktrees. If only one CLI is installed, it is selected automatically. If both are installed and no preference is set, Claude Code is used.",
       "noneInstalled": "Install Claude Code or Codex CLI on this computer first."
     },
     "newChatDir": {

@@ -33,7 +33,7 @@ import type { AppUpdate } from "./useAppUpdate";
 import { Button } from "@/components/ui/button";
 import type { NavKey } from "@/layout/AppShell";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { isChatAgentInstalled, loadProjectChatAgent, PROJECT_CHAT_AGENTS, resolveProjectChatAgent, saveProjectChatAgent } from "@/pages/chat/newChatAgent";
+import { isChatAgentInstalled, loadNewChatAgent, NEW_CHAT_AGENTS, resolveNewChatAgent, saveNewChatAgent } from "@/pages/chat/newChatAgent";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -177,18 +177,20 @@ function EnvironmentSkeleton({ label, tools }: { label: string; tools: EnvReport
 function AutostartSettings() {
   const { t } = useI18n();
   const s = t.settings.autostart;
+  const available = isTauri() && !import.meta.env.DEV;
   const [enabled, setEnabled] = React.useState<boolean>();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<"readError" | "writeError">();
 
   React.useEffect(() => {
+    if (!available) return;
     let active = true;
     void isEnabled().then(
       (value) => { if (active) setEnabled(value); },
       () => { if (active) setError("readError"); },
     );
     return () => { active = false; };
-  }, []);
+  }, [available]);
 
   const change = async (checked: boolean) => {
     setBusy(true);
@@ -207,8 +209,8 @@ function AutostartSettings() {
     <Section
       icon={SettingsIcon}
       title={s.title}
-      desc={s.description}
-      action={<Switch aria-label={s.title} checked={enabled ?? false} disabled={enabled === undefined || busy} onCheckedChange={(checked) => void change(checked)} />}
+      desc={available ? s.description : s.installRequired}
+      action={<Switch aria-label={s.title} checked={enabled ?? false} disabled={!available || enabled === undefined || busy} onCheckedChange={(checked) => void change(checked)} />}
     >
       {error && <p role="alert" className="text-xs text-destructive">{s[error]}</p>}
     </Section>
@@ -224,7 +226,7 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
   const { t } = useI18n();
   const s = t.settings;
   const [env, setEnv] = React.useState<EnvReport | null>(null);
-  const [projectChatPreference, setProjectChatPreference] = React.useState(loadProjectChatAgent);
+  const [newChatPreference, setNewChatPreference] = React.useState(loadNewChatAgent);
   const [checking, setChecking] = React.useState(true);
   const [installing, setInstalling] = React.useState<string | null>(null);
   const [log, setLog] = React.useState<string[]>([]);
@@ -334,7 +336,7 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
     }
   };
 
-  const projectChatAgent = resolveProjectChatAgent(env, projectChatPreference);
+  const newChatAgent = resolveNewChatAgent(env, newChatPreference);
   const npmOk = env?.tools.some((x) => x.name === "npm" && x.installed) ?? false;
 
   return (
@@ -346,7 +348,7 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
         </h1>
 
         {appUpdate && <AppUpdateSection state={appUpdate} />}
-        {isTauri() && !import.meta.env.DEV && <AutostartSettings />}
+        <AutostartSettings />
         <Section
           icon={TerminalSquare}
           title={s.env.title}
@@ -398,20 +400,20 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
         <Section icon={MessagesSquare} title={s.newChatAgent.title} desc={s.newChatAgent.desc}>
           <RadioGroup
             aria-label={s.newChatAgent.title}
-            value={projectChatAgent ?? ""}
+            value={newChatAgent ?? ""}
             className="flex flex-wrap gap-x-6 gap-y-2"
             onValueChange={(value) => {
-              const agent = PROJECT_CHAT_AGENTS.find((item) => item === value);
+              const agent = NEW_CHAT_AGENTS.find((item) => item === value);
               if (!agent || !isChatAgentInstalled(env, agent)) return;
               try {
-                saveProjectChatAgent(agent);
-                setProjectChatPreference(agent);
+                saveNewChatAgent(agent);
+                setNewChatPreference(agent);
               } catch (e) {
                 push("error", errorMessage(e));
               }
             }}
           >
-            {PROJECT_CHAT_AGENTS.map((agent) => {
+            {NEW_CHAT_AGENTS.map((agent) => {
               const disabled = !isChatAgentInstalled(env, agent);
               return (
                 <label key={agent} className={cn("flex items-center gap-2 text-sm", disabled ? "text-muted-foreground" : "cursor-pointer")}>
@@ -421,7 +423,7 @@ export function SettingsPage({ onNavigate, appUpdate }: SettingsPageProps) {
               );
             })}
           </RadioGroup>
-          {env && !projectChatAgent && <p className="text-xs text-muted-foreground">{s.newChatAgent.noneInstalled}</p>}
+          {env && !newChatAgent && <p className="text-xs text-muted-foreground">{s.newChatAgent.noneInstalled}</p>}
         </Section>
 
         <Section icon={FolderOpen} title={s.newChatDir.title} desc={s.newChatDir.desc}>

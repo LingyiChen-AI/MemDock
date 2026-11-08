@@ -5,15 +5,16 @@ import type { SkillEntry, UpdateStatus } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ToolTag } from "@/pages/memory/ToolTag";
 import { fmt } from "@/pages/memory/paths";
-import { SkillFiles } from "./SkillFiles";
 import { tagClass } from "./SkillList";
 import { errorMessage, formatSize, shortCommit, sourceLabel } from "./skillUtils";
 
 type Tab = "overview" | "files";
+const SkillFiles = React.lazy(() => import("./SkillFiles").then(({ SkillFiles }) => ({ default: SkillFiles })));
 
 export interface SkillDetailProps {
   entry: SkillEntry;
@@ -182,7 +183,9 @@ export function SkillDetail({
       ) : null}
       {filesVisited ? (
         <div className={cn("flex min-h-0 min-w-0 flex-1", tab !== "files" && "hidden")}>
-          <SkillFiles key={entry.id} skillId={entry.id} readonly={entry.readonly} onDirtyChange={onDirtyChange} />
+          <React.Suspense fallback={<LoadingState label={s.loading} />}>
+            <SkillFiles key={entry.id} skillId={entry.id} cwd={entry.dir} readonly={entry.readonly} shown={tab === "files"} onDirtyChange={onDirtyChange} />
+          </React.Suspense>
         </div>
       ) : null}
 

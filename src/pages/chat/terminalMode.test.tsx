@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi, type Mock } from "vitest";
 import type { SessionPreview, SessionSummary } from "@/api/types";
 import type { LiveSessionInfo } from "@/api/live";
+import { saveNewChatAgent } from "./newChatAgent";
 
 vi.mock("@/api/env", () => ({
   envDetect: vi.fn().mockResolvedValue({
@@ -279,12 +280,14 @@ describe("new chats and terminals", () => {
     (liveStart as Mock).mockReset();
   });
 
-  it("新对话 opens a draft with the last agent in the home folder; the first send starts it with effort and args", async () => {
+  it("新对话 uses the configured assistant regardless of the list filter and last used assistant", async () => {
     (homeDir as unknown as { mockResolvedValueOnce: (v: string) => void }).mockResolvedValueOnce("/work/demo"); // no conversation open: new chats start in the home folder
-    saveChatPrefs({ ...DEFAULT_PREFS, agent: "codex", cwd: "/work/demo", effort: { claude: "", codex: "high" }, args: { claude: "", codex: "a=1 b=2" } });
+    saveNewChatAgent("codex");
+    saveChatPrefs({ ...DEFAULT_PREFS, agent: "claude", cwd: "/work/demo", effort: { claude: "", codex: "high" }, args: { claude: "", codex: "a=1 b=2" } });
     (liveStart as Mock).mockResolvedValue({ ...liveInfo("starting"), live_id: "L9", agent: "codex", native_id: null });
     renderApp(<SessionsPage />);
     await screen.findByRole("region", { name: "demo" });
+    await userEvent.click(screen.getByRole("radio", { name: "Claude Code" }));
     await userEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "新对话" }));
     const status = await screen.findByLabelText("当前设置");
     expect(within(status).getByText("Codex")).toBeInTheDocument();
@@ -304,6 +307,13 @@ describe("new chats and terminals", () => {
       }),
     );
     expect(loadChatPrefs()).toMatchObject({ agent: "codex", cwd: "/work/demo" });
+  });
+
+  it("uses the same default for a new chat requested by the sidebar or keyboard shortcut", async () => {
+    saveNewChatAgent("codex");
+    saveChatPrefs({ ...DEFAULT_PREFS, agent: "claude" });
+    renderApp(<SessionsPage request="chat" onRequestHandled={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "智能体: Codex" })).toBeInTheDocument();
   });
 
   it("the project header opens a draft in that folder and a shell terminal at the top of the group", async () => {

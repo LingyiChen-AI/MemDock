@@ -93,7 +93,7 @@ import { SessionsPage } from "@/pages/sessions/SessionsPage";
 import { refreshLiveList, resetLiveStore } from "./liveStore";
 import { resetTerminalStore } from "./terminalStore";
 import { DEFAULT_PREFS, saveChatPrefs } from "./chatPrefs";
-import { saveProjectChatAgent } from "./newChatAgent";
+import { saveNewChatAgent } from "./newChatAgent";
 import { resetConvUi } from "./convUiState";
 import { resetComposerCaches } from "./Composer";
 import { parseWorktreePath, resetWorktreeStore } from "./worktreeStore";
@@ -255,7 +255,7 @@ describe("/worktree in the composer", () => {
 describe("project ＋ menu", () => {
   it("uses the configured tool independently of the project filter and last-used tool", async () => {
     saveChatPrefs({ ...DEFAULT_PREFS, agent: "codex", cwd: "/work/demo" });
-    saveProjectChatAgent("claude");
+    saveNewChatAgent("claude");
     (listSessions as Mock).mockResolvedValue([mk({ id: "codex-1", tool: "codex" })]);
     renderApp(<SessionsPage />);
     await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
@@ -305,7 +305,7 @@ describe("starting a worktree draft", () => {
   }
 
   it("first send creates the worktree, then starts the live session in it", async () => {
-    saveProjectChatAgent("codex");
+    saveNewChatAgent("codex");
     await worktreeDraft();
     await screen.findByRole("button", { name: "在独立工作区运行（仅新会话）: 开" });
     await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "Fix login{Enter}");
@@ -316,7 +316,7 @@ describe("starting a worktree draft", () => {
 
   it("a failed create shows the error and keeps the text", async () => {
     (worktreeCreate as Mock).mockRejectedValue("分支 memdock/fix-login 已存在");
-    saveProjectChatAgent("codex");
+    saveNewChatAgent("codex");
     await worktreeDraft();
     await screen.findByRole("button", { name: "在独立工作区运行（仅新会话）: 开" });
     await userEvent.type(screen.getByRole("textbox", { name: "消息" }), "Fix login{Enter}");

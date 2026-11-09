@@ -63,6 +63,8 @@ export type LiveEvent =
     }
   | { type: "approval_resolved"; request_id: string; decision: Decision }
   | { type: "turn_completed"; usage: TurnUsage; is_error: boolean }
+  | { type: "prompt_suggestion"; text: string }
+  | { type: "permission_changed"; mode: PermissionMode }
   | { type: "error"; message: string; fatal: boolean }
   | { type: "exited"; code: number | null }
   /** A line from the CLI itself (compaction, output of a local slash command); same id replaces. */
@@ -101,8 +103,10 @@ export function readImageDataUri(path: string): Promise<string> {
   return invoke<string>("read_image_data_uri", { path });
 }
 
-export function liveRespond(liveId: string, requestId: string, decision: Decision): Promise<void> {
-  return invoke<void>("live_respond", { liveId, requestId, decision });
+export type QuestionAnswers = Record<string, string[]>;
+
+export function liveRespond(liveId: string, requestId: string, decision: Decision, answers?: QuestionAnswers): Promise<void> {
+  return invoke<void>("live_respond", { liveId, requestId, decision, ...(answers ? { answers } : {}) });
 }
 
 /** Stops the current turn; the session stays open. */

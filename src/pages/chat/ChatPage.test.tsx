@@ -139,6 +139,28 @@ describe("ChatPage", () => {
     expect(screen.queryByRole("button", { name: "正在停止" })).not.toBeInTheDocument();
   });
 
+  it("renders a question as options and submits the selected answer to the waiting turn", async () => {
+    (liveList as Mock).mockResolvedValue([info()]);
+    (liveTranscript as Mock).mockResolvedValue(envs([
+      { type: "user_message", id: "u1", text: "Help me publish" },
+      {
+        type: "approval_request", request_id: "q1", tool_name: "AskUserQuestion", kind: "other",
+        summary: "", can_allow_session: false,
+        detail: JSON.stringify({ questions: [{
+          question: "推到哪里？", multiSelect: false,
+          options: [{ label: "GitHub", description: "使用现有仓库" }, { label: "GitLab" }],
+        }] }),
+      },
+    ]));
+    setup();
+    const card = await screen.findByRole("region", { name: "需要你回答" });
+    const submit = within(card).getByRole("button", { name: "提交答案" });
+    expect(submit).toBeDisabled();
+    await userEvent.click(within(card).getByRole("radio", { name: /GitHub/ }));
+    await userEvent.click(submit);
+    expect(liveRespond).toHaveBeenCalledWith("L1", "q1", "allow", { "推到哪里？": ["GitHub"] });
+  });
+
   it("can force stop the selected session after an unconfirmed interruption", async () => {
     (liveList as Mock).mockResolvedValue([info({ state: "running" })]);
     (liveTranscript as Mock).mockResolvedValue([]);
@@ -165,7 +187,7 @@ describe("ChatPage", () => {
     await userEvent.type(box, "hello{Shift>}{Enter}{/Shift}world");
     expect(liveSend).not.toHaveBeenCalled();
     await userEvent.type(box, "{Enter}");
-    expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld", [], undefined);
+    expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld", [], "ask");
     await waitFor(() => expect(box).toHaveValue(""));
   });
 });

@@ -81,9 +81,9 @@ export function ChatMarkdown({ text: raw }: { text: string }) {
             if (href && !externalHref(href)) {
               try { path = decodeURI(href); } catch { /* Keep a literal percent in a file name. */ }
             }
-            const location = openCode && path && !externalHref(href) && messageCodeLocation(path);
+            const location = openCode && path && !externalHref(href) && messageCodeLocation(path, true);
             return location
-              ? <button type="button" className="text-primary underline" onClick={() => openCode?.(location)}>{children}</button>
+              ? <button type="button" className="text-primary underline" onClick={() => openCode?.(location, true)}>{children}</button>
               : <ExternalLink href={href}>{children}</ExternalLink>;
           },
           img: ({ alt, src }) => (
@@ -101,7 +101,7 @@ export function ChatMarkdown({ text: raw }: { text: string }) {
             const location = openCode && !className && typeof children === "string" && messageCodeLocation(children);
             const style = cn("rounded border border-border/60 bg-muted px-1 py-px font-mono text-[12px] break-all", className);
             return location
-              ? <button type="button" className={cn(style, "text-primary underline")} onClick={() => openCode?.(location)}>{children}</button>
+              ? <button type="button" className={cn(style, "text-primary underline")} onClick={() => openCode?.(location, true)}>{children}</button>
               : <code className={style}>{children}</code>;
           },
           table: ({ children }) => (

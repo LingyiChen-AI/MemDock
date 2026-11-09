@@ -69,7 +69,6 @@ fn looks_not_logged_in(s: &str) -> bool {
     [
         "not logged in",
         "please run /login",
-        "/login",
         "invalid api key",
         "authentication_error",
         "401 unauthorized",

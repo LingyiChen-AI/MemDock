@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Map, Value};
 
 use crate::convert::timeline::{classify, summarize_input, ToolKind};
-use crate::live::{Decision, LiveEvent, PermissionMode, StartOptions, TurnUsage};
+use crate::live::{Decision, LiveEvent, PermissionMode, QuestionAnswers, StartOptions, TurnUsage};
 
 /// What a client request id was for.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,15 +14,18 @@ enum Pending {
     Thread,
     Turn,
     Interrupt,
+    Prediction,
 }
 
 /// Which response shape an approval request expects.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum ApprovalShape {
     /// v2 `item/*/requestApproval`: `accept` / `acceptForSession` / `decline`.
     V2,
     /// Legacy `execCommandApproval` / `applyPatchApproval`: `ReviewDecision`.
     Legacy,
+    UserInput(Vec<String>),
+    Permissions(Value),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +65,7 @@ pub struct Mapper {
     /// Messages typed before the thread was ready.
     queued: Vec<(String, Vec<String>, PermissionMode)>,
     turn_id: Option<String>,
+    prediction_turn: Option<String>,
     /// `interrupt` arrived before the turn id was known.
     interrupt_wanted: bool,
     /// Tool items already announced with `ToolStarted`.
@@ -213,6 +217,7 @@ impl Mapper {
             started: false,
             queued: vec![],
             turn_id: None,
+            prediction_turn: None,
             interrupt_wanted: false,
             tools_started: HashSet::new(),
             file_changes: HashMap::new(),
@@ -243,7 +248,10 @@ impl Mapper {
 
     /// First message: `initialize`.
     pub fn begin(&mut self) -> Vec<Value> {
-        let params = json!({"clientInfo": {"name": "memdock", "title": "MemDock", "version": self.version}});
+        let params = json!({
+            "clientInfo": {"name": "memdock", "title": "MemDock", "version": self.version},
+            "capabilities": {"experimentalApi": true}
+        });
         vec![self.request(Pending::Initialize, "initialize", params)]
     }
 
@@ -253,6 +261,9 @@ impl Mapper {
         p.insert("cwd".into(), json!(self.cwd));
         p.insert("approvalPolicy".into(), json!(approval));
         p.insert("sandbox".into(), json!(sandbox));
+        if cfg!(windows) {
+            p.insert("developerInstructions".into(), json!(crate::live::WINDOWS_PYTHON_UTF8));
+        }
         if let Some(m) = &self.model {
             p.insert("model".into(), json!(m));
         }
@@ -296,6 +307,7 @@ impl Mapper {
 
     /// A user message; `images` are local image file paths. Queued until the thread is ready.
     pub fn send(&mut self, text: &str, images: &[String], permission: Option<PermissionMode>) -> Vec<Value> {
+        self.prediction_turn = None;
         let permission = permission.unwrap_or(self.permission);
         match self.thread_id.clone() {
             Some(tid) if self.started => vec![self.turn_request(&tid, text, images, permission)],
@@ -323,16 +335,48 @@ impl Mapper {
 
     /// Answer to an approval request.
     pub fn respond(&mut self, request_id: &str, decision: Decision) -> Result<Value, String> {
+        if let Some(a) = self.approvals.get(request_id) {
+            if matches!(a.shape, ApprovalShape::UserInput(_)) {
+                if decision != Decision::Deny {
+                    return Err("请先提交问题答案".into());
+                }
+                let response = json!({"id": a.rpc_id, "result": {"answers": {}}});
+                self.approvals.remove(request_id);
+                return Ok(response);
+            }
+        }
         let a = self.approvals.remove(request_id).ok_or("审批请求不存在或已处理")?;
         let d = match (a.shape, decision) {
+            (ApprovalShape::Permissions(permissions), decision) => {
+                let (permissions, scope) = match decision {
+                    Decision::Allow => (permissions, "turn"),
+                    Decision::AllowSession => (permissions, "session"),
+                    Decision::Deny => (json!({}), "turn"),
+                };
+                return Ok(json!({"id": a.rpc_id, "result": {"permissions": permissions, "scope": scope}}));
+            }
             (ApprovalShape::V2, Decision::Allow) => json!("accept"),
             (ApprovalShape::V2, Decision::AllowSession) => json!("acceptForSession"),
             (ApprovalShape::V2, Decision::Deny) => json!("decline"),
             (ApprovalShape::Legacy, Decision::Allow) => json!("approved"),
             (ApprovalShape::Legacy, Decision::AllowSession) => json!("approved_for_session"),
             (ApprovalShape::Legacy, Decision::Deny) => json!({"denied": {"rejection": "用户拒绝"}}),
+            (ApprovalShape::UserInput(_), _) => unreachable!(),
         };
         Ok(json!({"id": a.rpc_id, "result": {"decision": d}}))
+    }
+
+    pub fn answer_questions(&mut self, request_id: &str, answers: &QuestionAnswers) -> Result<Value, String> {
+        let a = self.approvals.get(request_id).ok_or("该问答请求已失效")?;
+        let ApprovalShape::UserInput(ids) = &a.shape else { return Err("该请求不支持提交答案".into()) };
+        let mut submitted = Map::new();
+        for id in ids {
+            let values = answers.get(id).filter(|v| v.len() == 1 && !v[0].trim().is_empty()).ok_or("请回答所有问题")?;
+            submitted.insert(id.clone(), json!({"answers": values}));
+        }
+        let response = json!({"id": a.rpc_id, "result": {"answers": submitted}});
+        self.approvals.remove(request_id);
+        Ok(response)
     }
 
     /// The process ended: what to report.
@@ -440,6 +484,7 @@ impl Mapper {
                     st.events.push(LiveEvent::Error { message: format!("中断失败：{}", s(e, "message")), fatal: false });
                 }
             }
+            Pending::Prediction => {}
         }
     }
 
@@ -452,7 +497,37 @@ impl Mapper {
 
     fn on_server_request(&mut self, method: &str, id: Value, p: &Value, st: &mut Step) {
         let key = id_key(&id);
+        let mut shape = if method.starts_with("item/") { ApprovalShape::V2 } else { ApprovalShape::Legacy };
         let ev = match method {
+            "item/tool/requestUserInput" if p["questions"].as_array().is_some_and(|qs| !qs.is_empty() && qs.iter().all(|q| q["id"].as_str().is_some() && q["question"].as_str().is_some())) => {
+                let questions = p["questions"].as_array().unwrap();
+                let ids = questions.iter().map(|q| s(q, "id").to_string()).collect();
+                self.approvals.insert(key.clone(), PendingApproval { rpc_id: id, shape: ApprovalShape::UserInput(ids) });
+                st.events.push(LiveEvent::ApprovalRequest {
+                    request_id: key,
+                    tool_id: p["itemId"].as_str().map(str::to_owned),
+                    tool_name: "request_user_input".into(),
+                    kind: classify("request_user_input"),
+                    summary: String::new(),
+                    detail: json!({"questions": questions}).to_string(),
+                    can_allow_session: false,
+                });
+                return;
+            }
+            "item/permissions/requestApproval" if p["permissions"].is_object() => {
+                let permissions = p["permissions"].clone();
+                let detail = format!("目录：{}\n{}\n\n{}", s(p, "cwd"), s(p, "reason"), pretty(&permissions));
+                shape = ApprovalShape::Permissions(permissions);
+                LiveEvent::ApprovalRequest {
+                    request_id: key.clone(),
+                    tool_id: p["itemId"].as_str().map(str::to_owned),
+                    tool_name: "request_permissions".into(),
+                    kind: classify("request_permissions"),
+                    summary: one_line(s(p, "reason")),
+                    detail,
+                    can_allow_session: true,
+                }
+            }
             "item/commandExecution/requestApproval" => {
                 let command = s(p, "command");
                 let reason = s(p, "reason");
@@ -530,7 +605,7 @@ impl Mapper {
                 }
             }
             _ => {
-                // Unsupported (user input, MCP elicitation, permissions, auth
+                // Unsupported (MCP elicitation, auth
                 // refresh...): fail it so codex does not wait forever.
                 st.writes.push(json!({
                     "id": id,
@@ -539,7 +614,6 @@ impl Mapper {
                 return;
             }
         };
-        let shape = if method.starts_with("item/") { ApprovalShape::V2 } else { ApprovalShape::Legacy };
         self.approvals.insert(key, PendingApproval { rpc_id: id, shape });
         st.events.push(ev);
     }
@@ -747,9 +821,31 @@ impl Mapper {
                     usage,
                     is_error: status == "failed" || (status != "interrupted" && self.turn_error.is_some()),
                 });
+                let turn_id = s(turn, "id");
+                let thread_id = s(p, "threadId");
+                if status == "completed" && self.turn_error.is_none() && self.turn_id.as_deref() == Some(turn_id)
+                    && self.thread_id.as_deref() == Some(thread_id)
+                {
+                    self.prediction_turn = Some(turn_id.to_string());
+                    st.writes.push(self.request(Pending::Prediction, "thread/prediction/request", json!({
+                        "threadId": thread_id, "sourceTurnId": turn_id,
+                    })));
+                }
                 self.turn_id = None;
                 self.turn_error = None;
                 self.interrupt_wanted = false;
+            }
+            "thread/prediction/updated" => {
+                if self.thread_id.as_deref() == Some(s(p, "threadId"))
+                    && self.prediction_turn.as_deref() == Some(s(p, "sourceTurnId"))
+                {
+                    self.prediction_turn = None;
+                    let result = &p["result"];
+                    let text = s(result, "text").trim();
+                    if s(result, "type") == "completed" && !text.is_empty() {
+                        st.events.push(LiveEvent::PromptSuggestion { text: text.to_string() });
+                    }
+                }
             }
             "serverRequest/resolved" => {
                 // Codex resolved a request itself (turn ended / interrupted).

@@ -387,7 +387,7 @@ function ToolDialog({ it, onClose, s }: { it: ToolItem | null; onClose: () => vo
             </DialogHeader>
             <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto px-1">
               <IoBlock label={s.timeline.input} text={it.input} />
-              {it.output !== null ? <IoBlock label={it.is_error ? s.timeline.error : s.timeline.output} text={it.output || s.timeline.emptyOutput} error={it.is_error} /> : null}
+              {it.output !== null ? <IoBlock label={it.is_error ? s.timeline.error : s.timeline.output} text={it.output || s.timeline.emptyOutput} error={it.is_error} output /> : null}
             </div>
           </>
         ) : null}
@@ -396,10 +396,14 @@ function ToolDialog({ it, onClose, s }: { it: ToolItem | null; onClose: () => vo
   );
 }
 
-export function IoBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
+export function IoBlock({ label, text, error, output }: { label: string; text: string; error?: boolean; output?: boolean }) {
+  const { t } = useI18n();
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <span className={cn("text-[11px] font-medium", error ? "text-destructive" : "text-muted-foreground")}>{label}</span>
+      {output && text.includes("\uFFFD") ? (
+        <p className="text-xs text-warning">{t.sessions.timeline.outputEncodingWarning}</p>
+      ) : null}
       <pre
         className={cn(
           "max-h-72 overflow-auto rounded-md border px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]",

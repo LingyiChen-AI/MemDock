@@ -96,6 +96,7 @@ export interface ComposerProps {
   cwd: string;
   disabled?: boolean;
   placeholder?: string;
+  suggestion?: string;
   /** Small line under the status line (e.g. "queued"). */
   hint?: React.ReactNode;
   /** A turn is running: shows the stop button next to send. */
@@ -573,6 +574,7 @@ export function ChatComposer({
   cwd,
   disabled = false,
   placeholder,
+  suggestion,
   hint,
   running = false,
   stopping = false,
@@ -591,6 +593,8 @@ export function ChatComposer({
   const [caret, setCaret] = React.useState(0);
   const [images, setImages] = React.useState<string[]>(() => getConvUi(stateKey).images);
   const [sending, setSending] = React.useState(false);
+  const [dismissedSuggestion, setDismissedSuggestion] = React.useState<string>();
+  React.useEffect(() => setDismissedSuggestion(undefined), [suggestion]);
   const [dragging, setDragging] = React.useState(false);
   const [prefs, setPrefs] = React.useState(loadChatPrefs);
   const [picker, setPicker] = React.useState<PickerKind | null>(null);
@@ -957,6 +961,7 @@ export function ChatComposer({
     }
   };
 
+  const predicted = !disabled && !running && !sending && !picker && !text && !images.length && suggestion !== dismissedSuggestion ? suggestion : undefined;
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition (e.g. Chinese input) uses Enter to pick a candidate.
     const composing = e.nativeEvent.isComposing || e.keyCode === 229;
@@ -974,6 +979,17 @@ export function ChatComposer({
       if (items.length && ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab")) {
         e.preventDefault();
         choose(items[activeIndex]);
+        return;
+      }
+    }
+    if (predicted && !composing && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (e.key === "Tab" || e.key === "Escape") {
+        e.preventDefault();
+        setDismissedSuggestion(predicted);
+        if (e.key === "Tab") {
+          setText(predicted);
+          setCaret(predicted.length);
+        }
         return;
       }
     }
@@ -1175,8 +1191,9 @@ export function ChatComposer({
                 value={text}
                 disabled={disabled}
                 rows={3}
-                placeholder={placeholder ?? fmt(k.placeholder, { agent: c.agents[agent] })}
+                placeholder={predicted ?? placeholder ?? fmt(k.placeholder, { agent: c.agents[agent] })}
                 onChange={(e) => {
+                  if (predicted) setDismissedSuggestion(predicted);
                   setText(e.target.value);
                   setCaret(e.target.selectionStart ?? e.target.value.length);
                 }}
@@ -1189,6 +1206,7 @@ export function ChatComposer({
                 className="max-h-[280px] min-h-[84px] resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3.5 pt-3 pb-1 leading-5 shadow-none focus-visible:ring-0 disabled:bg-transparent dark:bg-transparent dark:disabled:bg-transparent"
               />
               <div className="flex min-w-0 items-center gap-1 px-2 pt-1 pb-2">
+                {predicted ? <kbd className="mx-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">Tab</kbd> : null}
                 <Tip tip={k.attachFile}>
                   <Button type="button" variant="ghost" size="icon-sm" className="cursor-pointer text-muted-foreground" aria-label={k.attachFile} disabled={disabled} onClick={() => void pickFiles(false)}>
                     <Paperclip aria-hidden="true" />
@@ -1267,7 +1285,7 @@ export function ChatComposer({
           {fmt(k.effortStatus, { level: effort || k.effortDefault })}
         </StatusItem>
         <span aria-hidden="true">·</span>
-        <StatusItem label={`${k.permissionTitle}: ${c.permissions[permission]}`} onClick={() => setPicker("permissions")} warn={permission === "bypass"} next={changed.has("permission") && (agent !== "codex" || running)} title={agent === "codex" ? k.nextTurnPermission : undefined} k={k}>
+        <StatusItem label={`${k.permissionTitle}: ${c.permissions[permission]}`} onClick={() => setPicker("permissions")} warn={permission === "bypass"} next={changed.has("permission") && running && permission !== attached?.permission} title={k.nextTurnPermission} k={k}>
           {c.permissions[permission]}
         </StatusItem>
         {worktreeOn ? (

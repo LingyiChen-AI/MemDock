@@ -244,9 +244,9 @@ pub struct Match {
     text: Option<String>,
 }
 
-fn search(root: &Path, query: &str, content: bool) -> Result<Vec<Match>, String> {
+fn search(root: &Path, query: &str, content: bool, exact_name: bool) -> Result<Vec<Match>, String> {
     let root = resolve(root, "")?;
-    let query = query.to_lowercase();
+    let query = if exact_name && !cfg!(windows) { query.to_owned() } else { query.to_lowercase() };
     let mut results = Vec::new();
     let mut budget = 64 * 1024 * 1024;
     for item in walkdir::WalkDir::new(&root)
@@ -256,7 +256,7 @@ fn search(root: &Path, query: &str, content: bool) -> Result<Vec<Match>, String>
             item.depth() == 0 || item.file_name().to_str().is_some_and(|name| !ignored(name))
         })
         .filter_map(Result::ok)
-        .take(30_000)
+        .take(if exact_name { usize::MAX } else { 30_000 })
     {
         if !item.file_type().is_file() {
             continue;
@@ -266,7 +266,13 @@ fn search(root: &Path, query: &str, content: bool) -> Result<Vec<Match>, String>
         };
         let path = path.replace('\\', "/");
         if !content {
-            if path.to_lowercase().contains(&query) {
+            let matches = if exact_name {
+                let name = item.file_name().to_string_lossy();
+                if cfg!(windows) { name.to_lowercase() == query } else { name == query }
+            } else {
+                path.to_lowercase().contains(&query)
+            };
+            if matches {
                 results.push(Match {
                     path,
                     line: None,
@@ -295,7 +301,7 @@ fn search(root: &Path, query: &str, content: bool) -> Result<Vec<Match>, String>
                 }
             }
         }
-        if results.len() >= 100 || budget == 0 {
+        if results.len() >= (if exact_name { 2 } else { 100 }) || budget == 0 {
             break;
         }
     }
@@ -454,9 +460,30 @@ pub async fn code_search(cwd: String, query: String, content: bool) -> Result<Ve
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
-        search(Path::new(&cwd), query.trim(), content)
+        search(Path::new(&cwd), query.trim(), content, false)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn code_resolve_link(cwd: String, path: String, bare_name: bool) -> Result<Vec<String>, String> {
+    background(move || {
+        let root = Path::new(&cwd);
+        if let Ok(target) = resolve(root, &path) {
+            if target.is_file() {
+                return Ok(vec![path]);
+            }
+            if target.is_dir() {
+                return Ok(vec![format!("{}/", path.trim_end_matches('/'))]);
+            }
+        }
+        if !bare_name || path.contains(['/', '\\', ':']) || matches!(path.as_str(), "" | "." | "..") {
+            return Ok(vec![]);
+        }
+        Ok(search(root, &path, false, true)?.into_iter()
+            .filter(|hit| resolve(root, &hit.path).is_ok_and(|file| file.is_file()))
+            .map(|hit| hit.path).collect())
+    }).await
 }
 
 #[tauri::command]
@@ -505,23 +532,64 @@ pub async fn code_status(cwd: String) -> Result<HashMap<String, String>, String>
 pub async fn code_open_vscode(cwd: String, path: String, line: Option<u32>) -> Result<(), String> {
     background(move || {
         let target = resolve(Path::new(&cwd), &path)?;
-        let target = dunce_path(&target);
-        let mut command = Command::new(vscode_program());
-
-        if let Some(line) = line {
-            command.arg("--goto").arg(format!("{target}:{line}"));
-        } else {
-            command.arg("--").arg(target);
-        }
-        crate::proc::spawn_hidden(&mut command)
-            .map(|mut child| {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-            })
-            .map_err(|e| format!("Could not start the VS Code CLI: {e}"))
+        launch_editor(&target, line, false)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn code_open_absolute(app: tauri::AppHandle, path: String, line: Option<u32>) -> Result<bool, String> {
+    use tauri_plugin_opener::OpenerExt;
+    background(move || {
+        let path = match path.strip_prefix("~/") {
+            Some(relative) => match dirs::home_dir() {
+                Some(home) => home.join(relative),
+                None => return Ok(false),
+            },
+            None => PathBuf::from(path),
+        };
+        let raw = path.to_string_lossy();
+        if !path.is_absolute() || raw.starts_with("\\\\") || raw.starts_with("//") {
+            return Ok(false);
+        }
+        let target = match path.canonicalize() {
+            Ok(target) => target,
+            _ => return Ok(false),
+        };
+        if target.is_dir() {
+            app.opener().open_path(dunce_path(&target), None::<&str>).map_err(error)?;
+        } else if target.is_file() {
+            launch_editor(&target, line, true)?;
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
+    }).await
+}
+
+fn launch_editor(path: &Path, line: Option<u32>, allow_fallback: bool) -> Result<(), String> {
+    let target = dunce_path(path);
+    let mut command = Command::new(vscode_program());
+
+    if let Some(line) = line {
+        command.arg("--goto").arg(format!("{target}:{line}"));
+    } else {
+        command.arg("--").arg(&target);
+    }
+    crate::proc::spawn_hidden(&mut command)
+        .or_else(|error| {
+            if cfg!(windows) && allow_fallback && error.kind() == std::io::ErrorKind::NotFound {
+                Command::new("notepad.exe").arg(target).spawn()
+            } else {
+                Err(error)
+            }
+        })
+        .map(|mut child| {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        })
+        .map_err(|e| format!("Could not start the editor: {e}"))
 }
 
 fn vscode_program() -> PathBuf {

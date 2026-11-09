@@ -140,6 +140,7 @@ export function ExtractPage({ onNavigate, onDirtyChange, onOpenRunReview }: Extr
         setRuns((l) => (l ? l.map((o) => (o.id === r.id ? r : o)) : l));
         const m = xRef.current;
         if (r.status === "succeeded") push("success", fmt(m.finishedOk, { n: r.suggestions_new }));
+        else if (r.status === "partial") push("warning", fmt(m.finishedPartial, { n: r.suggestions_new }));
         else if (r.status === "failed") {
           const text = runErrorText(m, r);
           push("error", text ? `${m.finishedFailed}：${text}` : m.finishedFailed);

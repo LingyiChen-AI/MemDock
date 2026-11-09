@@ -173,12 +173,14 @@ function BotCard({ bot, projects, l, busy, onRun, onStartup, onEdit, onRemove }:
   busy: { id: string; action: ConnectionAction } | null;
   onRun: (action: Exclude<ConnectionAction, "remove" | "startup">) => void; onStartup: (enabled: boolean) => void; onEdit: () => void; onRemove: () => void;
 }) {
-  const running = bot.status !== "stopped";
+  const deleted = bot.status === "deleted";
+  const running = bot.status !== "stopped" && !deleted;
   const activeAction = busy?.id === bot.id ? busy.action : null;
   const indicator = {
     connected: "bg-primary/10 text-primary",
     connecting: "bg-warning/15 text-warning",
     error: "bg-destructive/10 text-destructive",
+    deleted: "bg-destructive/10 text-destructive",
     stopped: "bg-muted text-muted-foreground",
   }[bot.status];
   return (
@@ -203,15 +205,15 @@ function BotCard({ bot, projects, l, busy, onRun, onStartup, onEdit, onRemove }:
           <Switch aria-label={fmt(l.startWithClientFor, { name: bot.name })} checked={bot.startWithClient ?? false}
             disabled={busy !== null} onCheckedChange={onStartup} />
         </label>
-        <div className="w-full">
+        {!deleted && <div className="w-full">
           <Button size="sm" type="button" variant={running ? "outline" : "default"} disabled={busy !== null} onClick={() => onRun(running ? "stop" : "start")}>
             {activeAction === "start" || activeAction === "stop" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
               : running ? <Square aria-hidden="true" /> : <Play aria-hidden="true" />}
             {running ? l.stop : l.start}
           </Button>
-        </div>
+        </div>}
       </div>
-      {bot.error && <p role="status" className="mx-3.5 mb-3 break-words rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{bot.error}</p>}
+      {bot.error && <p role="status" className="mx-3.5 mb-3 break-words rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{deleted ? l.appDeleted : bot.error}</p>}
       <div className="mx-3.5 mb-3 overflow-hidden rounded-md border border-border">
         <p className="border-b border-border bg-muted/45 px-2.5 py-1.5 text-xs font-medium text-muted-foreground">{l.projectPermissions}</p>
         {bot.projects.length > 0 ? (
@@ -352,7 +354,7 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
   };
   const unavailable = input.projects.filter((grant) => !projects.some((project) => project.path === grant.path));
   const hasRegisteredSecret = registeredApp !== null && registeredApp === input.appId.trim();
-  const credentialsReadOnly = hasRegisteredSecret || !!bot?.registeredCredentials;
+  const credentialsReadOnly = hasRegisteredSecret || (!!bot?.registeredCredentials && bot.status !== "deleted");
   const available = [...projects, ...unavailable.map(({ path }) => ({ path, name: path }))];
 
   return (

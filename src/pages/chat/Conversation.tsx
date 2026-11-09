@@ -2,10 +2,11 @@ import * as React from "react";
 import { toolCodeLocation, WorkspaceCodeContext } from "./workspaceCodeLinks";
 import { useAccountName } from "./accountNames";
 import { Archive, Check, ChevronRight, CircleAlert, Loader2, ShieldAlert, ShieldCheck, ShieldX, TriangleAlert, Wrench, X } from "lucide-react";
-import { readImageDataUri, storedImagePath, type Decision, type LiveAgent } from "@/api/live";
+import { readImageDataUri, storedImagePath, type Decision, type LiveAgent, type QuestionAnswers } from "@/api/live";
 import { ChatAvatar, ChatRow, ChatText } from "@/components/chat/ChatMessage";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -16,6 +17,7 @@ import { getConvUi, patchConvUi } from "./convUiState";
 import { isCodexWriterBusy, isPendingApproval, pendingApprovals, toConvBlocks, type ConvBlock, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
 
 type C = Messages["chat"];
+type Respond = (requestId: string, decision: Decision, answers?: QuestionAnswers) => Promise<void>;
 
 /** Pixels from the bottom that still count as "at the bottom" for auto-scroll. */
 const STICK_SLACK = 48;
@@ -39,7 +41,7 @@ export function Conversation({
   starting: boolean;
   /** The agent is working: show the typing indicator. */
   running: boolean;
-  onRespond: (requestId: string, decision: Decision) => Promise<void>;
+  onRespond: Respond;
 }) {
   const { t } = useI18n();
   const c = t.chat;
@@ -298,7 +300,7 @@ function TypingRow({ agent, c }: { agent: LiveAgent; c: C }) {
   );
 }
 
-function Segment({ seg, onOpen, onApproval, onRespond, c }: { seg: TurnSegment; onOpen: (call: LiveToolCall) => void; onApproval: (approval: LiveApproval) => void; onRespond: (requestId: string, d: Decision) => Promise<void>; c: C }) {
+function Segment({ seg, onOpen, onApproval, onRespond, c }: { seg: TurnSegment; onOpen: (call: LiveToolCall) => void; onApproval: (approval: LiveApproval) => void; onRespond: Respond; c: C }) {
   switch (seg.kind) {
     case "text":
       return seg.streaming ? (
@@ -424,7 +426,7 @@ function ChipRun({ calls, approvals, onOpen, c }: { calls: LiveToolCall[]; appro
   );
 }
 
-function ToolDialog({ call, approvals, onRespond, onClose, c }: { call: LiveToolCall | null; approvals: LiveApproval[]; onRespond: (requestId: string, decision: Decision) => Promise<void>; onClose: () => void; c: C }) {
+function ToolDialog({ call, approvals, onRespond, onClose, c }: { call: LiveToolCall | null; approvals: LiveApproval[]; onRespond: Respond; onClose: () => void; c: C }) {
   const kind = call?.kind ?? approvals[0]?.kind;
   const Icon = kind ? KIND_ICON[kind] ?? Wrench : Wrench;
   return (
@@ -444,7 +446,7 @@ function ToolDialog({ call, approvals, onRespond, onClose, c }: { call: LiveTool
               {approvals.map((approval) => <ApprovalCard key={approval.request_id} approval={approval} onRespond={onRespond} c={c} />)}
               {call && !approvals.some((approval) => approval.detail === call?.input) ? <IoBlock label={c.tool.input} text={call.input} /> : null}
               {call && (call.finished || call.output) ? (
-                <IoBlock label={call.is_error ? c.tool.error : c.tool.output} text={call.output || c.tool.emptyOutput} error={call.is_error} />
+                <IoBlock label={call.is_error ? c.tool.error : c.tool.output} text={call.output || c.tool.emptyOutput} error={call.is_error} output />
               ) : null}
             </div>
           </>
@@ -454,7 +456,109 @@ function ToolDialog({ call, approvals, onRespond, onClose, c }: { call: LiveTool
   );
 }
 
-function ApprovalCard({ approval, onRespond, collapsible = false, c }: { approval: LiveApproval; collapsible?: boolean; onRespond: (requestId: string, d: Decision) => Promise<void>; c: C }) {
+type QuestionOption = { label: string; description?: string };
+type Question = {
+  id: string;
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  isOther?: boolean;
+  isSecret?: boolean;
+  options?: QuestionOption[] | null;
+};
+
+function questionList(approval: LiveApproval): Question[] {
+  try {
+    const { questions } = JSON.parse(approval.detail);
+    if (!Array.isArray(questions)) return [];
+    return questions.filter((q) => typeof q?.question === "string").map((q) => ({
+      ...q,
+      id: q.id ?? q.question,
+      isOther: approval.tool_name === "AskUserQuestion" || q.isOther,
+      options: Array.isArray(q.options) ? q.options.filter((option: QuestionOption) => typeof option?.label === "string") : [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function ownValue<T>(values: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : undefined;
+}
+
+function QuestionCard({ approval, onRespond, c }: { approval: LiveApproval; onRespond: Respond; c: C }) {
+  const formId = React.useId();
+  const [selected, setSelected] = React.useState<QuestionAnswers>({});
+  const [custom, setCustom] = React.useState<Record<string, string>>({});
+  const [busy, setBusy] = React.useState(false);
+  const questions = questionList(approval);
+  const pending = isPendingApproval(approval);
+  const answers = Object.fromEntries(questions.map(({ id }) => {
+    const other = ownValue(custom, id)?.trim();
+    const choices = ownValue(selected, id) ?? [];
+    return [id, other ? [...choices, other] : choices];
+  }));
+  const reply = async (decision: Decision) => {
+    setBusy(true);
+    try {
+      await onRespond(approval.request_id, decision, decision === "allow" ? answers : undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-label={c.question.title} className="w-full max-w-xl space-y-3 rounded-lg border border-border bg-muted/25 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold">{c.question.title}</span>
+        {approval.decision ? <span className="text-xs text-muted-foreground">{approval.decision === "deny" ? c.question.skipped : c.question.answered}</span> : null}
+        {approval.expired ? <span className="text-xs text-muted-foreground">{c.approval.expired}</span> : null}
+      </div>
+      {questions.map((q, i) => (
+        <fieldset key={q.id} disabled={!pending || busy} className="space-y-1.5">
+          <legend className="mb-1 text-sm font-medium">{q.question}</legend>
+          {q.options?.map(({ label, description }) => {
+            const checked = ownValue(selected, q.id)?.includes(label) ?? false;
+            return (
+              <label key={label} className={cn("flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-sm", pending && "cursor-pointer hover:bg-muted", checked ? "border-primary/50 bg-primary/5" : "border-border")}>
+                <input type={q.multiSelect ? "checkbox" : "radio"} name={`${formId}-${i}`} checked={checked} className="mt-0.5 accent-primary" onChange={() => {
+                  if (!q.multiSelect) setCustom((prev) => ({ ...prev, [q.id]: "" }));
+                  setSelected((prev) => {
+                    const choices = ownValue(prev, q.id) ?? [];
+                    const next = checked ? choices.filter((value) => value !== label) : [...choices, label];
+                    return { ...prev, [q.id]: q.multiSelect ? next : [label] };
+                  });
+                }} />
+                <span><span className="block font-medium">{label}</span>{description ? <span className="block text-xs text-muted-foreground">{description}</span> : null}</span>
+              </label>
+            );
+          })}
+          {pending && (q.isOther || !q.options?.length) ? (
+            <Input type={q.isSecret ? "password" : "text"} aria-label={`${q.question} · ${c.question.other}`} placeholder={c.question.other} value={ownValue(custom, q.id) ?? ""} onChange={(e) => {
+              const value = e.target.value;
+              if (!q.multiSelect) setSelected((prev) => ({ ...prev, [q.id]: [] }));
+              setCustom((prev) => ({ ...prev, [q.id]: value }));
+            }} />
+          ) : null}
+        </fieldset>
+      ))}
+      {pending ? (
+        <div className="flex gap-2">
+          <Button type="button" size="sm" disabled={busy || !questions.length || Object.values(answers).some((a) => !a.length)} onClick={() => void reply("allow")}>{c.question.submit}</Button>
+          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void reply("deny")}>{c.question.skip}</Button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ApprovalCard({ approval, onRespond, collapsible = false, c }: { approval: LiveApproval; collapsible?: boolean; onRespond: Respond; c: C }) {
+  if (approval.tool_name === "AskUserQuestion" || approval.tool_name === "request_user_input") {
+    return <QuestionCard key={approval.request_id} approval={approval} onRespond={onRespond} c={c} />;
+  }
+  return <ToolApprovalCard approval={approval} onRespond={onRespond} collapsible={collapsible} c={c} />;
+}
+
+function ToolApprovalCard({ approval, onRespond, collapsible, c }: { approval: LiveApproval; collapsible: boolean; onRespond: Respond; c: C }) {
   const [busy, setBusy] = React.useState<Decision | null>(null);
   const pending = isPendingApproval(approval);
   const Icon = KIND_ICON[approval.kind] ?? Wrench;

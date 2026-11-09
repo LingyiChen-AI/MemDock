@@ -80,6 +80,11 @@ impl Driver for CodexDriver {
         write_all(&self.stdin, &[msg])
     }
 
+    fn answer_questions(&mut self, request_id: &str, answers: &super::QuestionAnswers) -> Result<(), String> {
+        let msg = self.mapper.lock().unwrap().answer_questions(request_id, answers)?;
+        write_all(&self.stdin, &[msg])
+    }
+
     fn interrupt(&mut self) -> Result<(), String> {
         let msgs = self.mapper.lock().unwrap().interrupt();
         write_all(&self.stdin, &msgs)
@@ -125,6 +130,9 @@ fn command(opts: &StartOptions) -> Result<Command, String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if cfg!(windows) {
+        cmd.env("PYTHONIOENCODING", "utf-8");
+    }
     // npm-installed CLIs need the same augmented PATH (node) used to find them.
     if cfg!(target_os = "macos") {
         if let Ok(p) = std::env::join_paths(&dirs) {

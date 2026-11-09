@@ -10,13 +10,13 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::{Decision, Driver, Emit, LiveEvent, PermissionMode, StartOptions, TurnUsage};
+use super::{Decision, Driver, Emit, LiveEvent, PermissionMode, QuestionAnswers, StartOptions, TurnUsage};
 use crate::convert::timeline::{classify, summarize_input};
 use crate::convert::truncate_chars;
 use crate::extract::runner::{find_program, path_dirs};
@@ -72,20 +72,36 @@ pub(crate) fn build_args(opts: &StartOptions, new_session_id: Option<&str>) -> V
     } else if let Some(sid) = new_session_id {
         v.extend(["--session-id".into(), sid.to_string()]);
     }
-    let mode = match opts.permission {
-        PermissionMode::Ask => Some("default"),
-        PermissionMode::AutoEdit => Some("acceptEdits"),
-        PermissionMode::Plan => Some("plan"),
-        PermissionMode::Bypass => None,
-    };
-    match mode {
-        Some(m) => v.extend(
-            ["--permission-mode", m, "--permission-prompt-tool", "stdio"].iter().map(|s| s.to_string()),
-        ),
-        None => v.push("--dangerously-skip-permissions".into()),
-    }
+    v.extend(
+        ["--permission-mode", permission_mode(opts.permission), "--permission-prompt-tool", "stdio", "--allow-dangerously-skip-permissions"]
+            .map(str::to_string),
+    );
+    v.push("--prompt-suggestions".into());
     v.extend(opts.extra_args.iter().cloned());
+    if cfg!(windows) {
+        // Keep a caller's inline system-prompt addition and extend it once.
+        if let Some(i) = v.iter().rposition(|arg| arg == "--append-system-prompt" || arg.starts_with("--append-system-prompt=")) {
+            if v[i].starts_with("--append-system-prompt=") {
+                v[i].push_str("\n\n");
+                v[i].push_str(super::WINDOWS_PYTHON_UTF8);
+            } else if let Some(prompt) = v.get_mut(i + 1) {
+                prompt.push_str("\n\n");
+                prompt.push_str(super::WINDOWS_PYTHON_UTF8);
+            }
+        } else {
+            v.extend(["--append-system-prompt".into(), super::WINDOWS_PYTHON_UTF8.into()]);
+        }
+    }
     v
+}
+
+fn permission_mode(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Ask => "default",
+        PermissionMode::AutoEdit => "acceptEdits",
+        PermissionMode::Plan => "plan",
+        PermissionMode::Bypass => "bypassPermissions",
+    }
 }
 
 // ---- stdin messages ---------------------------------------------------------
@@ -114,6 +130,26 @@ pub(crate) fn control_request(request_id: &str, subtype: &str) -> Value {
 pub(crate) struct Pending {
     input: Value,
     suggestions: Vec<Value>,
+    is_question: bool,
+}
+
+fn question_response(request_id: &str, p: &Pending, answers: &QuestionAnswers) -> Result<Value, String> {
+    let questions = p.input["questions"].as_array().filter(|q| !q.is_empty()).ok_or("没有可回答的问题")?;
+    let mut submitted = serde_json::Map::new();
+    for q in questions {
+        let key = str_of(q, "question").ok_or("问题格式无效")?;
+        let values = answers.get(key).filter(|v| !v.is_empty() && v.iter().all(|s| !s.trim().is_empty())).ok_or("请回答所有问题")?;
+        if values.len() > 1 && q["multiSelect"] != true {
+            return Err("该问题只能选择一项".into());
+        }
+        submitted.insert(key.to_string(), json!(values.join(", ")));
+    }
+    let mut input = p.input.clone();
+    input["answers"] = Value::Object(submitted);
+    Ok(json!({"type":"control_response", "response": {
+        "subtype":"success", "request_id":request_id,
+        "response":{"behavior":"allow", "updatedInput":input}
+    }}))
 }
 
 pub(crate) fn permission_response(request_id: &str, p: &Pending, decision: Decision) -> Value {
@@ -158,6 +194,8 @@ pub(crate) struct Parser {
     blocks_seen: HashMap<String, usize>,
     /// request_id → permission prompt awaiting an answer.
     pending: HashMap<String, Pending>,
+    /// A permission change must be acknowledged before sending the next user message.
+    permission_reply: Option<(String, mpsc::SyncSender<Result<(), String>>)>,
     /// `total_cost_usd` of the last `result`: the CLI reports the process's
     /// running total, turns get the difference.
     cost_total: f64,
@@ -265,6 +303,17 @@ impl Parser {
         // Lines of a subagent (Task tool) are shown only through its tool call.
         let nested = v.get("parent_tool_use_id").is_some_and(|p| !p.is_null());
         match str_of(&v, "type").unwrap_or("") {
+            "control_response" => {
+                let response = &v["response"];
+                if self.permission_reply.as_ref().is_some_and(|(id, _)| str_of(response, "request_id") == Some(id.as_str())) {
+                    let (_, tx) = self.permission_reply.take().unwrap();
+                    let result = match str_of(response, "subtype") {
+                        Some("success") => Ok(()),
+                        _ => Err(str_of(response, "error").unwrap_or("Claude Code 拒绝切换权限模式").to_string()),
+                    };
+                    let _ = tx.send(result);
+                }
+            }
             "system" if str_of(&v, "subtype") == Some("init") => {
                 if let Some(sid) = str_of(&v, "session_id") {
                     self.session_id = Some(sid.to_string());
@@ -335,6 +384,11 @@ impl Parser {
                 }
             }
             "control_request" => self.control_request(&v, &mut out),
+            "prompt_suggestion" => {
+                if let Some(text) = str_of(&v, "suggestion").map(str::trim).filter(|s| !s.is_empty()) {
+                    out.events.push(LiveEvent::PromptSuggestion { text: text.to_string() });
+                }
+            }
             "control_cancel_request" => {
                 if let Some(id) = str_of(&v, "request_id") {
                     self.pending.remove(id);
@@ -377,7 +431,7 @@ impl Parser {
                     is_error,
                 });
             }
-            // system/hook_*, system/status, control_response, rate_limit_event...
+            // system/hook_*, system/status, rate_limit_event...
             _ => {}
         }
         Some(out)
@@ -451,6 +505,7 @@ impl Parser {
             return;
         }
         let tool_name = str_of(&req, "tool_name").unwrap_or("tool").to_string();
+        let is_question = tool_name == "AskUserQuestion";
         let input = req.get("input").cloned().unwrap_or(json!({}));
         let suggestions = req.get("permission_suggestions").and_then(Value::as_array).cloned().unwrap_or_default();
         let mut summary = summarize_input(&input, None);
@@ -462,11 +517,11 @@ impl Parser {
             tool_id: str_of(&req, "tool_use_id").map(str::to_owned),
             kind: classify(&tool_name),
             summary,
-            detail: pretty(&input, IO_MAX),
-            can_allow_session: !suggestions.is_empty(),
+            detail: if is_question { input.to_string() } else { pretty(&input, IO_MAX) },
+            can_allow_session: !is_question && !suggestions.is_empty(),
             tool_name,
         });
-        self.pending.insert(request_id.to_string(), Pending { input, suggestions });
+        self.pending.insert(request_id.to_string(), Pending { input, suggestions, is_question });
     }
 }
 
@@ -519,6 +574,7 @@ struct ClaudeDriver {
     stdin: SharedStdin,
     parser: Arc<Mutex<Parser>>,
     stopped: Arc<AtomicBool>,
+    permission: Option<PermissionMode>,
 }
 
 impl Driver for ClaudeDriver {
@@ -527,9 +583,45 @@ impl Driver for ClaudeDriver {
         write_line(&self.stdin, &user_message(text, images))
     }
 
+    fn send_with_permission(&mut self, text: &str, images: &[String], permission: Option<PermissionMode>) -> Result<(), String> {
+        if let Some(mode) = permission.filter(|mode| Some(*mode) != self.permission) {
+            let id = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = mpsc::sync_channel(1);
+            self.parser.lock().unwrap().permission_reply = Some((id.clone(), tx));
+            let request = json!({
+                "type": "control_request", "request_id": id,
+                "request": {"subtype": "set_permission_mode", "mode": permission_mode(mode)}
+            });
+            self.permission = None;
+            let result = write_line(&self.stdin, &request).and_then(|_| match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(reply) => reply,
+                Err(mpsc::RecvTimeoutError::Timeout) => Err("等待 Claude Code 切换权限模式超时".into()),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err("Claude Code 进程已退出".into()),
+            });
+            self.parser.lock().unwrap().permission_reply = None;
+            result?;
+            self.permission = Some(mode);
+        }
+        self.send(text, images)
+    }
+
     fn respond(&mut self, request_id: &str, decision: Decision) -> Result<(), String> {
-        let p = self.parser.lock().unwrap().take_pending(request_id).ok_or("该授权请求已失效")?;
+        let mut parser = self.parser.lock().unwrap();
+        if decision != Decision::Deny && parser.pending.get(request_id).is_some_and(|p| p.is_question) {
+            return Err("请先提交问题答案".into());
+        }
+        let p = parser.take_pending(request_id).ok_or("该授权请求已失效")?;
+        drop(parser);
         write_line(&self.stdin, &permission_response(request_id, &p, decision))
+    }
+
+    fn answer_questions(&mut self, request_id: &str, answers: &QuestionAnswers) -> Result<(), String> {
+        let mut parser = self.parser.lock().unwrap();
+        let p = parser.pending.get(request_id).filter(|p| p.is_question).ok_or("该问答请求已失效")?;
+        let response = question_response(request_id, p, answers)?;
+        parser.take_pending(request_id);
+        drop(parser);
+        write_line(&self.stdin, &response)
     }
 
     fn interrupt(&mut self) -> Result<(), String> {
@@ -568,6 +660,10 @@ pub(crate) fn spawn_with(program: PathBuf, opts: &StartOptions, emit: Emit) -> R
         .stderr(Stdio::piped())
         // Started from inside a Claude Code session (dev), don't look nested.
         .env_remove("CLAUDECODE");
+    if cfg!(windows) {
+        // Tool subprocesses write to pipes, where Python can default to the Windows code page.
+        cmd.env("PYTHONIOENCODING", "utf-8");
+    }
     if cfg!(target_os = "macos") {
         if let Ok(p) = std::env::join_paths(path_dirs()) {
             cmd.env("PATH", p);
@@ -648,6 +744,7 @@ pub(crate) fn spawn_with(program: PathBuf, opts: &StartOptions, emit: Emit) -> R
                 }
             }
             stdin.lock().unwrap().take();
+            parser.lock().unwrap().permission_reply = None;
             // Exit code: poll without holding the lock so `stop` can still kill.
             let deadline = Instant::now() + Duration::from_secs(3);
             let code = loop {
@@ -674,7 +771,7 @@ pub(crate) fn spawn_with(program: PathBuf, opts: &StartOptions, emit: Emit) -> R
 
     let id = format!("init-{}", uuid::Uuid::new_v4());
     let _ = write_line(&stdin, &control_request(&id, "initialize"));
-    Ok(Box::new(ClaudeDriver { child, stdin, parser, stopped }))
+    Ok(Box::new(ClaudeDriver { child, stdin, parser, stopped, permission: Some(opts.permission) }))
 }
 
 #[cfg(test)]

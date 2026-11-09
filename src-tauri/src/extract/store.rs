@@ -126,6 +126,7 @@ pub enum RunTrigger {
 pub enum RunStatus {
     Running,
     Succeeded,
+    Partial,
     Failed,
     Cancelled,
     Interrupted,

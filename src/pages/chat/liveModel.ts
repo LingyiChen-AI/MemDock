@@ -49,6 +49,7 @@ export interface ConvState {
   native_id: string | null;
   model: string | null;
   lastUsage: TurnUsage | null;
+  suggestion?: string;
   /**
    * Envelopes that arrived ahead of a missing seq (sorted, all > lastSeq + 1). Non-empty means a gap:
    * the store refetches the transcript to fill it. Never dropped silently.
@@ -142,7 +143,9 @@ function fold(state: ConvState, env: LiveEnvelope): ConvState {
         items: ev.state === "exited" ? expire(settle(items)) : ev.state === "running" || ev.state === "waiting_approval" ? items : settle(items),
       };
     case "user_message":
-      return { ...s, items: [...items, { type: "user", id: ev.id, text: ev.text, images: ev.images?.length ? ev.images : undefined }] };
+      return { ...s, suggestion: undefined, items: [...items, { type: "user", id: ev.id, text: ev.text, images: ev.images?.length ? ev.images : undefined }] };
+    case "prompt_suggestion":
+      return { ...s, suggestion: ev.text };
     case "assistant_delta": {
       const i = findIndex(items, (it) => it.type === "assistant" && it.id === ev.id);
       if (i < 0) return { ...s, items: [...items, { type: "assistant", id: ev.id, text: ev.text, streaming: true }] };

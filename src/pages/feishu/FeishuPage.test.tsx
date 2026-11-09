@@ -25,6 +25,23 @@ vi.mock("@/api/feishu", () => ({
   testFeishuBot: vi.fn(),
 }));
 
+it("allows rebinding a deleted app without first stopping the connection", async () => {
+  vi.mocked(listFeishuProjects).mockResolvedValue([]);
+  vi.mocked(listFeishuBots).mockResolvedValue([{
+    id: "deleted", name: "Old bot", appId: "cli_old", engine: "codex", projects: [],
+    hasSecret: true, registeredCredentials: true, startWithClient: true,
+    status: "deleted", error: "飞书应用已被删除",
+  }]);
+  renderApp(<FeishuPage />);
+  expect(await screen.findByText("The Feishu app has been deleted")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Edit connection" }));
+  const appId = screen.getByRole("textbox", { name: "App ID" });
+  await userEvent.clear(appId);
+  await userEvent.type(appId, "cli_new");
+  expect(appId).toHaveValue("cli_new");
+});
+
 it("creates one connection with independently scoped permissions for multiple projects", async () => {
   vi.mocked(listFeishuBots).mockResolvedValue([]);
   vi.mocked(listFeishuProjects).mockResolvedValue([

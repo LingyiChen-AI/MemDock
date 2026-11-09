@@ -25,6 +25,7 @@ export function formatRunTime(ms: number): string {
 const STATUS: Record<RunStatus, { icon: LucideIcon; tone: string; spin?: boolean }> = {
   running: { icon: Loader2, tone: "text-accent-text", spin: true },
   succeeded: { icon: CircleCheck, tone: "text-accent-text" },
+  partial: { icon: TriangleAlert, tone: "text-warning" },
   failed: { icon: CircleX, tone: "text-destructive" },
   cancelled: { icon: Ban, tone: "text-muted-foreground" },
   interrupted: { icon: TriangleAlert, tone: "text-warning" },
@@ -36,6 +37,7 @@ function StatusCell({ status }: { status: RunStatus }) {
   const label = {
     running: x.statusRunning,
     succeeded: x.statusSucceeded,
+    partial: x.statusPartial,
     failed: x.statusFailed,
     cancelled: x.statusCancelled,
     interrupted: x.statusInterrupted,
@@ -180,7 +182,16 @@ export function RunsTable({
                       ? <ExtractionProgressCell progress={extractionProgress} x={x} />
                       : <ProgressCell p={progress?.get(r.id)} x={x} />}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap"><StatusCell status={r.status} /></td>
+                  <td className="px-3 py-2">
+                    <StatusCell status={r.status} />
+                    {!expanded && (r.status === "failed" || r.status === "partial") && r.error && r.error_code ? (
+                      <button type="button" aria-expanded={expanded} onClick={() => toggle(r.id)}
+                        title={r.error}
+                        className="block max-w-48 cursor-pointer truncate text-left text-xs text-muted-foreground hover:underline focus-visible:underline">
+                        {runErrorText(x, r)}
+                      </button>
+                    ) : null}
+                  </td>
                 </tr>
                 {expanded ? (
                   <tr className="border-b border-border bg-muted/30 last:border-b-0">

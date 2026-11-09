@@ -21,7 +21,7 @@
 //!   only); weekday numbering is 0 = Sunday .. 6 = Saturday (JS `getDay`).
 //! - Schedules fire only while the app runs; a missed slot is never caught up.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -426,16 +426,18 @@ fn extract_project(
     // MAX_CHUNKS per project per run, the rest waits for the next run.
     result.attempted = true;
     let all: Vec<&Turn> = b.turns.iter().collect();
-    let chunks = chunk_turns(&all, MAX_EXCERPT_CHARS);
+    let mut chunks = VecDeque::from(chunk_turns(&all, MAX_EXCERPT_CHARS));
     let mut done_chunks = 0usize;
     let mut project_failed = false;
-    for chunk in chunks.iter().take(MAX_CHUNKS) {
+    let mut split_on_timeout = false;
+    while done_chunks < MAX_CHUNKS {
+        let Some(mut chunk) = chunks.pop_front() else { break };
         if cancel.load(Ordering::SeqCst) || stop_dispatch.load(Ordering::SeqCst) {
             result.cancelled = cancel.load(Ordering::SeqCst);
             break;
         }
         let previous = previous_suggestions(&lock(&ctx.store).suggestions().to_vec());
-        let prompt = build_prompt_full(&b.name, &targets, chunk, lang, cfg.custom_prompt.as_deref(), &previous);
+        let prompt = build_prompt_full(&b.name, &targets, &chunk, lang, cfg.custom_prompt.as_deref(), &previous);
         let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
             Ok(r) => r,
             Err(RunError::Cancelled) => {
@@ -449,6 +451,20 @@ fn extract_project(
                 break;
             }
             Err(e) => {
+                if matches!(e, RunError::Timeout) && !split_on_timeout {
+                    // Keep equal timestamps together because the watermark is timestamp-based.
+                    let middle = chunk.len() / 2;
+                    let boundary = (1..chunk.len())
+                        .filter(|&i| chunk[i - 1].ts != chunk[i].ts)
+                        .min_by_key(|&i| i.abs_diff(middle));
+                    if let Some(boundary) = boundary {
+                        split_on_timeout = true;
+                        let newer = chunk.split_off(boundary);
+                        chunks.push_front(newer);
+                        chunks.push_front(chunk);
+                        continue;
+                    }
+                }
                 let m = format!("{}: {}", b.name, describe(&e));
                 result.failure.get_or_insert_with(|| (code_of(&e), m.clone()));
                 result.warnings.push(m);
@@ -456,7 +472,7 @@ fn extract_project(
                 break;
             }
         };
-        let parsed = parse_output_full(&raw, &targets, runner.tool(), chunk);
+        let parsed = parse_output_full(&raw, &targets, runner.tool(), &chunk);
         result.warnings.extend(parsed.warnings.into_iter().map(|w| format!("{}: {w}", b.name)));
         if parsed.unusable {
             let m = format!("{}: model output unusable", b.name);
@@ -497,8 +513,8 @@ fn extract_project(
         done_chunks += 1;
     }
     result.succeeded = done_chunks > 0;
-    if !result.cancelled && result.fatal.is_none() && !project_failed && done_chunks == MAX_CHUNKS && chunks.len() > MAX_CHUNKS {
-        let n: usize = chunks[MAX_CHUNKS..].iter().map(Vec::len).sum();
+    if !result.cancelled && result.fatal.is_none() && !project_failed && !chunks.is_empty() {
+        let n: usize = chunks.iter().map(Vec::len).sum();
         result.warnings.push(format!("{}: {n} newer turns deferred to the next run", b.name));
     }
     result
@@ -740,12 +756,15 @@ fn execute(
         RunStatus::Cancelled
     } else if let Some((code, m)) = fatal {
         set_error(&mut rec, code, m);
-        RunStatus::Failed
+        if ok > 0 { RunStatus::Partial } else { RunStatus::Failed }
     } else if attempted > 0 && ok == 0 {
         if let Some((code, m)) = first_failure {
             set_error(&mut rec, code, m);
         }
         RunStatus::Failed
+    } else if let Some((code, m)) = first_failure {
+        set_error(&mut rec, code, m);
+        RunStatus::Partial
     } else {
         RunStatus::Succeeded
     };
@@ -1103,7 +1122,7 @@ mod tests {
             }
         })));
         let rec = go(&e);
-        assert_eq!(rec.status, RunStatus::Succeeded);
+        assert_eq!(rec.status, RunStatus::Partial);
         assert_eq!(rec.projects, 1);
         assert!(rec.warnings.iter().any(|w| w.starts_with("alpha") && w.contains("boom")), "{:?}", rec.warnings);
         assert_eq!(e.fake.calls().len(), 2, "run continued after the failure");
@@ -1469,15 +1488,33 @@ mod tests {
         let (e, ts) = big(14, Fake::with(Box::new(move |p| {
             let mut c = n.lock().unwrap();
             *c += 1;
-            if *c == 2 { Err(RunError::Timeout) } else { Ok(reply(p)) }
+            if *c == 2 { Err(RunError::Failed { code: Some(1), stderr: "chunk failed".into() }) } else { Ok(reply(p)) }
         })));
         let rec = go(&e);
-        assert_eq!(rec.status, RunStatus::Succeeded);
+        assert_eq!(rec.status, RunStatus::Partial);
         assert_eq!(e.fake.calls().len(), 2, "stopped after the failing chunk");
         let first = prompt_ts(&e.fake.calls()[0]);
         assert_eq!(wm(&e, &pid(&e, "alpha")), *first.last().unwrap());
         assert!(*first.last().unwrap() < *ts.last().unwrap());
-        assert!(rec.warnings.iter().any(|w| w.contains("timed out")));
+        assert!(rec.warnings.iter().any(|w| w.contains("chunk failed")));
+    }
+
+    #[test]
+    fn timed_out_chunk_retries_in_smaller_batches_without_skipping_turns() {
+        let calls = AtomicUsize::new(0);
+        let (e, ts) = big(8, Fake::with(Box::new(move |prompt| {
+            if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                Err(RunError::Timeout)
+            } else {
+                Ok(reply(prompt))
+            }
+        })));
+        let rec = go(&e);
+        assert_eq!(rec.status, RunStatus::Succeeded, "{rec:?}");
+        let calls = e.fake.calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[1..].iter().flat_map(|p| prompt_ts(p)).collect::<Vec<_>>(), ts);
+        assert_eq!(wm(&e, &pid(&e, "alpha")), *ts.last().unwrap());
     }
 
     #[test]

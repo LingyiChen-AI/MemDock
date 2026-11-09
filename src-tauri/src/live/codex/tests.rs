@@ -2,6 +2,7 @@ use super::mapper::{codex_policy, Mapper, Step};
 use crate::convert::timeline::ToolKind;
 use crate::live::{Agent, Decision, LiveEvent, PermissionMode, StartOptions, TurnUsage};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 #[test]
 fn app_server_args_pass_effort_first() {
@@ -52,6 +53,28 @@ fn policy_table() {
     assert_eq!(codex_policy(PermissionMode::AutoEdit), ("on-request", "workspace-write"));
     assert_eq!(codex_policy(PermissionMode::Plan), ("on-request", "read-only"));
     assert_eq!(codex_policy(PermissionMode::Bypass), ("never", "danger-full-access"));
+}
+
+#[test]
+fn user_input_answers_and_predictions_are_routed_by_id() {
+    let mut m = ready();
+    let question = line(&mut m, json!({
+        "id": 40, "method": "item/tool/requestUserInput", "params": {
+            "itemId": "Q", "questions": [{"id": "where", "question": "Where?"}]
+        }
+    }));
+    assert!(matches!(&question.events[0], LiveEvent::ApprovalRequest { tool_name, .. } if tool_name == "request_user_input"));
+    let answers = HashMap::from([("where".into(), vec!["Here".into()])]);
+    assert_eq!(m.answer_questions("40", &answers).unwrap()["result"], json!({"answers":{"where":{"answers":["Here"]}}}));
+
+    let send = m.send("go", &[], None);
+    line(&mut m, json!({"id": send[0]["id"], "result": {"turn": {"id": "A"}}}));
+    let completed = line(&mut m, json!({"method":"turn/completed","params":{"threadId":"T1","turn":{"id":"A","status":"completed"}}}));
+    assert_eq!(completed.writes[0]["method"], "thread/prediction/request");
+    let mut prediction = json!({"method":"thread/prediction/updated","params":{"threadId":"T1","sourceTurnId":"other","result":{"type":"completed","text":"Run tests"}}});
+    assert!(line(&mut m, prediction.clone()).events.is_empty());
+    prediction["params"]["sourceTurnId"] = json!("A");
+    assert_eq!(line(&mut m, prediction).events, vec![LiveEvent::PromptSuggestion { text: "Run tests".into() }]);
 }
 
 #[test]

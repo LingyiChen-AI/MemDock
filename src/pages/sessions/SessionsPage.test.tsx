@@ -20,13 +20,24 @@ vi.mock("@/api/workspaceCode", () => ({
   codeEntries: vi.fn().mockResolvedValue([]),
   codeStatus: vi.fn().mockResolvedValue({}),
   readCode: vi.fn().mockResolvedValue({ kind: "text", text: "fn main() {}", revision: "r1", baseline: null }),
+  resolveCodeLink: vi.fn(),
+  openAbsoluteCode: vi.fn(),
 }));
 
-import { readCode } from "@/api/workspaceCode";
+import { openAbsoluteCode, readCode, resolveCodeLink } from "@/api/workspaceCode";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
 import { renderApp } from "@/test/fixtures";
 import { SessionsPage, historyBefore } from "./SessionsPage";
 import { filterSessions, groupByProject } from "./sessionsUtils";
+import { recordedFilePaths } from "@/pages/chat/workspaceCodeLinks";
+
+it("resolves a shell-recorded temporary file to its Windows absolute path", () => {
+  expect(recordedFilePaths("C:/work/demo", "narrative.json", [{
+    name: "Bash",
+    input: 'T="/c/Users/Admin/AppData/Local/Temp/fcweekly-test"; cp example.json "$T/narrative.json"',
+    output: null,
+  }])).toEqual(["c:/Users/Admin/AppData/Local/Temp/fcweekly-test/narrative.json"]);
+});
 
 function mk(over: Partial<SessionSummary> & { id: string }): SessionSummary {
   return {
@@ -248,6 +259,36 @@ describe("SessionsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "代码", expanded: false }));
     expect(within(panel).getByRole("button", { name: "main.rs", pressed: true })).toBeInTheDocument();
   }, 10000);
+
+  it("does not open a missing chat file and opens the resolved workspace path when found", async () => {
+    vi.mocked(resolveCodeLink).mockResolvedValueOnce([]).mockResolvedValueOnce(["reports/narrative.json"]);
+    vi.mocked(sessionPreview).mockResolvedValue({
+      ...preview,
+      timeline: preview.timeline.map((item) => item.type === "assistant" ? { ...item, text: "See `narrative.json`" } : item),
+    });
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
+    const link = await screen.findByRole("button", { name: "narrative.json" });
+    await userEvent.click(link);
+    expect(await screen.findByText(/当前工作区找不到 narrative.json/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "代码", expanded: true })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "narrative.json" }));
+    const panel = await screen.findByRole("complementary", { name: "代码" }, { timeout: 5000 });
+    expect(await within(panel).findByRole("button", { name: "narrative.json", pressed: true })).toBeInTheDocument();
+    expect(readCode).toHaveBeenCalledWith("/work/demo", "reports/narrative.json", null);
+  });
+
+  it("opens home-relative directory links without searching the project", async () => {
+    vi.mocked(openAbsoluteCode).mockResolvedValue(true);
+    vi.mocked(sessionPreview).mockResolvedValue({
+      ...preview,
+      timeline: preview.timeline.map((item) => item.type === "assistant" ? { ...item, text: "See `~/.claude/skills/freeclaw-base-weekly/`" } : item),
+    });
+    renderApp(<SessionsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "~/.claude/skills/freeclaw-base-weekly/" }));
+    expect(openAbsoluteCode).toHaveBeenCalledWith("~/.claude/skills/freeclaw-base-weekly/", undefined);
+  });
 
   it("folds long runs of tool chips behind +N", async () => {
     const many = Array.from({ length: 11 }, (_, i) => ({

@@ -163,6 +163,8 @@ function patchInfo(info: LiveSessionInfo, env: LiveEnvelope): LiveSessionInfo {
       return info;
     case "status":
       return { ...info, state: ev.state, updated_at: now };
+    case "permission_changed":
+      return { ...info, permission: ev.mode };
     case "started":
       return { ...info, native_id: ev.native_id, model: ev.model ?? info.model, updated_at: now };
     case "user_message": {

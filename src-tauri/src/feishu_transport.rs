@@ -37,7 +37,10 @@ pub(crate) enum Status {
     Connecting,
     Connected,
     Disconnected(String),
+    AppDeleted,
 }
+
+pub(crate) const APP_DELETED: &str = "飞书应用已被删除";
 
 #[derive(Clone)]
 pub(crate) struct Client {
@@ -507,6 +510,10 @@ impl Client {
                         (error, delay)
                     }
                 };
+                if error == APP_DELETED {
+                    on_status(Status::AppDeleted);
+                    break;
+                }
                 on_status(Status::Disconnected(error));
                 sleep(Duration::from_secs(delay)).await;
             }
@@ -568,10 +575,10 @@ async fn request_json<T: DeserializeOwned>(
 }
 
 fn check_code(code: i64, operation: &str) -> Result<(), String> {
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(format!("{operation} failed (Feishu code {code})"))
+    match code {
+        0 => Ok(()),
+        10217 => Err(APP_DELETED.into()),
+        _ => Err(format!("{operation} failed (Feishu code {code})")),
     }
 }
 

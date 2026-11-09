@@ -65,6 +65,14 @@ beforeEach(() => {
 const sent = (over: object) => ({ text: "", images: [], permission: "ask", model: "", effort: "", args: [], ...over });
 
 describe("ChatComposer", () => {
+  it("fills an available follow-up with Tab without sending it", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderApp(<Harness suggestion="运行单元测试" onSend={onSend} />);
+    await userEvent.click(box());
+    await userEvent.tab();
+    expect(box()).toHaveValue("运行单元测试");
+    expect(onSend).not.toHaveBeenCalled();
+  });
   it("sends on Enter, not on Shift+Enter or while an IME is composing", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderApp(<Harness onSend={onSend} />);

@@ -233,7 +233,7 @@ function ConvHeader({ info, c, onError, interrupt }: { info: LiveSessionInfo; c:
   );
 }
 
-function LiveComposer({ info, c, onError, interrupt }: { info: LiveSessionInfo; c: C; onError: (e: string | null) => void; interrupt: ReturnType<typeof useTurnInterrupt> }) {
+function LiveComposer({ info, c, onError, interrupt, suggestion }: { info: LiveSessionInfo; c: C; onError: (e: string | null) => void; interrupt: ReturnType<typeof useTurnInterrupt>; suggestion?: string }) {
   const exited = info.state === "exited";
   const running = isActive(info.state);
   return (
@@ -242,6 +242,7 @@ function LiveComposer({ info, c, onError, interrupt }: { info: LiveSessionInfo; 
       agent={info.agent}
       cwd={info.cwd}
       disabled={exited}
+      suggestion={suggestion}
       placeholder={exited ? c.inputExited : undefined}
       hint={exited ? c.inputExited : running ? c.inputQueued : null}
       running={running}
@@ -251,7 +252,7 @@ function LiveComposer({ info, c, onError, interrupt }: { info: LiveSessionInfo; 
       onStop={interrupt.stop}
       attached={{ permission: info.permission, model: info.model }}
       onError={onError}
-      onSend={(msg) => liveSend(info.live_id, msg.text, msg.images, info.agent === "codex" ? msg.permission : undefined)}
+      onSend={(msg) => liveSend(info.live_id, msg.text, msg.images, msg.permission)}
     />
   );
 }
@@ -265,10 +266,10 @@ function SelectedConversation({ info, c }: { info: LiveSessionInfo; c: C }) {
 export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: LiveConv | undefined; c: C }) {
   const [error, setError] = React.useState<string | null>(null);
   const interrupt = useTurnInterrupt(info.live_id, isActive(info.state), lc?.conv.lastUsage, c, setError);
-  const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
+  const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2], answers?: Parameters<typeof liveRespond>[3]) => {
     setError(null);
     try {
-      await liveRespond(info.live_id, requestId, decision);
+      await (answers ? liveRespond(info.live_id, requestId, decision, answers) : liveRespond(info.live_id, requestId, decision));
     } catch (e) {
       setError(fmt(c.actionFailed, { error: errorMessage(e) }));
     }
@@ -293,7 +294,7 @@ export function ConversationPane({ info, lc, c }: { info: LiveSessionInfo; lc: L
       ) : (
         <Conversation scrollKey={`live:${info.live_id}`} conv={lc.conv} agent={info.agent} running={isActive(info.state)} starting={info.state === "starting"} onRespond={respond} />
       )}
-      <LiveComposer key={info.live_id} info={info} c={c} onError={setError} interrupt={interrupt} />
+      <LiveComposer key={info.live_id} info={info} c={c} onError={setError} interrupt={interrupt} suggestion={lc?.conv.suggestion} />
     </div>
   );
 }

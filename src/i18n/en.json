@@ -9,6 +9,7 @@
     "add": "Add connection",
     "edit": "Edit connection",
     "test": "Test credentials",
+    "appDeleted": "The Feishu app has been deleted",
     "testOk": "Feishu accepted the credentials. Start the connection to verify event delivery.",
     "saved": "Connection saved.",
     "start": "Start",
@@ -53,7 +54,8 @@
       "stopped": "Stopped",
       "connecting": "Connecting",
       "connected": "Connected",
-      "error": "Error"
+      "error": "Error",
+      "deleted": "Rebind required"
     },
     "permissions": {
       "read": "Read",
@@ -69,6 +71,9 @@
     }
   },
   "workspaceCode": {
+    "linkMissing": "Could not find {path} in this workspace. Use its full workspace-relative path.",
+    "linkAbsoluteMissing": "The file is missing or could not be opened: {path}",
+    "linkAmbiguous": "Multiple files named {path} exist in this workspace. Use the full relative path.",
     "unsavedCloseBody": "Your changes will be lost if you close without saving.",
     "saveBeforeClose": "Save changes before closing?",
     "saveAction": "Save",
@@ -596,6 +601,7 @@
     "notInstalled": "No usable command-line tool was detected",
     "startFailed": "Could not start: {message}",
     "finishedOk": "Extraction finished, {n} new suggestions",
+    "finishedPartial": "Extraction partially completed with {n} new suggestions. See run history for errors.",
     "finishedFailed": "Extraction failed",
     "finishedCancelled": "Extraction cancelled",
     "finishedInterrupted": "Extraction interrupted",
@@ -615,6 +621,7 @@
     "triggerScheduled": "Scheduled",
     "statusRunning": "Running",
     "statusSucceeded": "Succeeded",
+    "statusPartial": "Partially succeeded",
     "statusFailed": "Failed",
     "statusCancelled": "Cancelled",
     "statusInterrupted": "Interrupted",
@@ -1347,6 +1354,7 @@
     "convertedTo": "Converted to {tool}",
     "selectHint": "Select a session on the left to preview and convert it",
     "previewLoading": "Reading session…",
+    "sessionDetails": "Session details",
     "previewFailed": "Failed to read the session: {error}",
     "previewTitle": "Conversion preview",
     "previewMore": "Showing the latest {shown} of {total}; earlier entries not loaded",
@@ -1380,7 +1388,8 @@
       "input": "Input",
       "output": "Output",
       "error": "Error output",
-      "emptyOutput": "(no output)"
+      "emptyOutput": "(no output)",
+      "outputEncodingWarning": "The original output contains undecodable characters. For Python isolated mode, rerun with python -I -X utf8."
     },
     "roles": {
       "user": "User",
@@ -1528,6 +1537,14 @@
     "exitedCode": "Session ended (exit code {code})",
     "transcriptFailed": "Failed to load the conversation: {error}",
     "emptyConv": "Send a message to get started",
+    "question": {
+      "title": "Answer required",
+      "other": "Enter a custom answer",
+      "submit": "Submit answers",
+      "skip": "Skip",
+      "answered": "Answered",
+      "skipped": "Skipped"
+    },
     "approval": {
       "pending": "Approval needed",
       "title": "{tool} asks for approval",

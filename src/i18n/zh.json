@@ -9,6 +9,7 @@
     "add": "新增连接",
     "edit": "编辑连接",
     "test": "测试凭据",
+    "appDeleted": "飞书应用已被删除",
     "testOk": "飞书已接受凭据。启动连接后可验证事件是否送达。",
     "saved": "连接已保存。",
     "start": "启动",
@@ -53,7 +54,8 @@
       "stopped": "已停止",
       "connecting": "连接中",
       "connected": "已连接",
-      "error": "连接异常"
+      "error": "连接异常",
+      "deleted": "待重新绑定"
     },
     "permissions": {
       "read": "读取",
@@ -69,6 +71,9 @@
     }
   },
   "workspaceCode": {
+    "linkMissing": "当前工作区找不到 {path}。请使用工作区内的完整相对路径。",
+    "linkAbsoluteMissing": "文件已不在原位置，或无法打开：{path}",
+    "linkAmbiguous": "当前工作区有多个名为 {path} 的文件。请使用完整相对路径。",
     "unsavedCloseBody": "选择不保存后，本次修改会丢失。",
     "saveBeforeClose": "关闭前保存更改？",
     "saveAction": "保存",
@@ -596,6 +601,7 @@
     "notInstalled": "未检测到可用的命令行工具，无法运行",
     "startFailed": "启动失败：{message}",
     "finishedOk": "提取完成，新增 {n} 条建议",
+    "finishedPartial": "提取部分完成，新增 {n} 条建议。失败原因可在运行记录中查看。",
     "finishedFailed": "提取失败",
     "finishedCancelled": "提取已取消",
     "finishedInterrupted": "提取被中断",
@@ -615,6 +621,7 @@
     "triggerScheduled": "定时",
     "statusRunning": "运行中",
     "statusSucceeded": "成功",
+    "statusPartial": "部分成功",
     "statusFailed": "失败",
     "statusCancelled": "已取消",
     "statusInterrupted": "中断",
@@ -1347,6 +1354,7 @@
     "convertedTo": "已转为 {tool}",
     "selectHint": "选择左侧的会话查看预览并转换",
     "previewLoading": "正在读取会话…",
+    "sessionDetails": "会话详情",
     "previewFailed": "读取会话失败：{error}",
     "previewTitle": "转换预览",
     "previewMore": "仅显示最近 {shown} 条，共 {total} 条，更早的未加载",
@@ -1380,7 +1388,8 @@
       "input": "参数",
       "output": "输出",
       "error": "错误输出",
-      "emptyOutput": "（无输出）"
+      "emptyOutput": "（无输出）",
+      "outputEncodingWarning": "原始输出含有无法解码的字符。若来自 Python 隔离模式，可用 python -I -X utf8 重新运行。"
     },
     "roles": {
       "user": "用户",
@@ -1528,6 +1537,14 @@
     "exitedCode": "会话已结束（退出码 {code}）",
     "transcriptFailed": "读取对话记录失败：{error}",
     "emptyConv": "发一条消息开始吧",
+    "question": {
+      "title": "需要你回答",
+      "other": "输入自定义答案",
+      "submit": "提交答案",
+      "skip": "跳过",
+      "answered": "已回答",
+      "skipped": "已跳过"
+    },
     "approval": {
       "pending": "待批准",
       "title": "{tool} 请求批准",

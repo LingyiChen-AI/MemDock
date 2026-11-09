@@ -170,11 +170,35 @@ fn opts(permission: PermissionMode) -> StartOptions {
 fn args_per_permission_mode() {
     let a = build_args(&opts(PermissionMode::AutoEdit), None).join(" ");
     assert!(a.starts_with("-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages"));
-    assert!(a.contains("--model haiku --resume sid --permission-mode acceptEdits --permission-prompt-tool stdio --add-dir x"));
+    assert!(a.contains("--model haiku --resume sid --permission-mode acceptEdits --permission-prompt-tool stdio --allow-dangerously-skip-permissions --prompt-suggestions --add-dir x"));
     assert!(build_args(&opts(PermissionMode::Ask), None).join(" ").contains("--permission-mode default --permission-prompt-tool stdio"));
     assert!(build_args(&opts(PermissionMode::Plan), None).join(" ").contains("--permission-mode plan"));
     let b = build_args(&opts(PermissionMode::Bypass), None).join(" ");
-    assert!(b.contains("--dangerously-skip-permissions") && !b.contains("--permission-prompt-tool"));
+    assert!(b.contains("--permission-mode bypassPermissions --permission-prompt-tool stdio"));
+}
+
+#[test]
+fn permission_switch_waits_for_its_own_response() {
+    let mut parser = Parser::default();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    parser.permission_reply = Some(("switch-1".into(), tx));
+    parser.line(r#"{"type":"control_response","response":{"subtype":"success","request_id":"init-1"}}"#);
+    assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    parser.line(r#"{"type":"control_response","response":{"subtype":"error","request_id":"switch-1","error":"mode disabled"}}"#);
+    assert_eq!(rx.try_recv().unwrap(), Err("mode disabled".into()));
+}
+
+#[test]
+fn question_response_preserves_input_and_adds_answers() {
+    let input = json!({"questions":[{"question":"Where?"}]});
+    let pending = Pending { input: input.clone(), suggestions: vec![], is_question: true };
+    let answers = HashMap::from([("Where?".to_string(), vec!["Here".to_string()])]);
+    let response = question_response("req", &pending, &answers).unwrap();
+    assert_eq!(response["response"]["response"]["updatedInput"], json!({
+        "questions": input["questions"],
+        "answers": {"Where?": "Here"}
+    }));
+    assert!(question_response("req", &pending, &HashMap::new()).is_err());
 }
 
 #[test]

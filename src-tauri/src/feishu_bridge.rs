@@ -569,6 +569,7 @@ enum Status {
     Connecting,
     Connected,
     Error,
+    Deleted,
 }
 
 #[derive(Serialize)]
@@ -591,13 +592,19 @@ struct Active {
     jobs: HashMap<Chat, Arc<AtomicBool>>,
 }
 
-impl Drop for Active {
-    fn drop(&mut self) {
+impl Active {
+    fn cancel(&self) {
         self.stop.store(true, Ordering::Release);
         for job in self.jobs.values() {
             job.store(true, Ordering::Release);
         }
         let _ = self.close.send(true);
+    }
+}
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -751,7 +758,7 @@ impl Bridge {
             .ok_or_else(|| "Feishu bot was not found".into())
     }
 
-    fn validate(&self, input: BotInput, store: &BotStore, registered: bool) -> Result<(Bot, Option<String>), String> {
+    fn validate_binding(&self, input: BotInput, store: &BotStore, registered: bool, deleted: bool) -> Result<(Bot, Option<String>), String> {
         let name = input.name.trim().to_owned();
         let app_id = input.app_id.trim().to_owned();
         if name.is_empty() || name.len() > 120 || name.chars().any(char::is_control) {
@@ -807,7 +814,10 @@ impl Bridge {
             return Err("Enter the app secret for the new Feishu App ID".into());
         }
         let existing = store.bots.iter().find(|bot| bot.id == id);
-        let previously_registered = existing.filter(|bot| bot.registered_credentials);
+        if deleted && existing.is_some_and(|bot| bot.app_id == app_id) {
+            return Err(feishu_transport::APP_DELETED.into());
+        }
+        let previously_registered = existing.filter(|bot| bot.registered_credentials && !deleted);
         if let Some(previous) = previously_registered {
             if app_id != previous.app_id || new_secret.is_some() {
                 return Err("Automatically registered Feishu credentials are read-only".into());
@@ -875,7 +885,9 @@ pub(crate) async fn feishu_save(state: State<'_>, mut input: BotInput) -> Result
         if let Some(id) = &registration {
             input.app_secret = Some(crate::feishu_registration::registered_secret(id, input.app_id.trim())?);
         }
-        let (bot, new_secret) = bridge.validate(input, &store, registration.is_some())?;
+        let deleted = input.id.as_ref().and_then(|id| active.get(id))
+            .is_some_and(|runtime| matches!(runtime.status, Status::Deleted));
+        let (bot, new_secret) = bridge.validate_binding(input, &store, registration.is_some(), deleted)?;
         let previous = secret(&bot.id)?;
         if let Some(new_secret) = &new_secret {
             store_secret(&bot.id, Some(new_secret))?;
@@ -1288,6 +1300,9 @@ async fn start_bot(bridge: Arc<Bridge>, id: String) -> Result<BotView, String> {
         if bot.projects.is_empty() {
             return Err("Select at least one project before starting".to_string());
         }
+        if active.get(&id).is_some_and(|runtime| matches!(runtime.status, Status::Deleted)) {
+            return Err(feishu_transport::APP_DELETED.into());
+        }
         if active.get(&id).is_some_and(|runtime| !matches!(runtime.status, Status::Error)) {
             return Err("The Feishu bot is already running".to_string());
         }
@@ -1464,6 +1479,10 @@ async fn start_bot(bridge: Arc<Bridge>, id: String) -> Result<BotView, String> {
                                 feishu_transport::Status::Connected => (Status::Connected, None),
                                 feishu_transport::Status::Disconnected(error) => {
                                     (Status::Error, Some(error))
+                                }
+                                feishu_transport::Status::AppDeleted => {
+                                    runtime.cancel();
+                                    (Status::Deleted, Some(feishu_transport::APP_DELETED.into()))
                                 }
                             };
                             runtime.status = status;

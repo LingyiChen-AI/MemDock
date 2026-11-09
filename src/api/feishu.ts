@@ -26,7 +26,7 @@ export interface FeishuBot extends FeishuBotSettings {
   hasSecret: boolean;
   startWithClient?: boolean;
   registeredCredentials?: boolean;
-  status: "stopped" | "connecting" | "connected" | "error";
+  status: "stopped" | "connecting" | "connected" | "error" | "deleted";
   error: string | null;
 }
 

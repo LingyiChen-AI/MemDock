@@ -355,7 +355,7 @@ export interface RunnerInfo {
 }
 
 export type RunTrigger = "manual" | "scheduled";
-export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+export type RunStatus = "running" | "succeeded" | "partial" | "failed" | "cancelled" | "interrupted";
 /** Why a run failed; mapped to localized text (the raw `error` stays as detail). */
 export type RunErrorCode = "not_installed" | "not_logged_in" | "timeout" | "cancelled" | "invalid_output" | "io" | "other";
 

@@ -28,6 +28,8 @@ use serde::{Deserialize, Serialize};
 use crate::convert::timeline::ToolKind;
 pub use registry::{NativeRegistry, Owner, OwnerKind};
 
+const WINDOWS_PYTHON_UTF8: &str = "On Windows, when running a Python command with the isolated flag -I, also pass -X utf8 before the script, -c, or -m so captured Chinese and other Unicode output stays readable. This applies to python, py, and explicit interpreter paths such as a virtual environment's python.exe. Preserve -I and the rest of the command. Add the option yourself when invoking the tool.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Agent {
@@ -167,6 +169,8 @@ pub enum LiveEvent {
     },
     ApprovalResolved { request_id: String, decision: Decision },
     TurnCompleted { usage: TurnUsage, is_error: bool },
+    PromptSuggestion { text: String },
+    PermissionChanged { mode: PermissionMode },
     /// A line from the CLI itself, shown between messages: `kind` is `compacting`, `compacted`
     /// (with token counts before / after) or `command_output` (output of a local slash command).
     /// A later notice with the same `id` replaces the earlier one.
@@ -205,6 +209,9 @@ pub trait Driver: Send {
         self.send(text, images)
     }
     fn respond(&mut self, request_id: &str, decision: Decision) -> Result<(), String>;
+    fn answer_questions(&mut self, _request_id: &str, _answers: &QuestionAnswers) -> Result<(), String> {
+        Err("该请求不支持提交答案".into())
+    }
     /// Stop the current turn, keep the session.
     fn interrupt(&mut self) -> Result<(), String>;
     /// Kill the process (tree). Must make the reader emit `Exited`.
@@ -416,6 +423,11 @@ impl LiveManager {
         let Some(s) = shared.get(live_id) else { return };
         let mut guard = s.entry.lock().unwrap();
         let e = &mut *guard;
+        if matches!(ev, LiveEvent::PromptSuggestion { .. })
+            && (e.info.state != LiveState::Idle || !e.pending_messages.is_empty())
+        {
+            return;
+        }
         // `stop()` records the exit itself; the driver's reader reports it again.
         if matches!(ev, LiveEvent::Exited { .. }) {
             if e.exited {
@@ -437,8 +449,12 @@ impl LiveManager {
                 (e.info.state == LiveState::Starting).then_some(LiveState::Idle)
             }
             LiveEvent::ApprovalRequest { .. } => Some(LiveState::WaitingApproval),
-            LiveEvent::ApprovalResolved { .. } => {
-                (e.info.state == LiveState::WaitingApproval).then_some(LiveState::Running)
+            LiveEvent::ApprovalResolved { request_id, .. } => {
+                let awaiting = e.events.iter().rev().find_map(|x| match &x.event {
+                    LiveEvent::ApprovalRequest { request_id, .. } => Some(request_id),
+                    _ => None,
+                });
+                (e.info.state == LiveState::WaitingApproval && awaiting == Some(request_id)).then_some(LiveState::Running)
             }
             LiveEvent::TurnCompleted { .. } => Some(LiveState::Idle),
             LiveEvent::Error { fatal: true, .. } | LiveEvent::Exited { .. } => Some(LiveState::Exited),
@@ -675,6 +691,12 @@ impl LiveManager {
             if e.info.state == LiveState::Running {
                 Self::set_state(shared, &mut e, live_id, prev);
             }
+        } else if let Some(mode) = message.permission {
+            let mut e = s.entry.lock().unwrap();
+            if e.info.permission != mode {
+                e.info.permission = mode;
+                Self::push(shared, &mut e, live_id, LiveEvent::PermissionChanged { mode }, None);
+            }
         }
         r
     }
@@ -699,7 +721,18 @@ impl LiveManager {
     }
 
     pub fn respond(&self, live_id: &str, request_id: &str, decision: Decision) -> Result<(), String> {
+        self.respond_with_answers(live_id, request_id, decision, None)
+    }
+
+    fn respond_with_answers(&self, live_id: &str, request_id: &str, decision: Decision, answers: Option<QuestionAnswers>) -> Result<(), String> {
         let s = self.alive(live_id)?;
+        if let Some(answers) = answers {
+            return Self::with_driver(&s, |d| {
+                d.answer_questions(request_id, &answers)?;
+                Self::record(&self.shared, live_id, LiveEvent::ApprovalResolved { request_id: request_id.to_string(), decision });
+                Ok(())
+            });
+        }
         Self::record(
             &self.shared,
             live_id,
@@ -941,14 +974,20 @@ pub fn live_send(
     mgr.send_with_permission(&live_id, &text, &images.unwrap_or_default(), permission)
 }
 
+type QuestionAnswers = std::collections::HashMap<String, Vec<String>>;
+
 #[tauri::command]
 pub fn live_respond(
     mgr: tauri::State<'_, Arc<LiveManager>>,
     live_id: String,
     request_id: String,
     decision: Decision,
+    answers: Option<QuestionAnswers>,
 ) -> Result<(), String> {
-    mgr.respond(&live_id, &request_id, decision)
+    match answers {
+        Some(answers) if decision == Decision::Allow => mgr.respond_with_answers(&live_id, &request_id, decision, Some(answers)),
+        _ => mgr.respond(&live_id, &request_id, decision),
+    }
 }
 
 #[tauri::command]

@@ -952,8 +952,15 @@ function ChatPane({
   const w = c.worktree;
   const wtState = useWorktreeState();
   const wt = worktreeOf(wtState, target.cwd);
-  const code = useWorkspaceCode(target.cwd);
   const { t: { workspaceCode: codeLabels } } = useI18n();
+  const onCodeLinkError = React.useCallback((path: string | null, ambiguous?: boolean, absolute?: boolean) => {
+    setActionError(path === null ? null : fmt(absolute ? codeLabels.linkAbsoluteMissing : ambiguous ? codeLabels.linkAmbiguous : codeLabels.linkMissing, { path }));
+  }, [codeLabels]);
+  const recordedTools = React.useMemo(() => [
+    ...(preview?.timeline.flatMap((item) => item.type === "tool" ? [item] : []) ?? []),
+    ...(lc?.conv.items.flatMap((item) => item.type === "tool" ? [item.call] : []) ?? []),
+  ], [preview, lc?.conv.items]);
+  const code = useWorkspaceCode(target.cwd, onCodeLinkError, recordedTools);
   const wtDeleted = !!wt?.deleted;
   const [creatingWt, setCreatingWt] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -1080,7 +1087,7 @@ function ChatPane({
   const send = async ({ text, images, permission, model, effort, args }: ComposerMessage): Promise<boolean | void> => {
     if (attached && live) {
       try {
-        return await liveSend(live.live_id, text, images, target.tool === "codex" ? permission : undefined);
+        return await liveSend(live.live_id, text, images, permission);
       } catch (e) {
         throw parseBusy(e) ? new Error(c.busyPty) : e;
       }
@@ -1149,11 +1156,11 @@ function ChatPane({
     const st = agentSettings(loadChatPrefs(), target.tool);
     await send({ text, images: [], permission: st.permission, model: st.model, effort: st.effort, args: parseExtraArgs(target.tool, st.args) });
   };
-  const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2]) => {
+  const respond = async (requestId: string, decision: Parameters<typeof liveRespond>[2], answers?: Parameters<typeof liveRespond>[3]) => {
     if (!live) return;
     setActionError(null);
     try {
-      await liveRespond(live.live_id, requestId, decision);
+      await (answers ? liveRespond(live.live_id, requestId, decision, answers) : liveRespond(live.live_id, requestId, decision));
     } catch (e) {
       setActionError(fmt(c.actionFailed, { error: errorMessage(e) }));
     }
@@ -1179,43 +1186,42 @@ function ChatPane({
     )
   ) : null;
 
+  const sessionMetadata = (
+    <>
+      {target.nativeId ? (
+        <MetaChip icon={<Hash aria-hidden="true" />} title={target.nativeId} mono>
+          {target.nativeId.slice(0, 8)}
+        </MetaChip>
+      ) : null}
+      {live?.model ? <MetaChip icon={<Cpu aria-hidden="true" />}>{live.model}</MetaChip> : null}
+      {stats ? (
+        <>
+          <MetaChip icon={<MessagesSquare aria-hidden="true" />}>{fmt(s.messages, { n: stats.user_messages + stats.assistant_messages })}</MetaChip>
+          {stats.mapped_calls > 0 ? (
+            <MetaChip icon={<TerminalSquare aria-hidden="true" />}>{fmt(s.stats.mapped, { n: stats.mapped_calls })}</MetaChip>
+          ) : null}
+          {stats.degraded_calls > 0 ? <MetaChip>{fmt(s.stats.degraded, { n: stats.degraded_calls })}</MetaChip> : null}
+        </>
+      ) : null}
+    </>
+  );
+  const convertLabel = converting ? s.converting : fmt(s.convertTo, { tool: s.tools[targetTool] });
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-col gap-3 border-b border-border p-4">
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-2">
-            <h2 className="flex min-w-0 items-center gap-2 text-base font-semibold">
-              <ToolBadge tool={target.tool} s={s} />
-              {wt ? <WorktreeBadge slug={wt.slug} branch={wt.info?.branch} deleted={wt.deleted} w={w} /> : null}
-              <TitleEditor
-                title={target.title}
-                onSave={session ? (title) => renameSession(session.tool, session.path, title).then(onRenamed) : undefined}
-                s={s}
-              />
-              {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
-            </h2>
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <MetaChip icon={<Folder aria-hidden="true" />} title={target.cwd} mono>
-                {target.cwd}
-              </MetaChip>
-              {target.nativeId ? (
-                <MetaChip icon={<Hash aria-hidden="true" />} title={target.nativeId} mono>
-                  {target.nativeId.slice(0, 8)}
-                </MetaChip>
-              ) : null}
-              {live?.model ? <MetaChip icon={<Cpu aria-hidden="true" />}>{live.model}</MetaChip> : null}
-              {stats ? (
-                <>
-                  <MetaChip icon={<MessagesSquare aria-hidden="true" />}>{fmt(s.messages, { n: stats.user_messages + stats.assistant_messages })}</MetaChip>
-                  {stats.mapped_calls > 0 ? (
-                    <MetaChip icon={<TerminalSquare aria-hidden="true" />}>{fmt(s.stats.mapped, { n: stats.mapped_calls })}</MetaChip>
-                  ) : null}
-                  {stats.degraded_calls > 0 ? <MetaChip>{fmt(s.stats.degraded, { n: stats.degraded_calls })}</MetaChip> : null}
-                </>
-              ) : null}
-            </div>
-          </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+    <div className="@container/session flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <h2 className="flex min-w-0 flex-1 basis-40 items-center gap-2 text-base font-semibold">
+            <ToolBadge tool={target.tool} s={s} />
+            {wt ? <WorktreeBadge slug={wt.slug} branch={wt.info?.branch} deleted={wt.deleted} w={w} /> : null}
+            <TitleEditor
+              title={target.title}
+              onSave={session ? (title) => renameSession(session.tool, session.path, title).then(onRenamed) : undefined}
+              s={s}
+            />
+            {live && live.state !== "exited" && live.state !== "idle" ? <StatePill state={live.state} c={c} /> : null}
+          </h2>
+          <div className="flex max-w-full flex-wrap items-center gap-2 @min-[36rem]/session:ml-auto">
             {mode === "gui" && running && live ? (
               <HeaderButton
                 label={interrupt.label}
@@ -1229,24 +1235,45 @@ function ChatPane({
               </HeaderButton>
             ) : null}
             {session && session.converted_from?.tool !== targetTool ? (
-              <Button type="button" variant="outline" size="sm" className="cursor-pointer" disabled={converting || !preview || running} onClick={onConvert}>
+              <Button type="button" variant="outline" size="sm" className="cursor-pointer" aria-label={convertLabel} title={convertLabel} disabled={converting || !preview || running} onClick={onConvert}>
                 {converting ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
-                {converting ? s.converting : fmt(s.convertTo, { tool: s.tools[targetTool] })}
+                <span className="hidden @min-[48rem]/session:inline">{convertLabel}</span>
               </Button>
             ) : null}
             <div className="inline-flex shrink-0 items-center gap-2">
               <ModeSwitch value={mode} onChange={(m) => void switchMode(m)} disabled={switching || !target.cwd || wtDeleted || creatingWt} c={c} />
               <button
                 type="button"
+                aria-label={codeLabels.title}
+                title={codeLabels.title}
                 aria-expanded={code.shown}
                 disabled={!target.cwd || wtDeleted}
                 onClick={code.toggle}
                 className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-none border border-border bg-card px-2.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 aria-expanded:bg-muted aria-expanded:text-foreground"
               >
-                <span aria-hidden="true" className="text-lg leading-none">📂</span>{codeLabels.title}
+                <span aria-hidden="true" className="text-lg leading-none">📂</span>
+                <span className="hidden @min-[48rem]/session:inline">{codeLabels.title}</span>
               </button>
             </div>
           </div>
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5 @min-[48rem]/session:flex-wrap">
+          <MetaChip icon={<Folder aria-hidden="true" />} title={target.cwd} mono>{target.cwd}</MetaChip>
+          <div className="hidden min-w-0 flex-wrap items-center gap-1.5 @min-[48rem]/session:flex">{sessionMetadata}</div>
+          {target.nativeId || live?.model || stats ? (
+            <div className="shrink-0 @min-[48rem]/session:hidden">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs text-muted-foreground">
+                    <Info aria-hidden="true" />{s.sessionDetails}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" aria-label={s.sessionDetails} className="flex max-w-[calc(100vw-2rem)] flex-wrap gap-1.5">
+                  {sessionMetadata}
+                </PopoverContent>
+              </Popover>
+            </div>
+          ) : null}
         </div>
         {result ? <ResultCard result={result} s={s} /> : session && mode === "gui" ? <ResumeCommands session={session} s={s} /> : null}
       </div>
@@ -1430,6 +1457,7 @@ function ChatPane({
                   agent={target.tool}
                   cwd={target.cwd}
                   disabled={wtDeleted || creatingWt || !!blockedResume}
+                  suggestion={lc?.conv.suggestion}
                   placeholder={wtDeleted ? w.deletedHint : running ? c.inputQueued : undefined}
                   hint={wtDeleted ? w.deletedHint : creatingWt ? w.creating : undefined}
                   draft={

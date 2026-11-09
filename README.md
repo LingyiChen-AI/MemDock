@@ -1,3 +1,7 @@
+## 作者 / Author
+
+Linux.do：[cturing](https://linux.do/u/cturing/summary)
+
 # MemDock
 
 **Claude Code 和 Codex 的对话可以双向互转，换工具也能接着做。** MemDock 是 macOS 和 Windows 上的桌面工作台，把项目会话、图形聊天、原生命令行、分屏终端、代码和 Skill 放在同一个界面。
@@ -146,10 +150,6 @@ src-tauri/src/       后端（Rust）
 - 记忆、会话和用量以本机文件为来源。记忆提取和关系图谱调用你已登录的编程助手 CLI，因此相关内容会按该工具的配置交给模型处理。记忆提取会在调用前清理疑似密钥。
 - GitHub 同步将你选定的内容上传到自己的私有仓库。GitHub 登录令牌和飞书 App Secret 保存于系统凭据库。
 - 实时额度查询默认关闭。飞书、GitHub 同步和应用更新会连接各自的服务。
-
-## 作者 / Author
-
-Linux.do：[cturing](https://linux.do/u/cturing/summary)
 
 ## 许可协议 / License
 

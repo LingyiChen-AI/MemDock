@@ -81,8 +81,12 @@ pub fn fetch(claude_home: &Path, now_ms: i64) -> ToolQuota {
     let Some(token) = read_token(claude_home) else {
         return ToolQuota::with_status("unavailable", Some("not_logged_in".into()));
     };
+    let proxy = ureq::Proxy::try_from_env().or_else(|| {
+        crate::sync::net::system_proxy().and_then(|url| ureq::Proxy::new(&url).ok())
+    });
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
+        .proxy(proxy)
         .build()
         .into();
     let resp = agent

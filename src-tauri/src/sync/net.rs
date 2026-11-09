@@ -95,7 +95,7 @@ pub(crate) fn parse_scutil(out: &str) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn system_proxy() -> Option<String> {
+pub(crate) fn system_proxy() -> Option<String> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
     let key = RegKey::predef(HKEY_CURRENT_USER)
@@ -107,7 +107,7 @@ fn system_proxy() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn system_proxy() -> Option<String> {
+pub(crate) fn system_proxy() -> Option<String> {
     let mut cmd = Command::new("scutil");
     cmd.arg("--proxy")
         .stdin(Stdio::null())
@@ -119,7 +119,7 @@ fn system_proxy() -> Option<String> {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn system_proxy() -> Option<String> {
+pub(crate) fn system_proxy() -> Option<String> {
     None
 }
 

@@ -1412,7 +1412,6 @@
     "sessionId": "会话 ID",
     "file": "文件",
     "resumeHint": "在终端执行下面的命令接着做：",
-    "codexWriterHint": "同一会话只能在一处写入：在 Codex 桌面版打开过它后，命令行会变成只读。要用命令行接着做，先完全退出桌面版（含托盘图标）；两边都想用，就在命令行按 f 分叉。",
     "resumeHere": "在终端用 {tool} 打开这个会话：",
     "resumeConverted": "已转为 {tool} 会话，在终端接着做：",
     "copy": "复制",

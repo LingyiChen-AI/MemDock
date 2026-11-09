@@ -651,7 +651,7 @@ function CopyButton({ text, s, iconOnly = false }: { text: string; s: S; iconOnl
 }
 
 /** Terminal-style card: label + copy in the header, the command on one scrollable line. */
-function CommandCard({ label, command, footer, s }: { label: string; command: string; footer?: React.ReactNode; s: S }) {
+function CommandCard({ label, command, s }: { label: string; command: string; s: S }) {
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-muted/40">
       <div className="flex items-center gap-2 border-b border-border/70 px-3 py-1.5">
@@ -667,36 +667,26 @@ function CommandCard({ label, command, footer, s }: { label: string; command: st
           {command}
         </code>
       </div>
-      {footer ? <div className="border-t border-border/70 px-3 py-2">{footer}</div> : null}
     </div>
   );
 }
 
 /** Always-visible resume commands: this session itself, plus every copy converted from it. */
 function ResumeCommands({ session, s }: { session: SessionSummary; s: S }) {
-  const lines: { tool: Tool; label: string; command: string }[] = [];
+  const lines: { label: string; command: string }[] = [];
   if (session.converted_from) {
-    lines.push({ tool: session.tool, label: fmt(s.resumeHere, { tool: s.tools[session.tool] }), command: resumeCommand(session.tool, session.cwd, session.id) });
+    lines.push({ label: fmt(s.resumeHere, { tool: s.tools[session.tool] }), command: resumeCommand(session.tool, session.cwd, session.id) });
   }
   for (const r of session.converted_to) {
-    lines.push({ tool: r.tool, label: fmt(s.resumeConverted, { tool: s.tools[r.tool] }), command: resumeCommand(r.tool, session.cwd, r.id) });
+    lines.push({ label: fmt(s.resumeConverted, { tool: s.tools[r.tool] }), command: resumeCommand(r.tool, session.cwd, r.id) });
   }
   if (lines.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
       {lines.map((l) => (
-        <CommandCard key={l.command} label={l.label} command={l.command} footer={l.tool === "codex" ? <CodexWriterHint s={s} /> : null} s={s} />
+        <CommandCard key={l.command} label={l.label} command={l.command} s={s} />
       ))}
     </div>
-  );
-}
-
-function CodexWriterHint({ s }: { s: S }) {
-  return (
-    <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
-      <Info className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-      {s.codexWriterHint}
-    </p>
   );
 }
 
@@ -719,7 +709,6 @@ function ResultCard({ result, s }: { result: ConvertResult; s: S }) {
       <CommandCard
         label={s.resumeHint}
         command={result.resume_command}
-        footer={result.tool === "codex" ? <CodexWriterHint s={s} /> : null}
         s={s}
       />
       {result.tool === "codex" ? (

@@ -1412,7 +1412,6 @@
     "sessionId": "Session ID",
     "file": "File",
     "resumeHint": "Run this in a terminal to continue:",
-    "codexWriterHint": "A session can be written from one place only: once the Codex desktop app opens it, the CLI turns read-only. Fully quit the desktop app (tray icon too) before continuing in the CLI, or press f in the CLI to fork.",
     "resumeHere": "Open this session in {tool} from a terminal:",
     "resumeConverted": "Converted to a {tool} session. Continue it from a terminal:",
     "copy": "Copy",

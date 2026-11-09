@@ -60,7 +60,7 @@ fn handshake_and_queued_prompt() {
     assert_eq!(init[0]["method"], "initialize");
     assert_eq!(init[0]["params"]["clientInfo"]["name"], "memdock");
     // Prompt typed before the thread exists is queued.
-    assert!(m.send("hello", &[]).is_empty());
+    assert!(m.send("hello", &[], Some(PermissionMode::Bypass)).is_empty());
     let st = line(&mut m, json!({"id": 1, "result": {}}));
     assert_eq!(st.writes[0], json!({"method": "initialized"}));
     assert_eq!(st.writes[1]["method"], "thread/start");
@@ -74,7 +74,13 @@ fn handshake_and_queued_prompt() {
     assert_eq!(st.events, vec![LiveEvent::Started { native_id: "T9".into(), model: Some("m1".into()) }]);
     assert_eq!(st.writes.len(), 1);
     assert_eq!(st.writes[0]["method"], "turn/start");
-    assert_eq!(st.writes[0]["params"], json!({"threadId": "T9", "input": [{"type": "text", "text": "hello", "text_elements": []}]}));
+    assert_eq!(st.writes[0]["params"]["approvalPolicy"], "never");
+    assert_eq!(st.writes[0]["params"]["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+    assert_eq!(st.writes[0]["params"]["threadId"], "T9");
+    assert_eq!(st.writes[0]["params"]["input"], json!([{"type": "text", "text": "hello", "text_elements": []}]));
+    let next = m.send("ask again", &[], Some(PermissionMode::Ask));
+    assert_eq!(next[0]["params"]["approvalPolicy"], "on-request");
+    assert_eq!(next[0]["params"]["sandboxPolicy"], json!({"type": "readOnly"}));
 }
 
 #[test]
@@ -114,7 +120,7 @@ fn exit_before_start_reports_stderr() {
 #[test]
 fn turn_stream_messages_and_usage() {
     let mut m = ready();
-    let w = m.send("hi", &[]);
+    let w = m.send("hi", &[], None);
     assert_eq!(w[0]["id"], 3);
     line(&mut m, json!({"id": 3, "result": {"turn": {"id": "U1", "status": "inProgress"}}}));
     line(&mut m, json!({"method": "turn/started", "params": {"threadId": "T1", "turn": {"id": "U1"}}}));
@@ -138,7 +144,7 @@ fn turn_stream_messages_and_usage() {
         }]
     );
     // Second turn reports the difference of the totals.
-    m.send("again", &[]);
+    m.send("again", &[], None);
     line(&mut m, json!({"method": "turn/started", "params": {"threadId": "T1", "turn": {"id": "U2"}}}));
     line(&mut m, json!({"method": "thread/tokenUsage/updated", "params": {"tokenUsage": {"total": usage(250, 30), "last": usage(150, 10)}}}));
     let st = line(&mut m, json!({"method": "turn/completed", "params": {"turn": {"id": "U2", "status": "completed"}}}));
@@ -228,7 +234,7 @@ fn legacy_approvals_and_unsupported_requests() {
 #[test]
 fn network_errors_are_non_fatal_and_end_the_turn() {
     let mut m = ready();
-    m.send("hi", &[]);
+    m.send("hi", &[], None);
     line(&mut m, json!({"id": 3, "result": {"turn": {"id": "U1"}}}));
     let retry = json!({"method": "error", "params": {"error": {"message": "Reconnecting... 2/5",
         "additionalDetails": "stream disconnected before completion: (os error 10061)"}, "willRetry": true, "threadId": "T1", "turnId": "U1"}});
@@ -246,7 +252,7 @@ fn network_errors_are_non_fatal_and_end_the_turn() {
 #[test]
 fn turn_start_rpc_error_ends_turn() {
     let mut m = ready();
-    m.send("hi", &[]);
+    m.send("hi", &[], None);
     let st = line(&mut m, json!({"id": 3, "error": {"code": -32600, "message": "bad"}}));
     assert!(matches!(&st.events[0], LiveEvent::Error { fatal: false, .. }));
     assert!(matches!(&st.events[1], LiveEvent::TurnCompleted { is_error: true, .. }));
@@ -255,7 +261,7 @@ fn turn_start_rpc_error_ends_turn() {
 #[test]
 fn interrupt_waits_for_turn_id() {
     let mut m = ready();
-    m.send("hi", &[]);
+    m.send("hi", &[], None);
     assert!(m.interrupt().is_empty());
     let st = line(&mut m, json!({"id": 3, "result": {"turn": {"id": "U1"}}}));
     assert_eq!(st.writes[0]["method"], "turn/interrupt");
@@ -307,7 +313,7 @@ fn probe_log_replays_without_fatal_errors() {
     let mut events = vec![];
     for (i, l) in lines.iter().enumerate() {
         if i == 5 {
-            m.send("Run echo", &[]);
+            m.send("Run echo", &[], None);
         }
         events.extend(m.on_line(l).events);
     }
@@ -361,7 +367,7 @@ fn real_codex() {
 #[test]
 fn compact_command_uses_thread_compact_and_shows_notices() {
     let mut m = ready();
-    let w = m.send("/compact", &[]);
+    let w = m.send("/compact", &[], None);
     assert_eq!(w.len(), 1);
     assert_eq!(w[0]["method"], "thread/compact/start");
     assert_eq!(w[0]["params"]["threadId"], "T1");
@@ -370,6 +376,6 @@ fn compact_command_uses_thread_compact_and_shows_notices() {
     let b = line(&mut m, json!({"method": "item/completed", "params": {"item": {"type": "contextCompaction", "id": "c1"}}}));
     assert!(matches!(&b.events[..], [LiveEvent::Notice { id, kind, .. }] if id == "compact-c1" && kind == "compacted"));
     // Ordinary text still starts a turn.
-    let w = m.send("hello /compact", &[]);
+    let w = m.send("hello /compact", &[], None);
     assert_eq!(w[0]["method"], "turn/start");
 }

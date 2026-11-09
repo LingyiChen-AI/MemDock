@@ -101,6 +101,9 @@ export interface ComposerProps {
   /** A turn is running: shows the stop button next to send. */
   running?: boolean;
   onStop?: () => void;
+  stopping?: boolean;
+  stopLabel?: string;
+  stopHint?: string;
   /**
    * Settings of the attached (running) process. Changes made meanwhile are remembered and
    * marked "next time" (they apply when the session reconnects).
@@ -546,7 +549,7 @@ function StatusItem({
     <button
       type="button"
       aria-label={label}
-      title={next ? k.nextTimeHint : title}
+      title={title ?? (next ? k.nextTimeHint : undefined)}
       onClick={onClick}
       className={cn(
         "max-w-48 cursor-pointer truncate rounded-sm border-b border-dashed border-muted-foreground/40 outline-none transition-colors hover:border-foreground/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
@@ -572,6 +575,9 @@ export function ChatComposer({
   placeholder,
   hint,
   running = false,
+  stopping = false,
+  stopLabel,
+  stopHint,
   onStop,
   attached = null,
   draft = null,
@@ -1211,9 +1217,9 @@ export function ChatComposer({
                 {meters}
                 <span className="flex-1" />
                 {running && onStop ? (
-                  <Tip tip={c.stopHint}>
-                    <Button type="button" variant="outline" size="icon-sm" className="cursor-pointer rounded-full" aria-label={c.stop} onClick={onStop}>
-                      <Square className="size-3 fill-current" aria-hidden="true" />
+                  <Tip tip={stopHint ?? c.stopHint}>
+                    <Button type="button" variant="destructive" size="icon-sm" className="cursor-pointer rounded-full" aria-label={stopLabel ?? c.stop} disabled={stopping} onClick={onStop}>
+                      {stopping ? <Loader2 className="size-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Square className="size-3 fill-current" aria-hidden="true" />}
                     </Button>
                   </Tip>
                 ) : null}
@@ -1261,7 +1267,7 @@ export function ChatComposer({
           {fmt(k.effortStatus, { level: effort || k.effortDefault })}
         </StatusItem>
         <span aria-hidden="true">·</span>
-        <StatusItem label={`${k.permissionTitle}: ${c.permissions[permission]}`} onClick={() => setPicker("permissions")} warn={permission === "bypass"} next={changed.has("permission")} k={k}>
+        <StatusItem label={`${k.permissionTitle}: ${c.permissions[permission]}`} onClick={() => setPicker("permissions")} warn={permission === "bypass"} next={changed.has("permission") && (agent !== "codex" || running)} title={agent === "codex" ? k.nextTurnPermission : undefined} k={k}>
           {c.permissions[permission]}
         </StatusItem>
         {worktreeOn ? (

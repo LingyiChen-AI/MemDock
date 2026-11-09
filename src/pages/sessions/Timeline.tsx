@@ -229,7 +229,7 @@ function LongText({ text, s }: { text: string; s: S }) {
 function UserRow({ item, tool, s }: { item: TextItem; tool: Tool; s: S }) {
   const name = useAccountName(tool, s.roles.user);
   return (
-    <ChatRow role="user" name={name} time={formatIso(item.ts)}>
+    <ChatRow role="user" name={name} time={formatIso(item.ts)} copyText={item.text}>
       {item.text ? <LongText text={item.text} s={s} /> : null}
       {item.type === "user" && item.images?.length ? <Thumbs images={item.images} s={s} /> : null}
     </ChatRow>
@@ -288,7 +288,10 @@ export function Thumbs({ images, s }: { images: string[]; s: S }) {
 
 function TurnCard({ segments, ts, tool, onOpen, s }: { segments: Segment[]; ts: string; tool: Tool; onOpen: (it: ToolItem) => void; s: S }) {
   return (
-    <ChatRow role="assistant" tool={tool} name={s.tools[tool]} time={formatIso(ts)}>
+    <ChatRow role="assistant" tool={tool} name={s.tools[tool]} time={formatIso(ts)} copyText={
+      segments.flatMap((seg) => seg.kind === "text" ? [seg.item.text] : []).join("\n\n")
+      || segments.flatMap((seg) => seg.kind === "tools" ? seg.items.map((item) => item.summary) : []).join("\n")
+    }>
       {segments.map((seg, i) =>
         seg.kind === "text" ? <LongText key={i} text={seg.item.text} s={s} /> : <ChipRun key={i} items={seg.items} onOpen={onOpen} s={s} />,
       )}
@@ -363,7 +366,7 @@ function ToolDialog({ it, onClose, s }: { it: ToolItem | null; onClose: () => vo
   const Icon = it ? KIND_ICON[it.kind] : Wrench;
   return (
     <Dialog open={!!it} onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-3 sm:max-w-3xl">
+      <DialogContent size="wide" className="flex max-h-[85vh] flex-col gap-3">
         {it ? (
           <>
             <DialogHeader>

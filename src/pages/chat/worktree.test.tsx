@@ -201,7 +201,7 @@ beforeEach(() => {
 async function openWorktreeSession() {
   renderApp(<SessionsPage />);
   const group = await screen.findByRole("region", { name: "demo" });
-  await userEvent.click(await within(group).findByRole("button", { name: /Fix login/ }));
+  await userEvent.click(await within(group).findByRole("button", { name: /^(?!归档：|恢复：).*Fix login/ }));
   return await screen.findByRole("region", { name: "独立工作区" });
 }
 
@@ -244,7 +244,7 @@ describe("/worktree in the composer", () => {
     expect(screen.queryByRole("option", { name: /\/worktree/ })).toBeNull();
 
     // A started session (not a draft) never offers it.
-    await userEvent.click(within(screen.getByRole("region", { name: "demo" })).getByRole("button", { name: /Research/ }));
+    await userEvent.click(within(screen.getByRole("region", { name: "demo" })).getByRole("button", { name: /^(?!归档：|恢复：).*Research/ }));
     const box2 = await screen.findByRole("textbox", { name: "消息" });
     await userEvent.type(box2, "/");
     await screen.findByRole("option", { name: /\/model/ });
@@ -337,11 +337,11 @@ describe("list", () => {
   it("groups worktree sessions under the parent project with a badge and changed files", async () => {
     renderApp(<SessionsPage />);
     const demo = await screen.findByRole("region", { name: "demo" });
-    const row = await within(demo).findByRole("button", { name: /Fix login/ });
+    const row = await within(demo).findByRole("button", { name: /^(?!归档：|恢复：).*Fix login/ });
     expect(within(row).getByText("fix-login")).toBeInTheDocument();
     expect(row).toHaveTextContent("🌿 fix-login");
     expect(await within(row).findByText("改了 3 个文件")).toBeInTheDocument();
-    expect(within(demo).getByRole("button", { name: /Research/ })).toBeInTheDocument();
+    expect(within(demo).getByRole("button", { name: /^(?!归档：|恢复：).*Research/ })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "fix-login" })).toBeNull();
   });
 });
@@ -457,7 +457,7 @@ describe("deleted worktree", () => {
     (worktreeList as Mock).mockResolvedValue([]);
     renderApp(<SessionsPage />);
     const demo = await screen.findByRole("region", { name: "demo" });
-    const row = await within(demo).findByRole("button", { name: /Fix login/ });
+    const row = await within(demo).findByRole("button", { name: /^(?!归档：|恢复：).*Fix login/ });
     await waitFor(() => expect(row).toHaveTextContent("工作区已删除"));
     await userEvent.click(row);
     const box = await screen.findByRole("textbox", { name: "消息" });

@@ -147,6 +147,10 @@ src-tauri/src/       后端（Rust）
 - GitHub 同步将你选定的内容上传到自己的私有仓库。GitHub 登录令牌和飞书 App Secret 保存于系统凭据库。
 - 实时额度查询默认关闭。飞书、GitHub 同步和应用更新会连接各自的服务。
 
+## 作者 / Author
+
+Linux.do：[cturing](https://linux.do/u/cturing/summary)
+
 ## 许可协议 / License
 
 本项目采用 [MIT 许可证](LICENSE)。允许使用、修改和分发，包括商业用途。分发软件的副本或主要部分时，请保留版权声明和许可声明。

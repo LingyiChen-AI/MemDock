@@ -15,7 +15,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { diffLines } from "diff";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronDown, ChevronRight, ExternalLink, File, FilePlus, Files, Folder, FolderOpen, RefreshCw, Save, Search, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, File, FilePlus, Files, Folder, FolderOpen, GitBranch, RefreshCw, Save, Search, TriangleAlert, X } from "lucide-react";
 import { codeEntries, codeStatus, createCodeFile, openCodeInVSCode, readCode, saveCode, searchCode, trashCodeFile, type CodeEntry, type CodeFile, type CodeMatch } from "@/api/workspaceCode";
 import { worktreeStatus, type WorktreeInfo } from "@/api/worktree";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -448,9 +448,9 @@ function PromptButton({ tone = "primary", className, ...props }: React.Component
   );
 }
 
-export function WorkspaceCodePanel({ cwd, base, shown, request, source, onDirtyChange }: {
+export function WorkspaceCodePanel({ cwd, base, branch, shown, request, source, onDirtyChange }: {
   cwd: string; base: WorktreeInfo | null; shown: boolean; request: CodeLocation | null;
-  source?: CodePanelSource; onDirtyChange?: (dirty: boolean) => void;
+  branch?: string | null; source?: CodePanelSource; onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t: { workspaceCode: l, skills } } = useI18n();
   const [localDrafts] = React.useState(() => new Map<string, Draft>());
@@ -1050,6 +1050,12 @@ export function WorkspaceCodePanel({ cwd, base, shown, request, source, onDirtyC
               </div>
             </>
           )}
+          {branch ? (
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5 border-t border-zinc-700 px-2 py-1 text-xs text-zinc-300" title={branch}>
+              <GitBranch aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="truncate">{branch}</span>
+            </div>
+          ) : null}
         </div>
         <div className="flex min-w-0 flex-1 flex-col bg-zinc-800">
           <div className="flex shrink-0 overflow-x-auto border-b border-zinc-700 bg-zinc-900">

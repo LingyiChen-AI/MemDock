@@ -459,6 +459,7 @@ impl Parser {
         }
         out.events.push(LiveEvent::ApprovalRequest {
             request_id: request_id.to_string(),
+            tool_id: str_of(&req, "tool_use_id").map(str::to_owned),
             kind: classify(&tool_name),
             summary,
             detail: pretty(&input, IO_MAX),

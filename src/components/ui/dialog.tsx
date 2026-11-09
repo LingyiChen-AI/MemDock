@@ -31,10 +31,12 @@ function DialogOverlay({ className, ...props }: React.ComponentProps<typeof Dial
 function DialogContent({
   className,
   children,
+  size = "default",
   showCloseButton = true,
   closeLabel = "Close",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  size?: "default" | "wide"
   showCloseButton?: boolean
   /** Accessible name of the corner close button. */
   closeLabel?: string
@@ -42,7 +44,7 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
-      <DialogPrimitive.Content data-slot="dialog-content" className={cn(contentCls, "w-[520px]", className)} {...props}>
+      <DialogPrimitive.Content data-slot="dialog-content" className={cn(contentCls, size === "wide" ? "w-[768px]" : "w-[520px]", className)} {...props}>
         {children}
         {showCloseButton ? (
           <DialogPrimitive.Close

@@ -140,7 +140,7 @@ describe("applyLiveEvent", () => {
 });
 
 describe("toConvBlocks", () => {
-  it("groups an assistant turn into one card with tool runs, approvals stand alone", () => {
+  it("groups an assistant turn into one card with tool runs and inline approvals", () => {
     const s = run(
       { type: "user_message", id: "u1", text: "fix it" },
       { type: "thinking", id: "th", text: "hmm" },
@@ -154,12 +154,11 @@ describe("toConvBlocks", () => {
       { type: "user_message", id: "u2", text: "thanks" },
     );
     const blocks = toConvBlocks(s.items);
-    expect(blocks.map((b) => b.kind)).toEqual(["user", "turn", "approval", "turn", "user"]);
+    expect(blocks.map((b) => b.kind)).toEqual(["user", "turn", "user"]);
     const first = blocks[1];
-    expect(first.kind === "turn" && first.segments.map((x) => x.kind)).toEqual(["thinking", "text", "tools"]);
+    expect(first.kind === "turn" && first.segments.map((x) => x.kind)).toEqual(["thinking", "text", "tools", "approval", "error", "text"]);
     expect(first.kind === "turn" && first.segments[2].kind === "tools" && first.segments[2].calls.map((c) => c.id)).toEqual(["t1", "t2"]);
-    const second = blocks[3];
-    expect(second.kind === "turn" && second.segments.map((x) => x.kind)).toEqual(["error", "text"]);
+    expect(first.kind === "turn" && first.segments[3]).toMatchObject({ kind: "approval", approval: { request_id: "r1", decision: "allow" } });
   });
 
   it("puts fatal errors and exit outside of turns", () => {

@@ -277,6 +277,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_close,
             worktree::worktree_check,
+            worktree::worktree_current_branch,
             worktree::worktree_create,
             worktree::worktree_list,
             worktree::worktree_status,

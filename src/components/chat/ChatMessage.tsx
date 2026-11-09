@@ -1,7 +1,8 @@
 import * as React from "react";
-import { User } from "lucide-react";
+import { Check, Copy, User, X } from "lucide-react";
 import type { Tool } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
+import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import { ChatMarkdown } from "./ChatMarkdown";
 
@@ -38,22 +39,25 @@ export interface ChatRowProps {
   highlighted?: boolean;
   /** Extra badge after the time, e.g. "hit". */
   badge?: React.ReactNode;
+  /** The complete message as Markdown, even if its display is folded. */
+  copyText?: string;
   children: React.ReactNode;
   className?: string;
   /** Pass-through for tests and anchors. */
   "data-hit"?: string;
 }
 
-export function ChatRow({ role, tool, name, time, highlighted, badge, children, className, ...rest }: ChatRowProps) {
+export function ChatRow({ role, tool, name, time, highlighted, badge, copyText, children, className, ...rest }: ChatRowProps) {
   const user = role === "user";
   return (
-    <li className={cn("flex gap-2.5", user && "flex-row-reverse", className)} {...rest}>
+    <li className={cn("group/message flex gap-2.5", user && "flex-row-reverse", className)} {...rest}>
       <ChatAvatar role={role} tool={tool} />
       <div className={cn("flex max-w-[86%] min-w-0 flex-col gap-1", user ? "items-end" : "flex-1")}>
         <div className={cn("flex items-center gap-2 px-1 text-[11px] text-muted-foreground", user && "flex-row-reverse")}>
           <span className="font-medium text-foreground/80">{name}</span>
           {time ? <span className="tabular-nums">{time}</span> : null}
           {badge}
+          {copyText?.trim() ? <CopyMessage text={copyText} /> : null}
         </div>
         <div
           className={cn(
@@ -66,6 +70,46 @@ export function ChatRow({ role, tool, name, time, highlighted, badge, children, 
         </div>
       </div>
     </li>
+  );
+}
+
+function CopyMessage({ text }: { text: string }) {
+  const { t: { sessions: s } } = useI18n();
+  const [status, setStatus] = React.useState<"copied" | "failed" | null>(null);
+  const reset = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  React.useEffect(() => () => clearTimeout(reset.current), []);
+  const label = status === "copied" ? s.copied : status === "failed" ? s.copyFailed : s.copy;
+  const Icon = status === "copied" ? Check : status === "failed" ? X : Copy;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("copied");
+    } catch {
+      setStatus("failed");
+    }
+    clearTimeout(reset.current);
+    reset.current = setTimeout(() => setStatus(null), 1600);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={s.copyMessage}
+        title={status ? label : s.copyMessage}
+        onClick={() => void copy()}
+        className={cn(
+          "grid size-5 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+          !status && "opacity-0 group-hover/message:opacity-100 [@media(hover:none)]:opacity-100",
+          status === "copied" && "text-primary",
+          status === "failed" && "text-destructive",
+        )}
+      >
+        <Icon aria-hidden="true" className="size-3.5" />
+      </button>
+      <span className="sr-only" aria-live="polite">{status ? label : ""}</span>
+    </>
   );
 }
 

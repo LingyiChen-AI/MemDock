@@ -144,7 +144,7 @@ const opts = { tool: "claude" as const, cwd: "/w", resume_id: null, permission: 
 async function openSession() {
   renderApp(<SessionsPage />);
   const list = await screen.findByRole("region", { name: "demo" });
-  await userEvent.click(within(list).getByRole("button", { name: /Build fix/ }));
+  await userEvent.click(within(list).getByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ }));
   return list;
 }
 

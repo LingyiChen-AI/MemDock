@@ -13,7 +13,7 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { CHIP_FOLD, IoBlock, KIND_ICON, KIND_TONE, Thumbs } from "@/pages/sessions/Timeline";
 import { getConvUi, patchConvUi } from "./convUiState";
-import { toConvBlocks, type ConvBlock, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
+import { isPendingApproval, pendingApprovals, toConvBlocks, type ConvBlock, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
 
 type C = Messages["chat"];
 
@@ -44,12 +44,12 @@ export function Conversation({
   const { t } = useI18n();
   const c = t.chat;
   const userName = useAccountName(agent, c.you);
-  const [detail, setDetail] = React.useState<LiveToolCall | null>(null);
+  const [detail, setDetail] = React.useState<{ callId?: string; requestId?: string } | null>(null);
   const blocks = React.useMemo(() => toConvBlocks(conv.items), [conv.items]);
   const scroller = React.useRef<HTMLDivElement>(null);
   const saved = React.useRef(getConvUi(scrollKey));
   const stick = React.useRef(saved.current.scrollTop === null || saved.current.stuck);
-  const waiting = blocks.some((b) => b.kind === "approval" && b.approval.decision === null && !b.approval.expired);
+  const waiting = pendingApprovals(conv).length > 0;
 
   // Where we last scrolled to ourselves. Content that grows after that (history, images) fires a
   // scroll event that looks "not at the bottom"; only a move *up* from here is the reader scrolling.
@@ -99,10 +99,14 @@ export function Conversation({
     return () => ro.disconnect();
   }, []);
 
-  // Keep the open tool dialog in sync with streamed output.
-  const liveDetail = detail
-    ? (conv.items.find((it) => it.type === "tool" && it.call.id === detail.id) as { call: LiveToolCall } | undefined)?.call ?? detail
-    : null;
+  const dialogSegments = detail ? blocks.flatMap((block) => block.kind === "turn" ? block.segments : []) : [];
+  const requestedApproval = detail?.requestId;
+  const liveDetail = dialogSegments.flatMap((seg) => seg.kind === "tools"
+    ? seg.calls.map((call) => ({ call, approvals: seg.approvals?.get(call.id) ?? [] }))
+    : []
+  ).find(({ call, approvals }) => call.id === detail?.callId || approvals.some((approval) => approval.request_id === requestedApproval));
+  const standaloneApproval = dialogSegments.find((seg) => seg.kind === "approval" && seg.approval.request_id === requestedApproval);
+  const detailApprovals = liveDetail?.approvals ?? (standaloneApproval?.kind === "approval" ? [standaloneApproval.approval] : []);
 
   return (
     <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4" data-testid="chat-scroll">
@@ -121,22 +125,23 @@ export function Conversation({
           switch (b.kind) {
             case "user":
               return (
-                <ChatRow key={b.key} role="user" name={userName}>
+                <ChatRow key={b.key} role="user" name={userName} copyText={b.text}>
                   {b.text ? <ChatText text={b.text} expandLabel={c.expand} collapseLabel={c.collapse} /> : null}
                   {b.images?.length ? <LiveThumbs images={b.images} label={c.imageLoading} /> : null}
                 </ChatRow>
               );
             case "turn":
               return (
-                <ChatRow key={b.key} role="assistant" tool={agent} name={c.agents[agent]}>
+                <ChatRow key={b.key} role="assistant" tool={agent} name={c.agents[agent]} copyText={
+                  b.segments.flatMap((seg) => seg.kind === "text" ? [seg.text] : []).join("\n\n")
+                  || b.segments.flatMap((seg) => seg.kind === "tools" ? seg.calls.map((call) => call.summary) : []).join("\n")
+                }>
                   {b.segments.map((seg, i) => (
-                    <Segment key={i} seg={seg} onOpen={setDetail} c={c} />
+                    <Segment key={seg.kind === "approval" ? seg.approval.request_id : i} seg={seg} onRespond={onRespond} onOpen={(call) => setDetail({ callId: call.id })} onApproval={(approval) => setDetail({ requestId: approval.request_id })} c={c} />
                   ))}
                   {lastTurn && !streamingTail(b.segments) ? <InlineTyping c={c} /> : null}
                 </ChatRow>
               );
-            case "approval":
-              return <ApprovalCard key={b.key} approval={b.approval} onRespond={onRespond} c={c} />;
             case "fatal":
               return (
                 <li key={b.key} role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/8 px-3.5 py-2.5 text-sm text-destructive">
@@ -193,7 +198,7 @@ export function Conversation({
         {running && !waiting && !starting && showTyping(blocks) ? <TypingRow agent={agent} c={c} /> : null}
         </ol>
       </div>
-      <ToolDialog call={liveDetail} onClose={() => setDetail(null)} c={c} />
+      <ToolDialog call={liveDetail?.call ?? null} approvals={detailApprovals} onRespond={onRespond} onClose={() => setDetail(null)} c={c} />
     </div>
   );
 }
@@ -292,7 +297,7 @@ function TypingRow({ agent, c }: { agent: LiveAgent; c: C }) {
   );
 }
 
-function Segment({ seg, onOpen, c }: { seg: TurnSegment; onOpen: (call: LiveToolCall) => void; c: C }) {
+function Segment({ seg, onOpen, onApproval, onRespond, c }: { seg: TurnSegment; onOpen: (call: LiveToolCall) => void; onApproval: (approval: LiveApproval) => void; onRespond: (requestId: string, d: Decision) => Promise<void>; c: C }) {
   switch (seg.kind) {
     case "text":
       return seg.streaming ? (
@@ -304,10 +309,21 @@ function Segment({ seg, onOpen, c }: { seg: TurnSegment; onOpen: (call: LiveTool
       ) : (
         <ChatText text={seg.text} expandLabel={c.expand} collapseLabel={c.collapse} />
       );
+    case "approval":
+      if (isPendingApproval(seg.approval)) {
+        return <ApprovalCard approval={seg.approval} onRespond={onRespond} collapsible c={c} />;
+      }
+      return (
+        <button type="button" className={chipClass} onClick={() => onApproval(seg.approval)} title={seg.approval.summary}>
+          <span className="shrink-0 font-medium">{seg.approval.tool_name}</span>
+          <span className="max-w-60 truncate font-mono text-[11px] text-muted-foreground">{seg.approval.summary}</span>
+          <ApprovalMark approval={seg.approval} c={c} />
+        </button>
+      );
     case "thinking":
       return <Thinking text={seg.text} c={c} />;
     case "tools":
-      return <ChipRun calls={seg.calls} onOpen={onOpen} c={c} />;
+      return <ChipRun calls={seg.calls} approvals={seg.approvals} onOpen={onOpen} c={c} />;
     case "error":
       return (
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
@@ -347,18 +363,32 @@ function CallMark({ call, c }: { call: LiveToolCall; c: C }) {
   );
 }
 
+const chipClass = "inline-flex h-6 w-fit max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-xs outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring";
+
+function ApprovalMark({ approval, c }: { approval: LiveApproval; c: C }) {
+  if (approval.decision) return <Resolved decision={approval.decision} link c={c} />;
+  return (
+    <span className={cn("inline-flex shrink-0 items-center gap-1", isPendingApproval(approval) ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+      <ShieldAlert aria-hidden="true" className="size-3" />
+      {approval.expired ? c.approval.expired : c.approval.pending}
+    </span>
+  );
+}
+
 /** Same capsules as the history timeline: wrap inside the bubble, long runs fold behind "+N". */
-function ChipRun({ calls, onOpen, c }: { calls: LiveToolCall[]; onOpen: (call: LiveToolCall) => void; c: C }) {
+function ChipRun({ calls, approvals, onOpen, c }: { calls: LiveToolCall[]; approvals?: Map<string, LiveApproval[]>; onOpen: (call: LiveToolCall) => void; c: C }) {
   const openCode = React.useContext(WorkspaceCodeContext);
   const { t: { workspaceCode } } = useI18n();
   const [all, setAll] = React.useState(false);
-  const shown = all || calls.length <= CHIP_FOLD ? calls : calls.slice(0, CHIP_FOLD);
+  const shown = all ? calls : calls.slice(0, CHIP_FOLD);
   const rest = calls.length - shown.length;
   return (
     <div className="flex max-w-full min-w-0 flex-wrap gap-1.5">
       {shown.map((call) => {
         const Icon = KIND_ICON[call.kind] ?? Wrench;
-        const location = openCode && toolCodeLocation(call);
+        const requests = approvals?.get(call.id) ?? [];
+        const mark = requests[requests.length - 1];
+        const location = !mark && openCode && toolCodeLocation(call);
         return (
           <button
             key={call.id}
@@ -368,7 +398,7 @@ function ChipRun({ calls, onOpen, c }: { calls: LiveToolCall[]; onOpen: (call: L
             }}
             title={`${call.name}  ${call.summary}${location ? "\n" + workspaceCode.toolDetails : ""}`}
             className={cn(
-              "inline-flex h-6 max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full border bg-background px-2.5 text-xs outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring",
+              chipClass,
               call.is_error ? "border-destructive/40" : "border-border",
             )}
           >
@@ -376,6 +406,7 @@ function ChipRun({ calls, onOpen, c }: { calls: LiveToolCall[]; onOpen: (call: L
             <Icon className={cn("size-3 shrink-0", KIND_TONE[call.kind])} aria-hidden="true" />
             <span className="shrink-0 font-medium">{call.name}</span>
             {call.summary ? <span className="max-w-60 min-w-0 truncate font-mono text-[11px] text-muted-foreground">{call.summary}</span> : null}
+            {mark ? <ApprovalMark approval={mark} c={c} /> : null}
           </button>
         );
       })}
@@ -392,24 +423,26 @@ function ChipRun({ calls, onOpen, c }: { calls: LiveToolCall[]; onOpen: (call: L
   );
 }
 
-function ToolDialog({ call, onClose, c }: { call: LiveToolCall | null; onClose: () => void; c: C }) {
-  const Icon = call ? (KIND_ICON[call.kind] ?? Wrench) : Wrench;
+function ToolDialog({ call, approvals, onRespond, onClose, c }: { call: LiveToolCall | null; approvals: LiveApproval[]; onRespond: (requestId: string, decision: Decision) => Promise<void>; onClose: () => void; c: C }) {
+  const kind = call?.kind ?? approvals[0]?.kind;
+  const Icon = kind ? KIND_ICON[kind] ?? Wrench : Wrench;
   return (
-    <Dialog open={!!call} onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-3 sm:max-w-3xl">
-        {call ? (
+    <Dialog open={!!call || approvals.length > 0} onOpenChange={(o) => (!o ? onClose() : undefined)}>
+      <DialogContent size="wide" className="flex max-h-[85vh] flex-col gap-3">
+        {call || approvals.length ? (
           <>
             <DialogHeader>
               <DialogTitle className="flex min-w-0 flex-wrap items-center gap-2">
-                <Icon className={cn("size-4 shrink-0", KIND_TONE[call.kind])} aria-hidden="true" />
-                <span className="font-mono">{call.name}</span>
-                <CallMark call={call} c={c} />
+                <Icon className={cn("size-4 shrink-0", kind && KIND_TONE[kind])} aria-hidden="true" />
+                <span className="font-mono">{call?.name ?? approvals[0]?.tool_name}</span>
+                {call ? <CallMark call={call} c={c} /> : null}
               </DialogTitle>
-              <DialogDescription className="truncate font-mono text-xs">{call.summary || " "}</DialogDescription>
+              <DialogDescription className="truncate font-mono text-xs">{call?.summary || approvals[0]?.summary || " "}</DialogDescription>
             </DialogHeader>
             <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto px-1">
-              <IoBlock label={c.tool.input} text={call.input} />
-              {call.finished || call.output ? (
+              {approvals.map((approval) => <ApprovalCard key={approval.request_id} approval={approval} onRespond={onRespond} c={c} />)}
+              {call && !approvals.some((approval) => approval.detail === call?.input) ? <IoBlock label={c.tool.input} text={call.input} /> : null}
+              {call && (call.finished || call.output) ? (
                 <IoBlock label={call.is_error ? c.tool.error : c.tool.output} text={call.output || c.tool.emptyOutput} error={call.is_error} />
               ) : null}
             </div>
@@ -420,10 +453,9 @@ function ToolDialog({ call, onClose, c }: { call: LiveToolCall | null; onClose: 
   );
 }
 
-function ApprovalCard({ approval, onRespond, c }: { approval: LiveApproval; onRespond: (requestId: string, d: Decision) => Promise<void>; c: C }) {
-  const [open, setOpen] = React.useState(false);
+function ApprovalCard({ approval, onRespond, collapsible = false, c }: { approval: LiveApproval; collapsible?: boolean; onRespond: (requestId: string, d: Decision) => Promise<void>; c: C }) {
   const [busy, setBusy] = React.useState<Decision | null>(null);
-  const pending = approval.decision === null && !approval.expired;
+  const pending = isPendingApproval(approval);
   const Icon = KIND_ICON[approval.kind] ?? Wrench;
   const respond = async (d: Decision) => {
     setBusy(d);
@@ -434,11 +466,12 @@ function ApprovalCard({ approval, onRespond, c }: { approval: LiveApproval; onRe
     }
   };
   return (
-    <li
+    <div
+      role="group"
       aria-label={fmt(c.approval.title, { tool: approval.tool_name })}
       className={cn(
-        "flex min-w-0 flex-col gap-2.5 rounded-xl border px-4 py-3",
-        pending ? "border-amber-500/60 bg-amber-500/10 shadow-sm ring-2 ring-amber-500/20" : "border-border bg-muted/30",
+        "flex w-fit max-w-full min-w-0 flex-col gap-1.5 rounded-md border px-2.5 py-1.5",
+        pending ? "border-amber-500/50 bg-amber-500/8" : "border-border bg-muted/30",
       )}
     >
       <div className="flex min-w-0 items-start gap-2">
@@ -448,7 +481,7 @@ function ApprovalCard({ approval, onRespond, c }: { approval: LiveApproval; onRe
           {approval.summary ? (
             <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               <Icon className={cn("size-3 shrink-0", KIND_TONE[approval.kind])} aria-hidden="true" />
-              <code className="min-w-0 font-mono [overflow-wrap:anywhere]">{approval.summary}</code>
+              <code className={cn("min-w-0 font-mono", pending ? "[overflow-wrap:anywhere]" : "truncate")} title={approval.summary}>{approval.summary}</code>
             </span>
           ) : null}
         </div>
@@ -457,24 +490,16 @@ function ApprovalCard({ approval, onRespond, c }: { approval: LiveApproval; onRe
           <span className="inline-flex shrink-0 items-center rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">{c.approval.expired}</span>
         ) : null}
       </div>
-      {approval.detail ? (
-        <div className="min-w-0">
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            className="inline-flex cursor-pointer items-center gap-1 rounded text-xs font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ChevronRight className={cn("size-3.5 transition-transform duration-150 motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
-            {open ? c.approval.hideDetail : c.approval.showDetail}
-          </button>
-          {open ? (
-            <pre className="mt-1.5 max-h-72 overflow-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {approval.detail}
-            </pre>
-          ) : null}
-        </div>
-      ) : null}
+      {approval.detail && collapsible ? (
+        <details className="min-w-0">
+          <summary className="w-fit cursor-pointer rounded text-xs font-medium text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+            {c.approval.showDetail}
+          </summary>
+          <pre className="mt-1.5 max-h-72 overflow-auto rounded-md border border-border bg-background px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {approval.detail}
+          </pre>
+        </details>
+      ) : approval.detail ? <IoBlock label={c.approval.showDetail} text={approval.detail} /> : null}
       {pending ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" className="cursor-pointer" disabled={busy !== null} onClick={() => void respond("allow")}>
@@ -493,17 +518,19 @@ function ApprovalCard({ approval, onRespond, c }: { approval: LiveApproval; onRe
           </Button>
         </div>
       ) : null}
-    </li>
+    </div>
   );
 }
 
-function Resolved({ decision, c }: { decision: Decision; c: C }) {
+function Resolved({ decision, link = false, c }: { decision: Decision; link?: boolean; c: C }) {
   const label = decision === "deny" ? c.approval.denied : decision === "allow_session" ? c.approval.allowedSession : c.approval.allowed;
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium",
-        decision === "deny" ? "bg-destructive/10 text-destructive" : "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+        "inline-flex shrink-0 items-center gap-1 text-[11px] font-medium",
+        link ? "underline underline-offset-2" : "rounded px-1.5 py-0.5",
+        decision === "deny" ? "text-destructive" : "text-emerald-700 dark:text-emerald-300",
+        !link && (decision === "deny" ? "bg-destructive/10" : "bg-emerald-500/12"),
       )}
     >
       {decision === "deny" ? <X className="size-3" aria-hidden="true" /> : <Check className="size-3" aria-hidden="true" />}

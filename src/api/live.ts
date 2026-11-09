@@ -51,6 +51,7 @@ export type LiveEvent =
   | { type: "tool_finished"; id: string; output: string | null; is_error: boolean }
   | {
       type: "approval_request";
+      tool_id?: string;
       request_id: string;
       tool_name: string;
       kind: LiveToolKind;
@@ -89,8 +90,8 @@ export function liveStart(opts: StartOptions): Promise<LiveSessionInfo> {
 }
 
 /** `images` are `data:image/...;base64,` URIs (pasted or dropped screenshots). */
-export function liveSend(liveId: string, text: string, images: string[] = []): Promise<void> {
-  return invoke<void>("live_send", { liveId, text, images });
+export function liveSend(liveId: string, text: string, images: string[] = [], permission?: PermissionMode): Promise<void> {
+  return invoke<void>("live_send", { liveId, text, images, permission });
 }
 
 /** Reads a png/jpg/gif/webp file (max 5 MB) as a `data:image/...;base64,` URI. */

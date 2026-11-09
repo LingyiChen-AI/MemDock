@@ -631,6 +631,11 @@ pub fn worktree_check(cwd: String) -> Result<WorktreeCheck, String> {
 }
 
 #[tauri::command(async)]
+pub fn worktree_current_branch(cwd: String) -> Result<Option<String>, String> {
+    current_branch(Path::new(&cwd))
+}
+
+#[tauri::command(async)]
 pub fn worktree_create(st: St, cwd: String, hint: String) -> Result<WorktreeInfo, String> {
     create(&st.data_dir, Path::new(&cwd), &hint)
 }

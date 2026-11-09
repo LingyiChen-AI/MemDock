@@ -106,6 +106,7 @@ fn start_send_and_state_flow() {
     let emit = h.emits.lock().unwrap()[0].clone();
     emit(LiveEvent::Started { native_id: "sess-1".into(), model: Some("opus".into()) });
     emit(LiveEvent::ApprovalRequest {
+        tool_id: None,
         request_id: "r1".into(),
         tool_name: "Bash".into(),
         kind: ToolKind::Shell,
@@ -372,6 +373,7 @@ fn user_message_and_approval_are_recorded_before_the_driver_write() {
     assert_eq!(state_of(&h, &info.live_id), LiveState::Idle);
     emit(LiveEvent::UserMessage { id: "u".into(), text: "x".into(), images: vec![] });
     emit(LiveEvent::ApprovalRequest {
+        tool_id: None,
         request_id: "r-fast".into(),
         tool_name: "Bash".into(),
         kind: ToolKind::Shell,

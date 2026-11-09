@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::{Decision, Driver, Emit, LiveEvent, StartOptions};
+use super::{Decision, Driver, Emit, LiveEvent, PermissionMode, StartOptions};
 use crate::extract::runner::{find_program, path_dirs};
 use crate::proc;
 use mapper::Mapper;
@@ -66,8 +66,12 @@ fn kill(child: &Mutex<Child>) {
 
 impl Driver for CodexDriver {
     fn send(&mut self, text: &str, images: &[String]) -> Result<(), String> {
+        self.send_with_permission(text, images, None)
+    }
+
+    fn send_with_permission(&mut self, text: &str, images: &[String], permission: Option<PermissionMode>) -> Result<(), String> {
         let paths = images.iter().map(|uri| save_image(uri)).collect::<Result<Vec<_>, _>>()?;
-        let msgs = self.mapper.lock().unwrap().send(text, &paths);
+        let msgs = self.mapper.lock().unwrap().send(text, &paths, permission);
         write_all(&self.stdin, &msgs)
     }
 

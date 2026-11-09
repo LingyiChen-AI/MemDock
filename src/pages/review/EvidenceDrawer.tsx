@@ -78,6 +78,7 @@ function Turn({ turn, quote, hit }: { turn: ContextTurn; quote: string; hit: boo
       tool={turn.tool}
       name={user ? r.roleUser : turn.tool === "claude" ? "Claude Code" : "Codex"}
       time={formatSnapshotTime(turn.ts)}
+      copyText={turn.text}
       highlighted={hit}
       data-hit={hit ? "true" : undefined}
       badge={hit ? <span className="rounded bg-warning/15 px-1.5 text-[10px] font-medium text-warning">{r.hitBadge}</span> : null}

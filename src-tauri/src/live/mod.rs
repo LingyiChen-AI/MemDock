@@ -151,6 +151,8 @@ pub enum LiveEvent {
     /// The agent asks before running a tool / command / edit.
     ApprovalRequest {
         request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_id: Option<String>,
         tool_name: String,
         kind: ToolKind,
         /// One line: command, file path...
@@ -196,6 +198,9 @@ pub type Emit = Arc<dyn Fn(LiveEvent) + Send + Sync>;
 pub trait Driver: Send {
     /// `images` are `data:image/...;base64,` URIs.
     fn send(&mut self, text: &str, images: &[String]) -> Result<(), String>;
+    fn send_with_permission(&mut self, text: &str, images: &[String], _permission: Option<PermissionMode>) -> Result<(), String> {
+        self.send(text, images)
+    }
     fn respond(&mut self, request_id: &str, decision: Decision) -> Result<(), String>;
     /// Stop the current turn, keep the session.
     fn interrupt(&mut self) -> Result<(), String>;
@@ -296,6 +301,7 @@ struct PendingMessage {
     text: String,
     images: Vec<String>,
     image_refs: Vec<String>,
+    permission: Option<PermissionMode>,
 }
 
 /// State and log of one session; guarded by its own lock.
@@ -466,7 +472,7 @@ impl LiveManager {
                         Ok(info) if info.state != LiveState::Exited => {
                             let prompt = opts.prompt.as_deref().unwrap_or("");
                             if !prompt.trim().is_empty() || !opts.prompt_images.is_empty() {
-                                self.send(&cur.id, prompt, &opts.prompt_images)?;
+                                self.send_with_permission(&cur.id, prompt, &opts.prompt_images, Some(opts.permission))?;
                             }
                             return self.info(&cur.id);
                         }
@@ -565,6 +571,10 @@ impl LiveManager {
     }
 
     pub fn send(&self, live_id: &str, text: &str, images: &[String]) -> Result<(), String> {
+        self.send_with_permission(live_id, text, images, None)
+    }
+
+    fn send_with_permission(&self, live_id: &str, text: &str, images: &[String], permission: Option<PermissionMode>) -> Result<(), String> {
         if let Some(bad) = images.iter().find(|i| decode_data_uri(i).is_none()) {
             return Err(format!("无法识别的图片数据：{}", crate::convert::truncate_chars(bad, 40)));
         }
@@ -574,7 +584,7 @@ impl LiveManager {
             .iter()
             .map(|uri| codex::save_image(uri).map(|p| format!("{IMAGE_REF_PREFIX}{p}")))
             .collect::<Result<Vec<_>, _>>()?;
-        let message = PendingMessage { text: text.into(), images: images.to_vec(), image_refs: refs };
+        let message = PendingMessage { text: text.into(), images: images.to_vec(), image_refs: refs, permission };
         Self::with_driver(&s, |driver| {
             let mut e = s.entry.lock().unwrap();
             match e.info.state {
@@ -617,7 +627,7 @@ impl LiveManager {
     }
 
     fn write_message(shared: &Shared, s: &Session, live_id: &str, driver: &mut dyn Driver, message: PendingMessage, prev: LiveState) -> Result<(), String> {
-        let r = driver.send(&message.text, &message.images);
+        let r = driver.send_with_permission(&message.text, &message.images, message.permission);
         if let Err(err) = &r {
             let mut e = s.entry.lock().unwrap();
             Self::push(shared, &mut e, live_id, LiveEvent::Error { message: format!("发送失败：{err}"), fatal: false }, None);
@@ -876,8 +886,9 @@ pub fn live_send(
     live_id: String,
     text: String,
     images: Option<Vec<String>>,
+    permission: Option<PermissionMode>,
 ) -> Result<(), String> {
-    mgr.send(&live_id, &text, &images.unwrap_or_default())
+    mgr.send_with_permission(&live_id, &text, &images.unwrap_or_default(), permission)
 }
 
 #[tauri::command]

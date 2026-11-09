@@ -25,7 +25,7 @@ vi.mock("@/api/live", () => ({
   onLiveEvent: vi.fn(),
 }));
 
-import { liveList, liveRespond, liveSend, liveTranscript, onLiveEvent } from "@/api/live";
+import { liveInterrupt, liveList, liveRespond, liveSend, liveStop, liveTranscript, onLiveEvent } from "@/api/live";
 import { renderApp } from "@/test/fixtures";
 import { ChatPage } from "./ChatPage";
 import { initLiveStore, resetLiveStore } from "./liveStore";
@@ -89,6 +89,7 @@ describe("ChatPage", () => {
         {
           type: "approval_request",
           request_id: "r1",
+          tool_id: "t1",
           tool_name: "Bash",
           kind: "shell",
           summary: "rm -rf target",
@@ -98,7 +99,7 @@ describe("ChatPage", () => {
       ]),
     );
     setup();
-    const card = await screen.findByRole("listitem", { name: "Bash 请求批准" });
+    const card = await screen.findByRole("group", { name: "Bash 请求批准" });
     expect(within(card).getByRole("button", { name: "本次会话都允许" })).toBeInTheDocument();
     await userEvent.click(within(card).getByRole("button", { name: "允许" }));
     expect(liveRespond).toHaveBeenCalledWith("L1", "r1", "allow");
@@ -115,12 +116,45 @@ describe("ChatPage", () => {
       ))
         emit(e);
     });
-    expect(within(card).getByText("已允许")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Bash 请求批准" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /cargo build.*已允许/ }));
+    expect(within(await screen.findByRole("dialog")).getByText("已允许")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
     expect(await screen.findByText(/Build fixed/)).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "停止" }).length).toBeGreaterThan(0);
 
     await act(async () => emit(envs([{ type: "assistant_message", id: "a1", text: "**Done**" }], 9)[0]));
     expect(await screen.findByText("Done")).toBeInTheDocument();
+    const user = userEvent.setup();
+    const reply = screen.getByText("Done").closest("li")!;
+    await user.click(within(reply).getByRole("button", { name: "复制消息" }));
+    expect(await navigator.clipboard.readText()).toBe("**Done**");
+
+    await user.click(screen.getAllByRole("button", { name: "停止" })[1]);
+    expect(liveInterrupt).toHaveBeenCalledWith("L1");
+    const stopping = screen.getAllByRole("button", { name: "正在停止" });
+    expect(stopping).toHaveLength(2);
+    stopping.forEach((button) => expect(button).toBeDisabled());
+    await act(async () => emit(envs([{ type: "status", state: "idle" }], 10)[0]));
+    expect(screen.queryByRole("button", { name: "正在停止" })).not.toBeInTheDocument();
+  });
+
+  it("can force stop the selected session after an unconfirmed interruption", async () => {
+    (liveList as Mock).mockResolvedValue([info({ state: "running" })]);
+    (liveTranscript as Mock).mockResolvedValue([]);
+    setup();
+    const stop = (await screen.findAllByRole("button", { name: "停止" }))[0];
+    vi.useFakeTimers();
+    try {
+      await act(async () => stop.click());
+      await act(async () => vi.advanceTimersByTimeAsync(10000));
+      const force = screen.getAllByRole("button", { name: "强制停止" });
+      expect(force).toHaveLength(2);
+      await act(async () => force[0].click());
+      expect(liveStop).toHaveBeenCalledWith("L1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends on Enter but not on Shift+Enter", async () => {
@@ -131,7 +165,7 @@ describe("ChatPage", () => {
     await userEvent.type(box, "hello{Shift>}{Enter}{/Shift}world");
     expect(liveSend).not.toHaveBeenCalled();
     await userEvent.type(box, "{Enter}");
-    expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld", []);
+    expect(liveSend).toHaveBeenCalledWith("L1", "hello\nworld", [], undefined);
     await waitFor(() => expect(box).toHaveValue(""));
   });
 });

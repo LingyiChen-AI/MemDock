@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { vi, type Mock } from "vitest";
 import type { SessionPreview, SessionSummary } from "@/api/types";
 import type { LiveSessionInfo } from "@/api/live";
@@ -148,7 +149,7 @@ function liveInfo(state: LiveSessionInfo["state"]): LiveSessionInfo {
 async function openSession() {
   renderApp(<SessionsPage />);
   const list = await screen.findByRole("region", { name: "demo" });
-  await userEvent.click(within(list).getByRole("button", { name: /Build fix/ }));
+  await userEvent.click(within(list).getByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ }));
   await screen.findByRole("radio", { name: /命令行/ });
 }
 
@@ -166,6 +167,27 @@ describe("terminal mode", () => {
     (ptyClose as Mock).mockClear();
     (ptyWrite as Mock).mockClear();
     (liveStop as Mock).mockClear();
+  });
+
+  it("shows the shared branch on history rows before opening a session", async () => {
+    const lookup = vi.fn().mockReturnValue("feature/demo");
+    vi.stubGlobal("isTauri", true);
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    mockIPC((command, args) => command === "worktree_current_branch" ? lookup(args) : []);
+    (listSessions as Mock).mockResolvedValue([
+      session,
+      { ...session, id: "c2", path: "/home/u/.claude/projects/-work-demo/c2.jsonl", title: "Earlier fix" },
+    ]);
+    try {
+      renderApp(<SessionsPage />);
+      const list = await screen.findByRole("region", { name: "demo" });
+      expect(await within(list).findAllByText("feature/demo")).toHaveLength(2);
+      expect(lookup).toHaveBeenCalledExactlyOnceWith({ cwd: "/work/demo" });
+    } finally {
+      clearMocks();
+      vi.unstubAllGlobals();
+      hidden.mockRestore();
+    }
   });
 
   it("switches to the terminal resuming the session, and back to the GUI with a fresh preview", async () => {
@@ -236,7 +258,7 @@ describe("terminal mode", () => {
   it("opens conversations in the remembered mode and re-attaches with the scrollback", async () => {
     localStorage.setItem("memdock.chat.mode", "terminal");
     const first = renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ }));
     await waitFor(() => expect(ptyOpen).toHaveBeenCalledTimes(1));
     act(() => pty.data?.({ pty_id: "P1", data: "earlier output" }));
     writeTerminal("claude:c1", "typed");
@@ -244,7 +266,7 @@ describe("terminal mode", () => {
     xterm.written = [];
 
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ }));
     await waitFor(() => expect(xterm.written.join("")).toContain("earlier output"));
     expect(ptyOpen).toHaveBeenCalledTimes(1);
     expect(getTerminal("claude:c1")?.status).toBe("running");
@@ -254,7 +276,7 @@ describe("terminal mode", () => {
     localStorage.setItem("memdock.chat.mode", "terminal");
     await (async () => {
       renderApp(<SessionsPage />);
-      await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+      await userEvent.click(await screen.findByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ }));
     })();
     await waitFor(() => expect(ptyOpen).toHaveBeenCalledTimes(1));
     act(() => pty.exit?.({ pty_id: "P1", code: 0 }));
@@ -334,7 +356,7 @@ describe("new chats and terminals", () => {
     expect(rows[0]).toHaveTextContent("运行中");
 
     // Leaving it does not kill it; closing does and removes the row.
-    await userEvent.click(within(group).getByRole("button", { name: /Build fix/ }));
+    await userEvent.click(within(group).getByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ }));
     await new Promise((r) => setTimeout(r, 1700));
     expect(ptyClose).not.toHaveBeenCalled();
     await userEvent.click(within(rows[0]).getByRole("button", { name: "关闭终端" }));
@@ -348,11 +370,11 @@ describe("new chats and terminals", () => {
     const group = await screen.findByRole("region", { name: "demo" });
     const toggle = within(group).getByRole("button", { name: "收起 demo" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(within(group).getByRole("button", { name: /Build fix/ })).toBeVisible();
+    expect(within(group).getByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ })).toBeVisible();
 
     await userEvent.click(toggle);
     expect(within(group).getByRole("button", { name: "展开 demo" })).toHaveAttribute("aria-expanded", "false");
-    expect(within(group).queryByRole("button", { name: /Build fix/ })).toBeNull();
+    expect(within(group).queryByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ })).toBeNull();
 
     // Remembered across a remount.
     first.unmount();
@@ -362,10 +384,10 @@ describe("new chats and terminals", () => {
 
     // A search shows matches even inside a folded group.
     await userEvent.type(screen.getByRole("searchbox"), "Build");
-    expect(await within(again).findByRole("button", { name: /Build fix/ })).toBeVisible();
+    expect(await within(again).findByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ })).toBeVisible();
     await userEvent.clear(screen.getByRole("searchbox"));
     await userEvent.click(within(again).getByRole("button", { name: "展开 demo" }));
-    expect(within(again).getByRole("button", { name: /Build fix/ })).toBeVisible();
+    expect(within(again).getByRole("button", { name: /^(?!归档：|恢复：).*Build fix/ })).toBeVisible();
     localStorage.removeItem("memdock.sessions.collapsedProjects");
   });
 

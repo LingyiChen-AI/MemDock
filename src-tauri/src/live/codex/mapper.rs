@@ -59,7 +59,7 @@ pub struct Mapper {
     thread_id: Option<String>,
     started: bool,
     /// Messages typed before the thread was ready.
-    queued: Vec<(String, Vec<String>)>,
+    queued: Vec<(String, Vec<String>, PermissionMode)>,
     turn_id: Option<String>,
     /// `interrupt` arrived before the turn id was known.
     interrupt_wanted: bool,
@@ -264,7 +264,7 @@ impl Mapper {
         }
     }
 
-    fn turn_request(&mut self, thread_id: &str, text: &str, images: &[String]) -> Value {
+    fn turn_request(&mut self, thread_id: &str, text: &str, images: &[String], permission: PermissionMode) -> Value {
         // `/compact` is a Codex command, not a message: ask the app-server to compact the thread.
         if images.is_empty() && text.trim() == "/compact" {
             self.turn_error = None;
@@ -275,15 +275,25 @@ impl Mapper {
         if !text.trim().is_empty() || input.is_empty() {
             input.push(json!({"type": "text", "text": text, "text_elements": []}));
         }
-        self.request(Pending::Turn, "turn/start", json!({"threadId": thread_id, "input": input}))
+        let (approval, _) = codex_policy(permission);
+        let sandbox = match permission {
+            PermissionMode::Ask | PermissionMode::Plan => "readOnly",
+            PermissionMode::AutoEdit => "workspaceWrite",
+            PermissionMode::Bypass => "dangerFullAccess",
+        };
+        self.request(Pending::Turn, "turn/start", json!({
+            "threadId": thread_id, "input": input, "approvalPolicy": approval,
+            "sandboxPolicy": {"type": sandbox},
+        }))
     }
 
     /// A user message; `images` are local image file paths. Queued until the thread is ready.
-    pub fn send(&mut self, text: &str, images: &[String]) -> Vec<Value> {
+    pub fn send(&mut self, text: &str, images: &[String], permission: Option<PermissionMode>) -> Vec<Value> {
+        let permission = permission.unwrap_or(self.permission);
         match self.thread_id.clone() {
-            Some(tid) if self.started => vec![self.turn_request(&tid, text, images)],
+            Some(tid) if self.started => vec![self.turn_request(&tid, text, images, permission)],
             _ => {
-                self.queued.push((text.to_string(), images.to_vec()));
+                self.queued.push((text.to_string(), images.to_vec(), permission));
                 vec![]
             }
         }
@@ -397,9 +407,9 @@ impl Mapper {
                 self.thread_id = Some(tid.to_string());
                 self.started = true;
                 st.events.push(LiveEvent::Started { native_id: tid.to_string(), model });
-                for (text, images) in std::mem::take(&mut self.queued) {
+                for (text, images, permission) in std::mem::take(&mut self.queued) {
                     let tid = tid.to_string();
-                    st.writes.push(self.turn_request(&tid, &text, &images));
+                    st.writes.push(self.turn_request(&tid, &text, &images, permission));
                 }
             }
             Pending::Turn => {
@@ -449,6 +459,7 @@ impl Mapper {
                 }
                 LiveEvent::ApprovalRequest {
                     request_id: key.clone(),
+                    tool_id: p.get("itemId").and_then(Value::as_str).map(str::to_owned),
                     tool_name: if stdin { "write_stdin".into() } else { "shell".into() },
                     kind: ToolKind::Shell,
                     summary: if command.is_empty() { one_line(reason) } else { one_line(command) },
@@ -468,6 +479,7 @@ impl Mapper {
                 }
                 LiveEvent::ApprovalRequest {
                     request_id: key.clone(),
+                    tool_id: p.get("itemId").and_then(Value::as_str).map(str::to_owned),
                     tool_name: "apply_patch".into(),
                     kind: ToolKind::Edit,
                     summary: if summary.is_empty() { one_line(reason) } else { summary },
@@ -490,6 +502,7 @@ impl Mapper {
                 }
                 LiveEvent::ApprovalRequest {
                     request_id: key.clone(),
+                    tool_id: None,
                     tool_name: "shell".into(),
                     kind: ToolKind::Shell,
                     summary: one_line(&command),
@@ -501,6 +514,7 @@ impl Mapper {
                 let (summary, diff) = describe_legacy_changes(p.get("fileChanges").unwrap_or(&Value::Null));
                 LiveEvent::ApprovalRequest {
                     request_id: key.clone(),
+                    tool_id: None,
                     tool_name: "apply_patch".into(),
                     kind: ToolKind::Edit,
                     summary,

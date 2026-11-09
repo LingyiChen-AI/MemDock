@@ -49,7 +49,7 @@ fn recording_maps_to_events() {
     assert!(input.contains("\"content\": \"hi\""));
 
     let ev = events(&mut p, CAN_USE);
-    let [LiveEvent::ApprovalRequest { request_id, tool_name, kind, summary, detail, can_allow_session }] = ev.as_slice()
+    let [LiveEvent::ApprovalRequest { request_id, tool_name, kind, summary, detail, can_allow_session, .. }] = ev.as_slice()
     else {
         panic!("{ev:?}")
     };

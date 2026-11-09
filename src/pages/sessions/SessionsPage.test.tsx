@@ -124,9 +124,32 @@ describe("SessionsPage", () => {
     expect(screen.getByText("没有匹配的会话")).toBeInTheDocument();
   });
 
+  it("hides an archived conversation across remounts and restores it from the archive", async () => {
+    const key = "memdock.sessions.archived";
+    localStorage.removeItem(key);
+    try {
+      const first = renderApp(<SessionsPage />);
+      await userEvent.click(await screen.findByRole("button", { name: /归档：Build fix/ }));
+      expect(screen.queryByRole("region", { name: "demo" })).toBeNull();
+      first.unmount();
+
+      renderApp(<SessionsPage />);
+      await screen.findByRole("region", { name: "api" });
+      expect(screen.queryByRole("region", { name: "demo" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: /已归档/ }));
+      expect(screen.queryByRole("region", { name: "api" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: /恢复：Build fix/ }));
+      expect(screen.getByText("暂无已归档的对话")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /已归档/ }));
+      expect(screen.getByRole("region", { name: "demo" })).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
   it("each assistant turn is one card with tool chips that open a dialog", async () => {
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     expect(await screen.findByText("Fixed.")).toBeInTheDocument();
     expect(screen.getByText("cargo build")).toBeInTheDocument();
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
@@ -148,7 +171,7 @@ describe("SessionsPage", () => {
         : item),
     });
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Read.*src\/main.rs/ }));
     const codeButton = screen.getByRole("button", { name: "代码", expanded: true });
     const panel = await screen.findByRole("complementary", { name: "代码" }, { timeout: 5000 });
@@ -173,7 +196,7 @@ describe("SessionsPage", () => {
     }));
     (sessionPreview as Mock).mockResolvedValue({ ...preview, timeline: [preview.timeline[0], ...many] });
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     expect(await screen.findByText("file-7.rs")).toBeInTheDocument();
     expect(screen.queryByText("file-8.rs")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "+3 个" }));
@@ -182,7 +205,7 @@ describe("SessionsPage", () => {
 
   it("previews, confirms and shows the resume command", async () => {
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     expect(await screen.findByText("cargo build")).toBeInTheDocument();
     expect(screen.getByText("1 个 shell 命令保留为工具调用")).toBeInTheDocument();
 
@@ -202,7 +225,7 @@ describe("SessionsPage", () => {
       .mockRejectedValueOnce({ code: "already_converted", message: "already converted to old-id" })
       .mockResolvedValueOnce(result);
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     await screen.findByText("cargo build");
     await userEvent.click(screen.getByRole("button", { name: "转换为 Codex 会话" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "转换" }));
@@ -214,18 +237,18 @@ describe("SessionsPage", () => {
 
   it("refresh and clicking the open session again re-read its history", async () => {
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(2));
-    await userEvent.click(screen.getByRole("button", { name: /Build fix/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     await waitFor(() => expect(sessionPreview).toHaveBeenCalledTimes(3));
   });
 
   it("loads earlier history entries on demand", async () => {
     (sessionPreview as Mock).mockResolvedValue({ ...preview, timeline_total: 900 });
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     const more = await screen.findByRole("button", { name: "查看更早的 400 条" });
     expect(sessionPreview).toHaveBeenLastCalledWith("claude", claudeSession.path, 400);
     await userEvent.click(more);
@@ -235,7 +258,7 @@ describe("SessionsPage", () => {
   it("renames the open session in place", async () => {
     (renameSession as Mock).mockResolvedValue(undefined);
     renderApp(<SessionsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /Build fix/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^(?!.*\uff1aBuild fix).*Build fix/ }));
     await userEvent.click(await screen.findByRole("button", { name: "重命名" }));
     const box = screen.getByRole("textbox", { name: "会话名称" });
     await userEvent.clear(box);

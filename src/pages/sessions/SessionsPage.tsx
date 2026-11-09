@@ -1,9 +1,11 @@
 import * as React from "react";
+import { useTurnInterrupt } from "@/pages/chat/useTurnInterrupt";
 import { WorkspaceCodeContext, useWorkspaceCode } from "@/pages/chat/workspaceCodeLinks";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
-import { liveInterrupt, liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
 import { envDetect } from "@/api/env";
 import { worktreeCreate } from "@/api/worktree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -310,6 +312,21 @@ function saveCollapsedProjects(ids: Set<string>) {
   }
 }
 
+const ARCHIVED_SESSIONS_KEY = "memdock.sessions.archived";
+
+function loadArchivedSessions(): Set<string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ARCHIVED_SESSIONS_KEY) ?? "[]");
+    return new Set(Array.isArray(saved) ? saved.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function archiveKey(s: SessionSummary): string {
+  return `${s.tool}:${s.id || s.path}`;
+}
+
 function sessionKey(s: { tool: Tool; path: string }): string {
   return `${s.tool}:${s.path}`;
 }
@@ -380,6 +397,62 @@ function SessionListSkeleton({ label }: { label: string }) {
   );
 }
 
+function useCurrentBranches(sessions: SessionSummary[] | null, cwd: string | undefined) {
+  const [branches, setBranches] = React.useState(() => new Map<string, string | null>());
+  const pending = React.useRef(new Set<string>());
+  const refresh = React.useCallback(async (path: string) => {
+    const key = normPath(path);
+    if (pending.current.has(key)) return;
+    pending.current.add(key);
+    const branch = await invoke<string | null>("worktree_current_branch", { cwd: path }).catch(() => null);
+    pending.current.delete(key);
+    setBranches((previous) => previous.get(key) === branch ? previous : new Map(previous).set(key, branch));
+  }, []);
+  const pathsKey = React.useMemo(() => {
+    const paths = new Map<string, string>();
+    for (const session of sessions ?? []) {
+      if (session.cwd) paths.set(normPath(session.cwd), session.cwd);
+    }
+    return JSON.stringify([...paths.values()].sort());
+  }, [sessions]);
+
+  React.useEffect(() => {
+    if (!isTauri()) return;
+    const paths: string[] = JSON.parse(pathsKey);
+    let active = true;
+    let running = false;
+    const refreshHistory = async () => {
+      if (running || document.hidden) return;
+      running = true;
+      for (let i = 0; active && i < paths.length; i += 8) {
+        await Promise.all(paths.slice(i, i + 8).map(refresh));
+      }
+      running = false;
+    };
+    void refreshHistory();
+    window.addEventListener("focus", refreshHistory);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshHistory);
+    };
+  }, [pathsKey, refresh]);
+
+  React.useEffect(() => {
+    if (!cwd || !isTauri()) return;
+    const refreshCurrent = () => {
+      if (!document.hidden) void refresh(cwd);
+    };
+    refreshCurrent();
+    const timer = window.setInterval(refreshCurrent, 5000);
+    window.addEventListener("focus", refreshCurrent);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshCurrent);
+    };
+  }, [cwd, refresh]);
+  return branches;
+}
+
 function SessionRow({
   session,
   lives = [],
@@ -388,12 +461,14 @@ function SessionRow({
   onSelect,
   onSelectLive,
   worktree = null,
+  branch,
   s,
   c,
 }: {
   session: SessionSummary;
   /** The worktree the session runs in (badge + changed files). */
   worktree?: WorktreeLink | null;
+  branch?: string | null;
   /** Every live process of this session, newest first. */
   lives?: LiveSessionInfo[];
   selected: boolean;
@@ -424,6 +499,12 @@ function SessionRow({
         <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(live ? Math.max(live.updated_at, session.updated_at ?? 0) : session.updated_at)}</span>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
+        {branch ? (
+          <span className="flex min-w-0 max-w-full items-center gap-1" title={branch}>
+            <GitBranch aria-hidden="true" className="size-3 shrink-0" />
+            <span className="truncate">{branch}</span>
+          </span>
+        ) : null}
         {worktree ? <WorktreeBadge slug={worktree.slug} branch={worktree.info?.branch} deleted={worktree.deleted} w={c.worktree} /> : null}
         {session.continued ? (
           <span className="rounded bg-muted px-1.5 text-foreground/70" title={s.continuedHint}>
@@ -743,6 +824,7 @@ const WorkspaceCodePanel = React.lazy(() =>
 
 function ChatPane({
   target,
+  branch,
   preview,
   error,
   result,
@@ -761,6 +843,7 @@ function ChatPane({
   /** Opens a plain shell terminal in a folder (worktree conflict handling). */
   onOpenShell?: (cwd: string) => void;
   target: Target;
+  branch: string | null;
   preview: SessionPreview | null;
   error: string | null;
   result: ConvertResult | null;
@@ -868,6 +951,7 @@ function ChatPane({
   const targetTool = otherTool(target.tool);
   const stats = preview?.stats;
   const running = live ? isActive(live.state) : false;
+  const interrupt = useTurnInterrupt(live?.live_id, running, lc?.conv.lastUsage, c, setActionError);
   const attached = live !== null && live.state !== "exited";
 
   /** A terminal drives this session: switch to it, or close it and continue here. True = go on. */
@@ -894,7 +978,7 @@ function ChatPane({
   const send = async ({ text, images, permission, model, effort, args }: ComposerMessage): Promise<boolean | void> => {
     if (attached && live) {
       try {
-        return await liveSend(live.live_id, text, images);
+        return await liveSend(live.live_id, text, images, target.tool === "codex" ? permission : undefined);
       } catch (e) {
         throw parseBusy(e) ? new Error(c.busyPty) : e;
       }
@@ -1024,15 +1108,14 @@ function ChatPane({
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {mode === "gui" && running && live ? (
               <HeaderButton
-                label={c.stop}
-                hint={c.stopHint}
-                onClick={() => {
-                  setActionError(null);
-                  liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
-                }}
+                label={interrupt.label}
+                hint={interrupt.hint}
+                variant="destructive"
+                disabled={interrupt.stopping}
+                onClick={interrupt.stop}
               >
-                <Square className="fill-current" aria-hidden="true" />
-                {c.stop}
+                {interrupt.stopping ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Square className="fill-current" aria-hidden="true" />}
+                {interrupt.label}
               </HeaderButton>
             ) : null}
             {session && session.converted_from?.tool !== targetTool ? (
@@ -1230,11 +1313,10 @@ function ChatPane({
                   }
                   projects={projects}
                   running={running}
-                  onStop={() => {
-                    if (!live) return;
-                    setActionError(null);
-                    liveInterrupt(live.live_id).catch((e) => setActionError(fmt(c.actionFailed, { error: errorMessage(e) })));
-                  }}
+                  stopping={interrupt.stopping}
+                  stopLabel={interrupt.label}
+                  stopHint={interrupt.hint}
+                  onStop={interrupt.stop}
                   attached={attached && live ? { permission: live.permission, model: live.model } : null}
                   onError={setActionError}
                   onSend={send}
@@ -1245,7 +1327,7 @@ function ChatPane({
         </div>
         {target.cwd && !wtDeleted && code.mounted ? (
           <React.Suspense fallback={null}>
-            <WorkspaceCodePanel key={target.cwd} cwd={target.cwd} base={wt?.info ?? null} shown={code.shown} request={code.request} />
+            <WorkspaceCodePanel key={target.cwd} cwd={target.cwd} base={wt?.info ?? null} branch={branch} shown={code.shown} request={code.request} />
           </React.Suspense>
         ) : null}
       </div>
@@ -1284,6 +1366,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const [loading, setLoading] = React.useState(false);
   const [tool, setTool] = React.useState<ToolFilter>("all");
   const [query, setQuery] = React.useState("");
+  const [archived, setArchived] = React.useState(loadArchivedSessions);
+  const [showArchived, setShowArchived] = React.useState(false);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(loadCollapsedProjects);
   const toggleProject = React.useCallback((id: string) => {
     setCollapsed((prev) => {
@@ -1447,7 +1531,24 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     }
   }, [selectedPath, selectedUpdated]);
 
-  const visible = React.useMemo(() => filterSessions(sessions ?? [], tool, query), [sessions, tool, query]);
+  const archivedCount = (sessions ?? []).filter((x) => archived.has(archiveKey(x))).length;
+  const visible = React.useMemo(
+    () => filterSessions((sessions ?? []).filter((x) => archived.has(archiveKey(x)) === showArchived), tool, query),
+    [sessions, tool, query, archived, showArchived],
+  );
+
+  const toggleArchive = (session: SessionSummary) => {
+    const next = new Set(archived);
+    const key = archiveKey(session);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    try {
+      localStorage.setItem(ARCHIVED_SESSIONS_KEY, JSON.stringify([...next]));
+      setArchived(next);
+    } catch {
+      setPageError(s.archiveSaveFailed);
+    }
+  };
   // Sessions running in a worktree are listed under their repo's project (with a badge).
   const wtState = useWorktreeState();
   const wtLinks = React.useMemo(() => {
@@ -1606,6 +1707,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
         }
       : null;
 
+  const branches = useCurrentBranches(sessions, target?.cwd);
+  const branch = target ? branches.get(normPath(target.cwd)) ?? null : null;
+  const sessionCwds = React.useMemo(
+    () => new Map((sessions ?? []).map((session) => [sessionKey(session), normPath(session.cwd)])),
+    [sessions],
+  );
+
   const askConvert = async () => {
     if (!selected) return;
     setConvertError(null);
@@ -1701,15 +1809,27 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
               <ToolFilterBar value={tool} onChange={setTool} s={s} />
               {sessions ? <span className="text-xs text-muted-foreground">{fmt(s.count, { n: visible.length })}</span> : null}
             </div>
+            <Button
+              type="button"
+              variant={showArchived ? "secondary" : "ghost"}
+              size="sm"
+              aria-pressed={showArchived}
+              className="h-7 justify-start"
+              onClick={() => setShowArchived((value) => !value)}
+            >
+              <Archive aria-hidden="true" />
+              {s.archived}
+              <span className="text-muted-foreground">{archivedCount}</span>
+            </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
-            {looseShells.length > 0 ? (
+            {!showArchived && looseShells.length > 0 ? (
               <section aria-label={c.terminals} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.terminals}</h2>
                 <ul className="flex flex-col gap-0.5">{looseShells.map(shellRow)}</ul>
               </section>
             ) : null}
-            {looseLive.length > 0 || draftTerms.length > 0 ? (
+            {!showArchived && (looseLive.length > 0 || draftTerms.length > 0) ? (
               <section aria-label={c.newChats} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.newChats}</h2>
                 <ul className="flex flex-col gap-0.5">
@@ -1737,6 +1857,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
               </p>
             ) : sessions === null ? (
               <SessionListSkeleton label={s.loading} />
+            ) : showArchived && archivedCount === 0 ? (
+              <p className="p-2 text-sm text-muted-foreground">{s.archiveEmpty}</p>
             ) : sessions.length === 0 ? (
               <div className="flex flex-col gap-1 p-2">
                 <p className="text-sm font-medium">{s.empty}</p>
@@ -1771,7 +1893,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                         <span className="shrink-0 font-normal text-muted-foreground">{g.sessions.length}</span>
                       </button>
                     </h2>
-                    {g.cwd ? (
+                    {!showArchived && g.cwd ? (
                       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 motion-reduce:transition-none">
                         <ProjectAddMenu
                           name={g.name}
@@ -1785,10 +1907,11 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                     ) : null}
                   </div>
                   <ul id={listId} hidden={!open} className="ml-[13px] flex flex-col gap-0.5 border-l border-border pl-1.5">
-                    {shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
-                    {liveOnly.filter((x) => samePath(x.cwd, g.cwd)).map(liveRow)}
+                    {!showArchived && shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
+                    {!showArchived && liveOnly.filter((x) => samePath(x.cwd, g.cwd)).map(liveRow)}
                     {g.sessions.map((x) => (
-                      <li key={sessionKey(x)}>
+                      <li key={sessionKey(x)} className="group/session flex items-start gap-0.5">
+                        <div className="min-w-0 flex-1">
                         <SessionRow
                           session={x}
                           lives={liveByNative.get(x.id)}
@@ -1797,9 +1920,23 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                           onSelect={() => select(x)}
                           onSelectLive={selectLiveRow}
                           worktree={wtLinks.get(sessionKey(x)) ?? null}
+                          branch={branches.get(sessionCwds.get(sessionKey(x)) ?? "")}
                           s={s}
                           c={c}
                         />
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={fmt(showArchived ? s.restoreSession : s.archiveSession, { title: x.title?.trim() || x.first_prompt || s.untitled })}
+                          title={showArchived ? s.restoreAction : s.archiveAction}
+                          className={cn(
+                            "mt-1.5 grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                            !showArchived && "opacity-0 group-hover/session:opacity-100 group-focus-within/session:opacity-100",
+                          )}
+                          onClick={() => toggleArchive(x)}
+                        >
+                          {showArchived ? <ArchiveRestore aria-hidden="true" className="size-3.5" /> : <Archive aria-hidden="true" className="size-3.5" />}
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -1833,6 +1970,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                 selectedKey ? `k:${selectedKey}` : null,
               ])}
               target={target}
+              branch={branch}
               preview={selected ? preview : null}
               error={selected ? previewError : null}
               result={result}

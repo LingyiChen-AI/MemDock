@@ -18,6 +18,7 @@ export interface LiveToolCall {
 }
 
 export interface LiveApproval {
+  tool_id?: string;
   request_id: string;
   tool_name: string;
   kind: LiveToolKind;
@@ -70,9 +71,9 @@ function replaceAt(items: ConvItem[], i: number, it: ConvItem): ConvItem[] {
 
 /** Marks still-pending approvals as void: the turn or process they belonged to is over. */
 function expire(items: ConvItem[]): ConvItem[] {
-  if (!items.some((it) => it.type === "approval" && it.approval.decision === null && !it.approval.expired)) return items;
+  if (!items.some((it) => it.type === "approval" && isPendingApproval(it.approval))) return items;
   return items.map((it) =>
-    it.type === "approval" && it.approval.decision === null && !it.approval.expired ? { ...it, approval: { ...it.approval, expired: true } } : it,
+    it.type === "approval" && isPendingApproval(it.approval) ? { ...it, approval: { ...it.approval, expired: true } } : it,
   );
 }
 
@@ -198,6 +199,7 @@ function fold(state: ConvState, env: LiveEnvelope): ConvState {
     case "approval_request": {
       const approval: LiveApproval = {
         request_id: ev.request_id,
+        tool_id: ev.tool_id,
         tool_name: ev.tool_name,
         kind: ev.kind,
         summary: ev.summary,
@@ -246,21 +248,25 @@ export function applyAll(state: ConvState, envs: LiveEnvelope[]): ConvState {
 }
 
 /** Approval requests still waiting for a decision. */
-export function pendingApprovals(state: ConvState): LiveApproval[] {
-  return state.items.flatMap((it) => (it.type === "approval" && it.approval.decision === null && !it.approval.expired ? [it.approval] : []));
+export function isPendingApproval(approval: LiveApproval): boolean {
+  return approval.decision === null && !approval.expired;
 }
 
-/** Rendering groups: user messages, assistant turns (one card), approvals and notices stand alone. */
+export function pendingApprovals(state: ConvState): LiveApproval[] {
+  return state.items.flatMap((it) => (it.type === "approval" && isPendingApproval(it.approval) ? [it.approval] : []));
+}
+
+/** Rendering groups: user messages, assistant turns (one card), notices stand alone. */
 export type TurnSegment =
   | { kind: "text"; id: string; text: string; streaming: boolean }
   | { kind: "thinking"; id: string; text: string }
-  | { kind: "tools"; calls: LiveToolCall[] }
+  | { kind: "tools"; calls: LiveToolCall[]; approvals?: Map<string, LiveApproval[]> }
+  | { kind: "approval"; approval: LiveApproval }
   | { kind: "error"; message: string };
 
 export type ConvBlock =
   | { kind: "user"; key: string; text: string; images?: string[] }
   | { kind: "turn"; key: string; segments: TurnSegment[] }
-  | { kind: "approval"; key: string; approval: LiveApproval }
   | { kind: "fatal"; key: string; message: string }
   | { kind: "exited"; key: string; code: number | null }
   | { kind: "notice"; key: string; notice: { kind: string; text: string; before: number | null; after: number | null } };
@@ -283,8 +289,7 @@ export function toConvBlocks(items: ConvItem[]): ConvBlock[] {
         out.push({ kind: "user", key: `u-${it.id}-${i}`, text: it.text, images: it.images });
         return;
       case "approval":
-        turn = null;
-        out.push({ kind: "approval", key: `a-${it.approval.request_id}`, approval: it.approval });
+        openTurn(key).push({ kind: "approval", approval: it.approval });
         return;
       case "exited":
         turn = null;
@@ -317,5 +322,23 @@ export function toConvBlocks(items: ConvItem[]): ConvBlock[] {
       }
     }
   });
+  for (const block of out) {
+    if (block.kind !== "turn") continue;
+    const runs = block.segments.filter((seg) => seg.kind === "tools");
+    const tools = runs.flatMap((run) => run.calls.map((call) => ({ run, call })));
+    block.segments = block.segments.filter((seg) => {
+      if (seg.kind !== "approval") return true;
+      const a = seg.approval;
+      if (isPendingApproval(a)) return true;
+      const matches = tools.filter(({ call }) => a.tool_id
+        ? call.id === a.tool_id
+        : a.summary !== "" && call.name === a.tool_name && call.kind === a.kind && call.summary === a.summary);
+      if (matches.length !== 1) return true;
+      const { run, call } = matches[0];
+      const approvals = run.approvals ??= new Map();
+      approvals.set(call.id, [...(approvals.get(call.id) ?? []), a]);
+      return false;
+    });
+  }
   return out;
 }

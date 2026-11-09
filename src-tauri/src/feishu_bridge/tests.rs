@@ -2,13 +2,11 @@ use super::*;
 
 fn bot() -> Bot {
     Bot {
+        registered_credentials: false,
+        start_with_client: false,
         id: "test".into(),
         name: "Test".into(),
         app_id: "cli_test".into(),
-        tenant_key: "tenant".into(),
-        allowed_users: vec!["ou_owner".into()],
-        allowed_groups: vec!["oc_group".into()],
-        allow_private: true,
         engine: Engine::Codex,
         projects: vec![],
     }
@@ -19,7 +17,6 @@ fn message() -> IncomingMessage {
         message_id: "om_message".into(),
         chat_id: "oc_private".into(),
         sender_open_id: "ou_owner".into(),
-        tenant_key: "tenant".into(),
         text: "/projects".into(),
         is_group: false,
         mentions_bot: false,
@@ -27,27 +24,19 @@ fn message() -> IncomingMessage {
 }
 
 #[test]
-fn requires_tenant_user_and_chat_authorization() {
+fn accepts_private_messages_and_only_group_mentions() {
     let config = bot();
     let mut event = message();
-    assert!(authorized(&config, &event));
-    event.tenant_key = "other".into();
-    assert!(!authorized(&config, &event));
-    event.tenant_key = "tenant".into();
     event.sender_open_id = "ou_other".into();
-    assert!(!authorized(&config, &event));
-    event.sender_open_id = "ou_owner".into();
+    assert!(accepts_chat_message(&event));
     event.is_group = true;
-    assert!(!authorized(&config, &event));
-    event.chat_id = "oc_group".into();
-    assert!(!authorized(&config, &event));
+    assert!(!accepts_chat_message(&event));
     event.mentions_bot = true;
-    assert!(authorized(&config, &event));
+    assert!(accepts_chat_message(&event));
     let mut state = ChatState::default();
-    assert!(
-        !respond(&config, &event, &mut state)
-            .unwrap()
-            .contains("Projects")
+    assert_eq!(
+        respond(&config, &event, &mut state).unwrap(),
+        "No projects are enabled for this bot."
     );
 }
 
@@ -138,6 +127,15 @@ fn file_queries_stay_in_selected_chat_and_project() {
     let mut event = message();
     event.text = "/project 1".into();
     respond(&config, &event, &mut state).unwrap();
+    for path in [".", "./", ".\\"] {
+        let step = conversation::Step {
+            action: conversation::Action::List,
+            path: Some(path.into()),
+            text: None,
+            revision: None,
+        };
+        assert!(conversation::execute(&config, &event, &mut state, step).unwrap().contains("top.txt"));
+    }
     event.text = "/read top.txt".into();
     assert!(
         respond(&config, &event, &mut state)
@@ -347,4 +345,16 @@ fn conversation_passes_tool_results_and_keeps_only_its_own_history() {
     assert_eq!(result, Ok("Found it".into()));
     assert_eq!(first.len(), 2);
     assert!(second.is_empty());
+}
+
+
+#[test]
+fn legacy_bot_defaults_to_manual_start() {
+    let mut configured = bot();
+    configured.start_with_client = true;
+    let mut value = serde_json::to_value(configured).unwrap();
+    assert_eq!(value["startWithClient"], true);
+    value.as_object_mut().unwrap().remove("startWithClient");
+    let legacy: Bot = serde_json::from_value(value).unwrap();
+    assert!(!legacy.start_with_client);
 }

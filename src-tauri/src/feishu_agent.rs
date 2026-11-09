@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::extract::runner::{RunError, exec_with_env, find_program, path_dirs};
+use crate::extract::runner::{RunError, exec_with_stdout_lines, find_program, path_dirs};
 use crate::model::Tool;
 
 const TIMEOUT: Duration = Duration::from_secs(90);
@@ -122,7 +122,39 @@ pub(crate) fn ask(
         .map(|answer| answer.chars().take(5000).collect())
 }
 
+// Only expose completed lines of the answer field. Routing JSON, tool
+// arguments and incomplete values never reach the Feishu card.
+fn answer_preview(partial: &str) -> Option<String> {
+    static ANSWER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = ANSWER.get_or_init(|| {
+        regex::Regex::new(r#"^\s*(?:```(?:json)?\s*)?\{\s*"action"\s*:\s*"answer"\s*,\s*"text"\s*:\s*"((?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*)(")?"#)
+            .expect("valid answer prefix")
+    });
+    let captures = pattern.captures(partial)?;
+    let encoded = captures.get(1)?.as_str();
+    let text: String = serde_json::from_str(&format!("\"{encoded}\"")).ok()?;
+    let visible = if captures.get(2).is_some() {
+        text.as_str()
+    } else {
+        text.rsplit_once('\n')?.0
+    };
+    let visible = visible.trim();
+    if visible.is_empty() {
+        return None;
+    }
+    Some(crate::secrets::redact(visible).chars().take(4800).collect())
+}
+
 pub(crate) fn query(tool: Tool, request: &str, cancel: &AtomicBool) -> Result<String, String> {
+    query_streaming(tool, request, cancel, None)
+}
+
+pub(crate) fn query_streaming(
+    tool: Tool,
+    request: &str,
+    cancel: &AtomicBool,
+    on_answer: Option<Box<dyn FnMut(String) + Send>>,
+) -> Result<String, String> {
     let executable = match tool {
         Tool::Claude => "claude",
         Tool::Codex => "codex",
@@ -148,14 +180,44 @@ pub(crate) fn query(tool: Tool, request: &str, cancel: &AtomicBool) -> Result<St
         ][..],
         Tool::Codex => &[],
     };
-    let output = exec_with_env(
+    let mut arguments = args(tool);
+    let on_line = on_answer.map(|mut publish| {
+        // Claude emits its ordinary text inside the structured operation reply.
+        arguments[2] = "stream-json".into();
+        arguments.extend(["--verbose".into(), "--include-partial-messages".into()]);
+        let mut partial = String::new();
+        let mut previous = String::new();
+        Box::new(move |line: &[u8]| {
+            let Ok(event) = serde_json::from_slice::<Value>(line) else { return };
+            if event["type"] != "stream_event"
+                || event["event"]["type"] != "content_block_delta"
+                || event["event"]["delta"]["type"] != "text_delta"
+            {
+                return;
+            }
+            let Some(delta) = event["event"]["delta"]["text"].as_str() else { return };
+            if partial.len() + delta.len() > 96 * 1024 {
+                return;
+            }
+            partial.push_str(delta);
+            if let Some(text) = answer_preview(&partial) {
+                if text != previous {
+                    previous.clone_from(&text);
+                    publish(text);
+                }
+            }
+        }) as Box<dyn FnMut(&[u8]) + Send>
+    });
+    let streaming = on_line.is_some();
+    let output = exec_with_stdout_lines(
         &program,
-        &args(tool),
+        &arguments,
         work.path(),
         request,
         TIMEOUT,
         cancel,
         env,
+        on_line,
     )
     .map_err(runtime_error)?;
     if !output.status.success() {
@@ -164,8 +226,15 @@ pub(crate) fn query(tool: Tool, request: &str, cancel: &AtomicBool) -> Result<St
     }
     let response = match tool {
         Tool::Claude => {
-            let result: Value = serde_json::from_slice(&output.stdout)
-                .map_err(|_| "Claude 返回了无法读取的响应。")?;
+            let result: Value = if streaming {
+                output.stdout.split(|byte| *byte == b'\n').rev()
+                    .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+                    .find(|event| event["type"] == "result")
+                    .ok_or("Claude 未返回完整响应。")?
+            } else {
+                serde_json::from_slice(&output.stdout)
+                    .map_err(|_| "Claude 返回了无法读取的响应。")?
+            };
             if result.get("is_error").and_then(Value::as_bool) == Some(true) {
                 return Err("Claude 未完成请求，请检查本机登录状态。".into());
             }
@@ -190,6 +259,24 @@ pub(crate) fn query(tool: Tool, request: &str, cancel: &AtomicBool) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_only_emits_completed_answer_lines() {
+        assert_eq!(answer_preview(r#"{"action":"edit","text":"private\n"#), None);
+        assert_eq!(answer_preview(r#"{"action":"answer","text":"尚未完成"#), None);
+        assert_eq!(
+            answer_preview(r#"{"action":"answer","text":"第一行\n第二"#).as_deref(),
+            Some("第一行")
+        );
+        assert_eq!(
+            answer_preview(r#"{"action":"answer","text":"第一行\n第二行"}"#).as_deref(),
+            Some("第一行\n第二行")
+        );
+        assert_eq!(
+            answer_preview(r#"{"action":"answer","text":"api_key=secretvalue\n"#).as_deref(),
+            Some("api_key=[REDACTED]")
+        );
+    }
 
     #[test]
     fn remote_question_is_only_supplied_as_stdin_data() {

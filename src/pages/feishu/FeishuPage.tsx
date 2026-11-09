@@ -1,13 +1,15 @@
 import * as React from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Bot, Folder, Link2, LoaderCircle, Play, Plus, RefreshCw, Square } from "lucide-react";
 import {
-  listFeishuBots, listFeishuProjects, removeFeishuBot, saveFeishuBot,
-  startFeishuBot, stopFeishuBot, testFeishuBot,
+  cancelFeishuApp, createFeishuApp, listFeishuBots, listFeishuProjects, removeFeishuBot, saveFeishuBot,
+  setFeishuStartWithClient, startFeishuBot, stopFeishuBot, testFeishuBot,
   type FeishuBot, type FeishuBotInput, type FeishuProject, type FeishuProjectGrant,
 } from "@/api/feishu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { SimpleSelect } from "@/components/ui/select";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
@@ -17,13 +19,12 @@ import { cn } from "@/lib/utils";
 
 type Labels = ReturnType<typeof useI18n>["t"]["feishu"];
 type Permission = Exclude<keyof FeishuProjectGrant, "path">;
-type ConnectionAction = "start" | "stop" | "test" | "remove";
+type ConnectionAction = "start" | "stop" | "test" | "remove" | "startup";
 const permissions: Permission[] = ["read", "create", "edit", "delete"];
 const checkClass = "size-4 shrink-0 cursor-pointer accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-50";
-const splitIds = (input: string) => [...new Set(input.split(/[\s,，]+/).filter(Boolean))];
 const emptyInput: FeishuBotInput = {
-  name: "", appId: "", tenantKey: "", allowedUsers: [], allowedGroups: [],
-  allowPrivate: true, engine: "codex", projects: [],
+  name: "", appId: "",
+  engine: "codex", projects: [],
 };
 
 export function FeishuPage() {
@@ -81,7 +82,7 @@ export function FeishuPage() {
       : [...current, bot]);
   };
 
-  const run = async (bot: FeishuBot, action: ConnectionAction) => {
+  const run = async (bot: FeishuBot, action: ConnectionAction, enabled = false) => {
     if (busy) return;
     request.current++;
     refreshing.current = false;
@@ -92,6 +93,9 @@ export function FeishuPage() {
       if (action === "remove") {
         await removeFeishuBot(bot.id);
         setBots((items) => items.filter((item) => item.id !== bot.id));
+      } else if (action === "startup") {
+        await setFeishuStartWithClient(bot.id, enabled);
+        storeBot({ ...bot, startWithClient: enabled });
       } else {
         const call = { start: startFeishuBot, stop: stopFeishuBot, test: testFeishuBot }[action];
         storeBot(await call(bot.id));
@@ -142,7 +146,7 @@ export function FeishuPage() {
           {bots.length > 0 && (
             <ul className="flex flex-wrap gap-4">
               {bots.map((bot) => <BotCard key={bot.id} bot={bot} projects={projects} l={l} busy={busy}
-                onRun={(action) => void run(bot, action)} onEdit={() => setEditing(bot)} onRemove={() => setRemoving(bot)} />)}
+                onRun={(action) => void run(bot, action)} onStartup={(enabled) => void run(bot, "startup", enabled)} onEdit={() => setEditing(bot)} onRemove={() => setRemoving(bot)} />)}
             </ul>
           )}
         </section>
@@ -164,10 +168,10 @@ export function FeishuPage() {
   );
 }
 
-function BotCard({ bot, projects, l, busy, onRun, onEdit, onRemove }: {
+function BotCard({ bot, projects, l, busy, onRun, onStartup, onEdit, onRemove }: {
   bot: FeishuBot; projects: FeishuProject[]; l: Labels;
   busy: { id: string; action: ConnectionAction } | null;
-  onRun: (action: Exclude<ConnectionAction, "remove">) => void; onEdit: () => void; onRemove: () => void;
+  onRun: (action: Exclude<ConnectionAction, "remove" | "startup">) => void; onStartup: (enabled: boolean) => void; onEdit: () => void; onRemove: () => void;
 }) {
   const running = bot.status !== "stopped";
   const activeAction = busy?.id === bot.id ? busy.action : null;
@@ -180,7 +184,7 @@ function BotCard({ bot, projects, l, busy, onRun, onEdit, onRemove }: {
   return (
     <li className="flex w-[22rem] max-w-full min-w-0 flex-col rounded-lg border border-border bg-card" aria-busy={activeAction !== null}>
       <div className="flex flex-wrap items-start justify-between gap-3 px-3.5 py-3">
-        <div className="flex min-w-0 items-start gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><Bot className="size-4" aria-hidden="true" /></span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -194,11 +198,18 @@ function BotCard({ bot, projects, l, busy, onRun, onEdit, onRemove }: {
             </p>
           </div>
         </div>
-        <Button size="sm" type="button" variant={running ? "outline" : "default"} disabled={busy !== null} onClick={() => onRun(running ? "stop" : "start")}>
-          {activeAction === "start" || activeAction === "stop" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            : running ? <Square aria-hidden="true" /> : <Play aria-hidden="true" />}
-          {running ? l.stop : l.start}
-        </Button>
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span>{l.startWithClient}</span>
+          <Switch aria-label={fmt(l.startWithClientFor, { name: bot.name })} checked={bot.startWithClient ?? false}
+            disabled={busy !== null} onCheckedChange={onStartup} />
+        </label>
+        <div className="w-full">
+          <Button size="sm" type="button" variant={running ? "outline" : "default"} disabled={busy !== null} onClick={() => onRun(running ? "stop" : "start")}>
+            {activeAction === "start" || activeAction === "stop" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              : running ? <Square aria-hidden="true" /> : <Play aria-hidden="true" />}
+            {running ? l.stop : l.start}
+          </Button>
+        </div>
       </div>
       {bot.error && <p role="status" className="mx-3.5 mb-3 break-words rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{bot.error}</p>}
       <div className="mx-3.5 mb-3 overflow-hidden rounded-md border border-border">
@@ -235,11 +246,68 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
   onClose: () => void; onSave: (bot: FeishuBot) => void;
 }) {
   const [input, setInput] = React.useState<FeishuBotInput>(() => bot ? {
-    id: bot.id, name: bot.name, appId: bot.appId, tenantKey: bot.tenantKey, allowedUsers: bot.allowedUsers,
-    allowedGroups: bot.allowedGroups, allowPrivate: bot.allowPrivate, engine: bot.engine, projects: bot.projects,
+    id: bot.id, name: bot.name, appId: bot.appId,
+    engine: bot.engine, projects: bot.projects,
   } : emptyInput);
-  const [userIds, setUserIds] = React.useState(bot?.allowedUsers.join("\n") ?? "");
-  const [groupIds, setGroupIds] = React.useState(bot?.allowedGroups.join("\n") ?? "");
+  const registration = React.useRef<string | null>(null);
+  const [registeredApp, setRegisteredApp] = React.useState<string | null>(null);
+  const creation = React.useRef<string | null>(null);
+  const [creating, setCreating] = React.useState(false);
+  const [createUrl, setCreateUrl] = React.useState("");
+  const [createStatus, setCreateStatus] = React.useState("");
+  React.useEffect(() => () => {
+    if (creation.current) void cancelFeishuApp(creation.current).catch(() => {});
+    if (registration.current) void cancelFeishuApp(registration.current).catch(() => {});
+    creation.current = null;
+  }, []);
+
+  async function createBot() {
+    if (creation.current) return;
+    const attempt = crypto.randomUUID();
+    creation.current = attempt;
+    setCreating(true);
+    setCreateUrl("");
+    setCreateStatus(l.createStarting);
+    try {
+      const { appId, botName } = await createFeishuApp(attempt, (url) => {
+        if (creation.current !== attempt) return;
+        setCreateUrl(url);
+        setCreateStatus(l.createWaiting);
+        void openUrl(url).catch(() => {});
+      });
+      if (creation.current !== attempt) return;
+      setInput((previous) => ({
+        ...previous,
+        name: previous.name.trim() ? previous.name : botName ?? "",
+        appId,
+        appSecret: previous.appId === appId ? previous.appSecret : undefined,
+      }));
+      registration.current = attempt;
+      setRegisteredApp(appId);
+      setCreateStatus(l.createDone);
+    } catch (e) {
+      if (creation.current !== attempt) return;
+      const code = errorMessage(e);
+      setCreateStatus(code === "create_cancelled" ? "" : code === "create_timeout" ? l.createTimeout : l.createFailed);
+    } finally {
+      if (creation.current === attempt) {
+        creation.current = null;
+        setCreating(false);
+        setCreateUrl("");
+      }
+    }
+  }
+
+  async function cancelCreation() {
+    if (!creation.current) return;
+    const attempt = creation.current;
+    creation.current = null;
+    setCreating(false);
+    setCreateUrl("");
+    setCreateStatus("");
+    await cancelFeishuApp(attempt).catch(() => {});
+  }
+
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -257,18 +325,24 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
   };
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (saving) return;
+    if (saving || creating) return;
+    const issue =
+      !input.name.trim() ? l.saveNameRequired :
+      !/^cli_[A-Za-z0-9_-]{1,124}$/.test(input.appId.trim()) ? l.saveAppIdInvalid :
+      unavailable.length ? l.unavailable :
+      !input.projects.length ? l.saveProjectRequired :
+      !input.appSecret?.trim() && !hasRegisteredSecret && !(bot?.hasSecret && bot.appId === input.appId.trim())
+        ? l.saveSecretRequired : "";
+    setError(issue);
+    if (issue) return;
     setSaving(true);
-    setError("");
     try {
       onSave(await saveFeishuBot({
         ...input,
         name: input.name.trim(),
         appId: input.appId.trim(),
         appSecret: input.appSecret?.trim() || undefined,
-        tenantKey: input.tenantKey.trim(),
-        allowedUsers: splitIds(userIds),
-        allowedGroups: splitIds(groupIds),
+        registrationId: hasRegisteredSecret ? registration.current ?? undefined : undefined,
       }));
     } catch (e) {
       setError(errorMessage(e));
@@ -277,8 +351,8 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
     }
   };
   const unavailable = input.projects.filter((grant) => !projects.some((project) => project.path === grant.path));
-  const valid = !unavailable.length && input.name.trim() && input.appId.trim() && input.tenantKey.trim() && splitIds(userIds).length &&
-    input.projects.length && (input.appSecret?.trim() || (bot?.hasSecret && bot.appId === input.appId.trim()));
+  const hasRegisteredSecret = registeredApp !== null && registeredApp === input.appId.trim();
+  const credentialsReadOnly = hasRegisteredSecret || !!bot?.registeredCredentials;
   const available = [...projects, ...unavailable.map(({ path }) => ({ path, name: path }))];
 
   return (
@@ -288,9 +362,26 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
           <DialogTitle>{bot ? l.edit : l.add}</DialogTitle>
           <DialogDescription className="mt-1">{l.formHint}</DialogDescription>
         </header>
-        <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
+        <form noValidate className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
           <div className="grid min-h-0 gap-5 overflow-y-auto px-5 py-4">
-            <fieldset disabled={saving} className="min-w-0">
+            {!bot ? (
+              <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" size="sm" disabled={creating || saving} onClick={() => void createBot()}>
+                    {creating ? <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Bot aria-hidden="true" />}
+                    {l.createBot}
+                  </Button>
+                  {createUrl ? (
+                    <Button type="button" variant="link" size="sm" onClick={() => void openUrl(createUrl).catch(() => setCreateStatus(l.createFailed))}>
+                      {l.openCreation}
+                    </Button>
+                  ) : null}
+                  {creating ? <Button type="button" variant="ghost" size="sm" onClick={() => void cancelCreation()}>{l.cancelCreation}</Button> : null}
+                </div>
+                <p role="status" className="text-xs text-muted-foreground">{createStatus || l.createHint}</p>
+              </div>
+            ) : null}
+            <fieldset disabled={saving || creating} className="min-w-0">
               <legend className="mb-2.5 text-sm font-semibold">{l.formCredentials}</legend>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1 text-xs">{l.name}<Input value={input.name} onChange={(event) => update("name", event.target.value)} required /></label>
@@ -308,23 +399,15 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
                     ]}
                   />
                 </div>
-                <label className="grid gap-1 text-xs">{l.appId}<Input autoComplete="off" value={input.appId} onChange={(event) => update("appId", event.target.value)} required /></label>
-                <label className="grid gap-1 text-xs">{l.appSecret}<Input type="password" autoComplete="new-password" placeholder={bot?.hasSecret ? l.keepSecret : undefined}
-                  value={input.appSecret ?? ""} onChange={(event) => update("appSecret", event.target.value)} /></label>
-              </div>
-            </fieldset>
-            <fieldset disabled={saving} className="min-w-0 border-t border-border pt-3">
-              <legend className="pr-2 text-sm font-semibold">{l.formAccess}</legend>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-xs">{l.tenant}<Input autoComplete="off" value={input.tenantKey} onChange={(event) => update("tenantKey", event.target.value)} required /></label>
-                <label className="grid gap-1 text-xs">{l.users}<Input autoComplete="off" placeholder="ou_…" value={userIds} onChange={(event) => setUserIds(event.target.value)} required /></label>
-                <label className="grid gap-1 text-xs">{l.groups}<Input autoComplete="off" placeholder="oc_…" value={groupIds} onChange={(event) => setGroupIds(event.target.value)} /></label>
-                <p className="self-end pb-1 text-xs leading-5 text-muted-foreground">{l.private}</p>
+                <label className="grid gap-1 text-xs">{l.appId}<Input readOnly={credentialsReadOnly} className="read-only:bg-muted/50" autoComplete="off" value={input.appId} onChange={(event) => update("appId", event.target.value)} required /></label>
+                <label className="grid gap-1 text-xs">{l.appSecret}<Input type="password" readOnly={credentialsReadOnly} className="read-only:bg-muted/50" autoComplete="new-password" placeholder={bot?.hasSecret ? l.keepSecret : undefined}
+                  value={credentialsReadOnly ? "••••••••" : input.appSecret ?? ""} onChange={(event) => update("appSecret", event.target.value)} /></label>
               </div>
             </fieldset>
             <fieldset disabled={saving} className="min-w-0 border-t border-border pt-3">
               <legend className="pr-2 text-sm font-semibold">{l.projectPermissions}</legend>
               <p className="mb-2 text-xs text-muted-foreground">{l.projectHint}</p>
+              <p className="mb-2 text-xs text-muted-foreground">{l.chatAccessHint}</p>
               {unavailable.length > 0 && <p className="mb-2 text-xs text-destructive">{l.unavailable}</p>}
               {available.length ? (
                 <div className="overflow-hidden rounded-md border border-border">
@@ -358,11 +441,11 @@ function BotForm({ bot, projects, l, onClose, onSave }: {
                 </div>
               ) : <p className="text-xs text-muted-foreground">{l.noProjects}</p>}
             </fieldset>
-            {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
           </div>
+          {error && <p role="alert" className="shrink-0 border-t border-border px-5 py-2 break-words text-sm text-destructive">{error}</p>}
           <DialogFooter className="mt-0 border-t border-border px-5 py-3">
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>{l.cancel}</Button>
-            <Button type="submit" disabled={!valid || saving}>
+            <Button type="submit" disabled={saving || creating}>
               {saving && <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}{l.save}
             </Button>
           </DialogFooter>

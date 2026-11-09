@@ -1,7 +1,7 @@
 //! Shared child-process helpers: hidden spawn, pipe draining, timeout /
 //! cancel polling and process-tree kill. Used by `skills::git` and the
 //! extraction CLI runners.
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -82,11 +82,34 @@ pub fn kill_tree(child: &mut Child) {
 /// optional `cancel` flag and the timeout every 20 ms. On timeout / cancel the
 /// process tree is killed.
 pub fn wait_with_timeout(
-    mut child: Child,
+    child: Child,
     timeout: Duration,
     cancel: Option<&AtomicBool>,
 ) -> Result<Output, WaitError> {
-    let out = child.stdout.take().map(drain);
+    wait_with_stdout_lines(child, timeout, cancel, None)
+}
+
+pub(crate) fn wait_with_stdout_lines(
+    mut child: Child,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+    on_line: Option<Box<dyn FnMut(&[u8]) + Send>>,
+) -> Result<Output, WaitError> {
+    let out = child.stdout.take().map(|stdout| {
+        let Some(mut on_line) = on_line else { return drain(stdout) };
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = Vec::new();
+            let mut buffer = Vec::new();
+            while reader.read_until(b'\n', &mut line).is_ok_and(|size| size > 0) {
+                on_line(&line);
+                buffer.append(&mut line);
+            }
+            let _ = tx.send(buffer);
+        });
+        Drain(rx)
+    });
     let err = child.stderr.take().map(drain);
     let start = Instant::now();
     let status = loop {

@@ -28,7 +28,6 @@ pub(crate) struct IncomingMessage {
     pub message_id: String,
     pub chat_id: String,
     pub sender_open_id: String,
-    pub tenant_key: String,
     pub text: String,
     pub is_group: bool,
     pub mentions_bot: bool,
@@ -112,6 +111,7 @@ struct BotResponse {
 #[derive(Deserialize)]
 struct Bot {
     open_id: String,
+    app_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -198,7 +198,16 @@ impl Client {
         Ok(value)
     }
 
-    async fn bot_open_id(&self) -> Result<String, String> {
+    pub(crate) async fn bot_name(&self) -> Option<String> {
+        let name = self.bot_info().await.ok()?.app_name?;
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_control) { return None; }
+        let mut end = name.len().min(120);
+        while !name.is_char_boundary(end) { end -= 1; }
+        Some(name[..end].to_owned())
+    }
+
+    async fn bot_info(&self) -> Result<Bot, String> {
         let token = self.tenant_token().await?;
         let response: BotResponse = request_json(
             self.http()?
@@ -208,14 +217,13 @@ impl Client {
         )
         .await?;
         check_code(response.code, "Feishu bot identity")?;
-        response
-            .bot
-            .map(|bot| bot.open_id)
-            .filter(|id| !id.is_empty())
-            .ok_or_else(|| {
-                "Feishu bot identity was unavailable. Enable the bot capability for the app."
-                    .to_owned()
-            })
+        response.bot.filter(|bot| !bot.open_id.is_empty()).ok_or_else(|| {
+            "Feishu bot identity was unavailable. Enable the bot capability for the app.".to_owned()
+        })
+    }
+
+    async fn bot_open_id(&self) -> Result<String, String> {
+        Ok(self.bot_info().await?.open_id)
     }
 
     async fn endpoint(&self) -> Result<(Url, i32, SocketConfig), String> {
@@ -356,7 +364,7 @@ impl Client {
         check_code(response.code, "Feishu close Markdown stream")
     }
 
-    pub(crate) async fn recall_empty_stream(&self, stream: &MarkdownStream) -> Result<(), String> {
+    pub(crate) async fn recall_markdown_stream(&self, stream: &MarkdownStream) -> Result<(), String> {
         let response: ApiResponse = request_json(
             self.http()?
                 .delete(format!(
@@ -364,10 +372,10 @@ impl Client {
                     stream.message_id
                 ))
                 .bearer_auth(self.tenant_token().await?),
-            "Feishu recall empty Markdown stream",
+            "Feishu recall Markdown stream",
         )
         .await?;
-        check_code(response.code, "Feishu recall empty Markdown stream")
+        check_code(response.code, "Feishu recall Markdown stream")
     }
 
     pub(crate) async fn working_reaction(&self, message_id: &str) -> Option<String> {
@@ -882,7 +890,6 @@ fn parse_event(
         message_id: message.message_id,
         chat_id: message.chat_id,
         sender_open_id: sender,
-        tenant_key: envelope.header.tenant_key,
         text,
         is_group: message.chat_type == "group",
         mentions_bot: !bot_mention_keys.is_empty(),

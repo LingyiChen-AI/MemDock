@@ -147,6 +147,19 @@ pub(crate) fn exec_with_env(
     cancel: &AtomicBool,
     env: &[(&str, &str)],
 ) -> Result<Output, RunError> {
+    exec_with_stdout_lines(program, args, cwd, stdin_text, timeout, cancel, env, None)
+}
+
+pub(crate) fn exec_with_stdout_lines(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    stdin_text: &str,
+    timeout: Duration,
+    cancel: &AtomicBool,
+    env: &[(&str, &str)],
+    on_line: Option<Box<dyn FnMut(&[u8]) + Send>>,
+) -> Result<Output, RunError> {
     if cancel.load(Ordering::SeqCst) {
         return Err(RunError::Cancelled);
     }
@@ -190,7 +203,7 @@ pub(crate) fn exec_with_env(
             let _ = stdin.write_all(&data);
         });
     }
-    proc::wait_with_timeout(child, timeout, Some(cancel)).map_err(|e| match e {
+    proc::wait_with_stdout_lines(child, timeout, Some(cancel), on_line).map_err(|e| match e {
         WaitError::Timeout => RunError::Timeout,
         WaitError::Cancelled => RunError::Cancelled,
         WaitError::Io(m) => failed(None, &m),

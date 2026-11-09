@@ -64,10 +64,10 @@ struct Bot {
     id: String,
     name: String,
     app_id: String,
-    tenant_key: String,
-    allowed_users: Vec<String>,
-    allowed_groups: Vec<String>,
-    allow_private: bool,
+    #[serde(default)]
+    registered_credentials: bool,
+    #[serde(default)]
+    start_with_client: bool,
     engine: Engine,
     projects: Vec<ProjectGrant>,
 }
@@ -79,23 +79,13 @@ pub(crate) struct BotInput {
     name: String,
     app_id: String,
     app_secret: Option<String>,
-    tenant_key: String,
-    allowed_users: Vec<String>,
-    allowed_groups: Vec<String>,
-    allow_private: bool,
+    registration_id: Option<String>,
     engine: Engine,
     projects: Vec<ProjectGrant>,
 }
 
-fn authorized(bot: &Bot, event: &IncomingMessage) -> bool {
-    !bot.tenant_key.is_empty()
-        && event.tenant_key == bot.tenant_key
-        && bot.allowed_users.contains(&event.sender_open_id)
-        && if event.is_group {
-            event.mentions_bot && bot.allowed_groups.contains(&event.chat_id)
-        } else {
-            bot.allow_private
-        }
+fn accepts_chat_message(event: &IncomingMessage) -> bool {
+    !event.is_group || event.mentions_bot
 }
 
 fn linked(meta: &fs::Metadata) -> bool {
@@ -358,9 +348,6 @@ fn respond_text(
     state: &mut ChatState,
     text: &str,
 ) -> Result<String, String> {
-    if event.is_group {
-        return Ok("Open a private chat with this bot to use project commands.".into());
-    }
     let chat = Chat {
         id: event.chat_id.clone(),
         user: event.sender_open_id.clone(),
@@ -664,20 +651,20 @@ fn identifier(value: &str, prefix: &str) -> bool {
         })
 }
 
-fn clean_ids(values: Vec<String>, prefix: &str) -> Result<Vec<String>, String> {
-    if values.len() > 128 {
-        return Err("The Feishu allowlist is too large".into());
+#[derive(Clone, Default)]
+struct ReplyUpdate {
+    progress: String,
+    answer: Option<String>,
+}
+
+impl ReplyUpdate {
+    fn render(&self, answer: Option<&str>) -> String {
+        match (self.progress.is_empty(), answer) {
+            (_, None) => self.progress.clone(),
+            (true, Some(text)) => text.to_owned(),
+            (false, Some(text)) => format!("{}\n\n{text}", self.progress),
+        }
     }
-    let mut values = values
-        .into_iter()
-        .map(|s| s.trim().to_owned())
-        .collect::<Vec<_>>();
-    if values.iter().any(|s| !identifier(s, prefix)) {
-        return Err(format!("Invalid Feishu ID. Expected {prefix}"));
-    }
-    values.sort();
-    values.dedup();
-    Ok(values)
 }
 
 impl Bridge {
@@ -764,18 +751,14 @@ impl Bridge {
             .ok_or_else(|| "Feishu bot was not found".into())
     }
 
-    fn validate(&self, input: BotInput, store: &BotStore) -> Result<(Bot, Option<String>), String> {
+    fn validate(&self, input: BotInput, store: &BotStore, registered: bool) -> Result<(Bot, Option<String>), String> {
         let name = input.name.trim().to_owned();
         let app_id = input.app_id.trim().to_owned();
-        let tenant_key = input.tenant_key.trim().to_owned();
         if name.is_empty() || name.len() > 120 || name.chars().any(char::is_control) {
             return Err("Enter a valid bot name".into());
         }
         if !identifier(&app_id, "cli_") {
             return Err("Enter a valid Feishu App ID beginning with cli_".into());
-        }
-        if !tenant_key.is_empty() && !identifier(&tenant_key, "") {
-            return Err("Enter a valid Feishu tenant key".into());
         }
         let id = match input.id {
             Some(id) if store.bots.iter().any(|b| b.id == id) => id,
@@ -823,14 +806,19 @@ impl Bridge {
         if store.bots.iter().any(|b| b.id == id && b.app_id != app_id) && new_secret.is_none() {
             return Err("Enter the app secret for the new Feishu App ID".into());
         }
+        let existing = store.bots.iter().find(|bot| bot.id == id);
+        let previously_registered = existing.filter(|bot| bot.registered_credentials);
+        if let Some(previous) = previously_registered {
+            if app_id != previous.app_id || new_secret.is_some() {
+                return Err("Automatically registered Feishu credentials are read-only".into());
+            }
+        }
         let bot = Bot {
             id,
             name,
             app_id,
-            tenant_key,
-            allowed_users: clean_ids(input.allowed_users, "ou_")?,
-            allowed_groups: clean_ids(input.allowed_groups, "oc_")?,
-            allow_private: input.allow_private,
+            registered_credentials: registered || previously_registered.is_some(),
+            start_with_client: existing.is_some_and(|bot| bot.start_with_client),
             engine: input.engine,
             projects,
         };
@@ -878,12 +866,16 @@ pub(crate) async fn feishu_list(state: State<'_>) -> Result<Vec<BotView>, String
 }
 
 #[tauri::command]
-pub(crate) async fn feishu_save(state: State<'_>, input: BotInput) -> Result<BotView, String> {
+pub(crate) async fn feishu_save(state: State<'_>, mut input: BotInput) -> Result<BotView, String> {
     let bridge = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut active = bridge.active()?;
         let mut store = bridge.load()?;
-        let (bot, new_secret) = bridge.validate(input, &store)?;
+        let registration = input.registration_id.take();
+        if let Some(id) = &registration {
+            input.app_secret = Some(crate::feishu_registration::registered_secret(id, input.app_id.trim())?);
+        }
+        let (bot, new_secret) = bridge.validate(input, &store, registration.is_some())?;
         let previous = secret(&bot.id)?;
         if let Some(new_secret) = &new_secret {
             store_secret(&bot.id, Some(new_secret))?;
@@ -901,6 +893,7 @@ pub(crate) async fn feishu_save(state: State<'_>, input: BotInput) -> Result<Bot
             return Err(error);
         }
         active.remove(&bot.id);
+        if let Some(id) = registration { crate::feishu_registration::feishu_cancel_create_app(id); }
         Ok(view(bot, new_secret.is_some() || previous.is_some(), None))
     })
     .await
@@ -927,6 +920,25 @@ pub(crate) async fn feishu_remove(state: State<'_>, id: String) -> Result<(), St
         }
         active.remove(&id);
         Ok(())
+    })
+    .await
+    .map_err(|_| "Feishu bridge is unavailable".to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn feishu_set_start_with_client(
+    state: State<'_>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let bridge = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _active = bridge.active()?;
+        let mut store = bridge.load()?;
+        let bot = store.bots.iter_mut().find(|bot| bot.id == id)
+            .ok_or("Feishu bot was not found")?;
+        bot.start_with_client = enabled;
+        bridge.persist(&store)
     })
     .await
     .map_err(|_| "Feishu bridge is unavailable".to_string())?
@@ -1041,9 +1053,9 @@ impl Bridge {
         bot: &Bot,
         generation: Uuid,
         event: &IncomingMessage,
-        updates: &tokio::sync::watch::Sender<Option<String>>,
+        updates: &tokio::sync::watch::Sender<Option<ReplyUpdate>>,
     ) -> Option<String> {
-        if !authorized(bot, event) {
+        if !accepts_chat_message(event) {
             return None;
         }
         let mut active = self.active().ok()?;
@@ -1052,9 +1064,6 @@ impl Bridge {
             .filter(|a| a.generation == generation)?;
         if !runtime.chat.remember(&event.message_id) {
             return None;
-        }
-        if event.is_group {
-            return Some("Open a private chat with this bot to use project commands.".into());
         }
         let command = event.text.split_whitespace().next().unwrap_or("");
         if command == "/oversize" {
@@ -1097,7 +1106,7 @@ impl Bridge {
             let cancel = Arc::new(AtomicBool::new(false));
             runtime.jobs.insert(chat.clone(), Arc::clone(&cancel));
             drop(active);
-            updates.send_replace(Some(String::new()));
+            updates.send_replace(Some(ReplyUpdate::default()));
             let result =
                 self.conversation(bot, generation, event, &chat, current, &cancel, updates);
             if let Ok(mut active) = self.active() {
@@ -1159,7 +1168,7 @@ impl Bridge {
         chat: &Chat,
         current: Option<usize>,
         cancel: &AtomicBool,
-        updates: &tokio::sync::watch::Sender<Option<String>>,
+        updates: &tokio::sync::watch::Sender<Option<ReplyUpdate>>,
     ) -> Result<String, String> {
         let message = event.text.trim();
         if message.len() > 4000 || !crate::secrets::scan(message).is_empty() {
@@ -1195,8 +1204,19 @@ impl Bridge {
         if cancel.load(Ordering::Acquire) {
             return Err("任务已停止。".into());
         }
-        let mut progress = Vec::new();
-        let result = conversation::turn(grant, &mut history, message, cancel, query, |step| {
+        let progress = std::cell::RefCell::new(Vec::new());
+        let query_step = |request: &str| {
+            if matches!(bot.engine, Engine::Claude) {
+                let updates = updates.clone();
+                let progress = progress.borrow().join("\n");
+                feishu_agent::query_streaming(tool, request, cancel, Some(Box::new(move |answer| {
+                    updates.send_replace(Some(ReplyUpdate { progress: progress.clone(), answer: Some(answer) }));
+                })))
+            } else {
+                query(request)
+            }
+        };
+        let result = conversation::turn(grant, &mut history, message, cancel, query_step, |step| {
             let mut active = self.active()?;
             let runtime = active
                 .get_mut(&bot.id)
@@ -1217,8 +1237,9 @@ impl Bridge {
                 ("/delete", true) => "提交了删除确认",
                 _ => "项目操作未完成",
             };
+            let mut progress = progress.borrow_mut();
             progress.push(label);
-            updates.send_replace(Some(progress.join("\n")));
+            updates.send_replace(Some(ReplyUpdate { progress: progress.join("\n"), answer: None }));
             result
         });
         if result.is_ok() {
@@ -1235,17 +1256,37 @@ impl Bridge {
 
 #[tauri::command]
 pub(crate) async fn feishu_start(state: State<'_>, id: String) -> Result<BotView, String> {
-    let bridge = state.inner().clone();
+    start_bot(state.inner().clone(), id).await
+}
+
+pub(crate) fn start_configured(bridge: Arc<Bridge>) {
+    tauri::async_runtime::spawn(async move {
+        let reader = Arc::clone(&bridge);
+        let store = match tauri::async_runtime::spawn_blocking(move || {
+            let _active = reader.active()?;
+            reader.load()
+        }).await {
+            Ok(Ok(store)) => store,
+            _ => {
+                eprintln!("MemDock: could not load Feishu startup settings");
+                return;
+            }
+        };
+        for bot in store.bots.into_iter().filter(|bot| bot.start_with_client) {
+            if let Err(error) = start_bot(Arc::clone(&bridge), bot.id).await {
+                eprintln!("MemDock: could not auto-start a Feishu connection: {error}");
+            }
+        }
+    });
+}
+
+async fn start_bot(bridge: Arc<Bridge>, id: String) -> Result<BotView, String> {
     let prepare = Arc::clone(&bridge);
     let (bot, client, generation, stop, stop_rx) = tauri::async_runtime::spawn_blocking(move || {
         let mut active = prepare.active()?;
         let bot = prepare.bot(&id)?;
-        if bot.tenant_key.is_empty()
-            || bot.allowed_users.is_empty()
-            || (!bot.allow_private && bot.allowed_groups.is_empty())
-            || bot.projects.is_empty()
-        {
-            return Err("Set the tenant, authorized users, chat scope, and at least one project before starting".to_string());
+        if bot.projects.is_empty() {
+            return Err("Select at least one project before starting".to_string());
         }
         if active.get(&id).is_some_and(|runtime| !matches!(runtime.status, Status::Error)) {
             return Err("The Feishu bot is already running".to_string());
@@ -1292,16 +1333,18 @@ pub(crate) async fn feishu_start(state: State<'_>, id: String) -> Result<BotView
             let message_id = event.message_id.clone();
             let bridge = Arc::clone(&receiver_bridge);
             let bot = receiver_bot.clone();
-            let (updates, mut stream) = tokio::sync::watch::channel::<Option<String>>(None);
+            let engine = bot.engine;
+            let (updates, mut stream) = tokio::sync::watch::channel::<Option<ReplyUpdate>>(None);
             let publisher = Arc::clone(&receiver_client);
             let origin = message_id.clone();
             let publishing = tauri::async_runtime::spawn(async move {
                 let mut card = None;
                 let mut previous = String::new();
+                let mut latest = ReplyUpdate::default();
                 let mut failed = false;
                 let mut reaction = None;
                 while stream.changed().await.is_ok() {
-                    let Some(text) = stream.borrow_and_update().clone() else {
+                    let Some(update) = stream.borrow_and_update().clone() else {
                         continue;
                     };
                     if reaction.is_none() {
@@ -1311,6 +1354,8 @@ pub(crate) async fn feishu_start(state: State<'_>, id: String) -> Result<BotView
                             client.working_reaction(&origin).await
                         }));
                     }
+                    latest = update;
+                    let text = latest.render(latest.answer.as_deref());
                     if text.trim().is_empty() || failed || previous == text {
                         continue;
                     }
@@ -1328,32 +1373,43 @@ pub(crate) async fn feishu_start(state: State<'_>, id: String) -> Result<BotView
                     }
                     tokio::time::sleep(Duration::from_millis(600)).await;
                 }
-                (card, previous, reaction)
+                (card, previous, latest, reaction)
             });
             let result = tauri::async_runtime::spawn_blocking(move || {
                 bridge.event(&bot, generation, &event, &updates)
             })
             .await;
-            let (card, previous, reaction) = publishing.await.unwrap_or_default();
+            let (card, previous, latest, reaction) = publishing.await.unwrap_or_default();
+            let reply = result.ok().flatten().filter(|text| !text.trim().is_empty());
+            let reply = if stop.load(Ordering::Acquire) { None } else { reply };
+            // Match the upstream default Markdown mode: Claude finishes in the
+            // open stream, while Codex holds its final answer for a separate post.
+            let mut pending_reply = reply;
             if let Some(mut card) = card {
-                if previous.is_empty() {
-                    let _ = receiver_client.recall_empty_stream(&card).await;
+                let terminal = match (engine, pending_reply.as_deref()) {
+                    (Engine::Claude, Some(text)) => latest.render(Some(text)),
+                    (Engine::Codex, Some(_)) => previous.clone(),
+                    (_, None) => String::new(),
+                };
+                if terminal.is_empty() {
+                    let _ = receiver_client.recall_markdown_stream(&card).await;
+                } else if terminal == previous
+                    || receiver_client.write_markdown_stream(&mut card, &terminal).await.is_ok()
+                {
+                    let _ = receiver_client.close_markdown_stream(&mut card, &terminal).await;
+                    if matches!(engine, Engine::Claude) {
+                        pending_reply = None;
+                    }
                 } else {
-                    let _ = receiver_client
-                        .close_markdown_stream(&mut card, &previous)
-                        .await;
+                    let _ = receiver_client.recall_markdown_stream(&card).await;
+                    pending_reply = Some(terminal);
                 }
             }
-            if let Ok(Some(reply)) = result {
-                if !stop.load(Ordering::Acquire) && !reply.trim().is_empty() {
-                    let markdown = reaction.is_some()
-                        && receiver_client
-                            .reply_markdown(&message_id, &reply)
-                            .await
-                            .is_ok();
-                    if !markdown {
-                        let _ = receiver_client.reply(&message_id, &reply).await;
-                    }
+            if let Some(reply) = pending_reply {
+                let markdown = reaction.is_some()
+                    && receiver_client.reply_markdown(&message_id, &reply).await.is_ok();
+                if !markdown {
+                    let _ = receiver_client.reply(&message_id, &reply).await;
                 }
             }
             if let Some(reaction) = reaction {
@@ -1374,13 +1430,13 @@ pub(crate) async fn feishu_start(state: State<'_>, id: String) -> Result<BotView
             .run(
                 stop_rx,
                 move |mut event| {
-                    if !authorized(&transport_bot, &event) {
+                    if !accepts_chat_message(&event) {
                         return true;
                     }
                     if event.text.len() > MAX_TEXT + 1024 {
                         event.text = "/oversize".into();
                     }
-                    if !event.is_group && event.text.trim() == "/stop" {
+                    if event.text.trim() == "/stop" {
                         let chat = Chat {
                             id: event.chat_id.clone(),
                             user: event.sender_open_id.clone(),

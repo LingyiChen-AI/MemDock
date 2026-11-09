@@ -1,6 +1,6 @@
 [package]
 name = "memdock"
-version = "0.1.8"
+version = "0.1.9"
 description = "Memdock: manage Claude Code and Codex memories"
 authors = ["Memdock contributors"]
 edition = "2024"
@@ -38,6 +38,7 @@ tauri-plugin-opener = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 base64 = "0.23"
+flate2 = "1"
 sha1 = "0.10"
 ureq = { version = "3", features = ["json", "socks-proxy"] }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }

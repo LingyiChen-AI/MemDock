@@ -13,6 +13,7 @@ pub mod env;
 pub mod extract;
 mod feishu_agent;
 mod feishu_bridge;
+mod feishu_registration;
 mod feishu_transport;
 pub mod live;
 pub mod fsutil;
@@ -138,7 +139,9 @@ pub fn run() {
             app.manage(usage);
             app.manage(env_state);
             app.manage(Arc::new(commands_sessions::SessionsState::new(state.clone())));
-            app.manage(Arc::new(feishu_bridge::Bridge::new(state.clone())));
+            let feishu = Arc::new(feishu_bridge::Bridge::new(state.clone()));
+            app.manage(feishu.clone());
+            feishu_bridge::start_configured(feishu);
             app.manage(state);
             app.manage(handle);
             app.manage(extract);
@@ -228,11 +231,14 @@ pub fn run() {
             commands_env::env_detect,
             commands_env::env_install,
             commands_env::open_data_dir,
+            feishu_registration::feishu_create_app,
+            feishu_registration::feishu_cancel_create_app,
             feishu_bridge::feishu_projects,
             feishu_bridge::feishu_list,
             feishu_bridge::feishu_save,
             feishu_bridge::feishu_remove,
             feishu_bridge::feishu_start,
+            feishu_bridge::feishu_set_start_with_client,
             feishu_bridge::feishu_stop,
             feishu_bridge::feishu_test,
             workspace_code::code_trash_file,

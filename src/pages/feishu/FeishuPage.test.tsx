@@ -1,7 +1,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import { listFeishuBots, listFeishuProjects, saveFeishuBot } from "@/api/feishu";
+import { createFeishuApp, listFeishuBots, listFeishuProjects, saveFeishuBot, setFeishuStartWithClient, startFeishuBot } from "@/api/feishu";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { renderApp } from "@/test/fixtures";
 import { FeishuPage } from "./FeishuPage";
 
@@ -9,12 +10,17 @@ vi.mock("@/api/memory", () => ({
   getSettings: vi.fn().mockResolvedValue({ language: "en" }),
 }));
 
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock("@/api/feishu", () => ({
+  createFeishuApp: vi.fn(),
+  cancelFeishuApp: vi.fn().mockResolvedValue(undefined),
   listFeishuBots: vi.fn(),
   listFeishuProjects: vi.fn(),
   saveFeishuBot: vi.fn(),
   removeFeishuBot: vi.fn(),
   startFeishuBot: vi.fn(),
+  setFeishuStartWithClient: vi.fn().mockResolvedValue(undefined),
   stopFeishuBot: vi.fn(),
   testFeishuBot: vi.fn(),
 }));
@@ -34,7 +40,6 @@ it("creates one connection with independently scoped permissions for multiple pr
   const form = await screen.findByRole("dialog");
   for (const [label, value] of [
     ["Connection name", "Dev bot"], ["App ID", "cli_demo"], ["App Secret", "secret"],
-    ["Tenant key", "tenant"], ["Allowed user Open IDs", "ou_owner"],
   ]) {
     await userEvent.type(within(form).getByLabelText(label), value);
   }
@@ -43,10 +48,52 @@ it("creates one connection with independently scoped permissions for multiple pr
   await userEvent.click(within(form).getByRole("checkbox", { name: "Modify files in MemDock" }));
   await userEvent.click(within(form).getByRole("button", { name: "Save connection" }));
   expect(await screen.findByText("Dev bot")).toBeInTheDocument();
+  const startup = screen.getByRole("switch", { name: "Start Dev bot with MemDock" });
+  expect(startup).not.toBeChecked();
+  await userEvent.click(startup);
+  expect(startup).toBeChecked();
+  expect(setFeishuStartWithClient).toHaveBeenCalledWith("demo", true);
+  expect(startFeishuBot).not.toHaveBeenCalled();
   expect(saveFeishuBot).toHaveBeenCalledWith(expect.objectContaining({
     projects: [
       { path: "/work/memdock", read: true, create: false, edit: true, delete: false },
       { path: "/work/docs", read: true, create: false, edit: false, delete: false },
     ],
+  }));
+});
+
+it("opens the Feishu creation page and fills in the returned App ID", async () => {
+  const url = "https://open.feishu.cn/page/cli?user_code=TEST";
+  vi.mocked(listFeishuBots).mockResolvedValue([]);
+  vi.mocked(listFeishuProjects).mockResolvedValue([{ name: "MemDock", path: "/work/memdock" }]);
+  vi.mocked(saveFeishuBot).mockImplementationOnce(async (input) => ({ ...input, id: "new", hasSecret: true, status: "stopped", error: null }));
+  vi.mocked(createFeishuApp).mockImplementation(async (_attempt, onUrl) => {
+    onUrl(url);
+    return { appId: "cli_new_bot", botName: "Feishu robot" };
+  });
+  renderApp(<FeishuPage />);
+  await userEvent.click(await screen.findByRole("button", { name: "Add connection" }));
+  const form = within(await screen.findByRole("dialog"));
+  await userEvent.click(form.getByRole("button", { name: "Choose an app in Feishu" }));
+  await form.findByText(/App ID and App Secret received/);
+  expect(openUrl).toHaveBeenCalledWith(url);
+  expect(form.getByLabelText("App ID")).toHaveValue("cli_new_bot");
+  expect(form.queryByRole("button", { name: /Allowed (user|group)/i })).not.toBeInTheDocument();
+  expect(form.getByLabelText("App ID")).toHaveAttribute("readonly");
+  expect(form.getByLabelText("App Secret")).toHaveAttribute("readonly");
+  expect(form.getByLabelText("App Secret")).toHaveValue("••••••••");
+  const name = form.getByLabelText("Connection name");
+  expect(name).toHaveValue("Feishu robot");
+  await userEvent.clear(name);
+  await userEvent.type(name, "New bot");
+  await userEvent.click(form.getByRole("button", { name: "Save connection" }));
+  expect(form.getByRole("alert")).toHaveTextContent("Bind at least one project.");
+  await userEvent.click(form.getByRole("checkbox", { name: "Bind MemDock" }));
+  await userEvent.click(form.getByRole("button", { name: "Save connection" }));
+  expect(saveFeishuBot).toHaveBeenLastCalledWith(expect.objectContaining({
+    appId: "cli_new_bot",
+    name: "New bot",
+    appSecret: undefined,
+    registrationId: vi.mocked(createFeishuApp).mock.calls[0][0],
   }));
 });

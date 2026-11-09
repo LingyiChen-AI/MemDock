@@ -1153,7 +1153,8 @@
     },
     "newChatAgent": {
       "title": "Default assistant for new chats",
-      "desc": "Applies to new chats from the sidebar, chat page, keyboard shortcut, and project menu, including worktrees. If only one CLI is installed, it is selected automatically. If both are installed and no preference is set, Claude Code is used.",
+      "desc": "New chats use the assistant selected in the conversation list. This default applies in the All view, which automatically uses the only installed assistant if there is just one.",
+      "notInstalled": "Install {tool} or select another assistant.",
       "noneInstalled": "Install Claude Code or Codex CLI on this computer first."
     },
     "newChatDir": {
@@ -1407,6 +1408,12 @@
   },
   "chat": {
     "catchUpTerminal": "Catch up with the terminal",
+    "writerBusy": {
+      "title": "Open in another app",
+      "hint": "Close the conversation there and retry, or create a separate fork.",
+      "retry": "Retry",
+      "fork": "Fork conversation"
+    },
     "usedElsewhere": "This session is also in use in Claude Code in a terminal: compacting or switching models here doesn't affect it, and the context shown is from its latest request. Using both at once makes them overwrite each other; continue in one place.",
     "notices": {
       "commandOutput": "Command output",

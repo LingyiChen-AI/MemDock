@@ -253,7 +253,7 @@ describe("/worktree in the composer", () => {
 });
 
 describe("project ＋ menu", () => {
-  it("uses the configured tool independently of the project filter and last-used tool", async () => {
+  it("uses the explicitly selected tool instead of the configured default", async () => {
     saveChatPrefs({ ...DEFAULT_PREFS, agent: "codex", cwd: "/work/demo" });
     saveNewChatAgent("claude");
     (listSessions as Mock).mockResolvedValue([mk({ id: "codex-1", tool: "codex" })]);
@@ -262,11 +262,11 @@ describe("project ＋ menu", () => {
     const project = await screen.findByRole("region", { name: "demo" });
     await userEvent.click(within(project).getByRole("button", { name: "新建" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: /^新建会话/ }));
-    await userEvent.type(screen.getByRole("textbox"), "hello Claude{Enter}");
+    await userEvent.type(screen.getByRole("textbox"), "hello Codex{Enter}");
     await waitFor(() => expect(liveStart).toHaveBeenCalledWith(expect.objectContaining({
-      agent: "claude",
+      agent: "codex",
       cwd: "/work/demo",
-      prompt: "hello Claude",
+      prompt: "hello Codex",
     })));
   });
 

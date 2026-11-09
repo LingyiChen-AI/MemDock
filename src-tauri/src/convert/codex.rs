@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::{clean_cwd, now_rfc3339, Conversation, Item, Out};
-use crate::extract::sessions::{codex_id_from_path, for_each_json, is_injected_codex};
+use crate::extract::sessions::{codex_files_in, codex_id_from_path, for_each_json_prefix, is_injected_codex};
 use crate::model::Tool;
 
 /// Shell command line of a function call, when it runs a shell.
@@ -85,6 +85,15 @@ fn message_text(content: &Value) -> String {
 /// Parses a Codex rollout. Developer/system messages, injected context,
 /// reasoning and event lines are dropped.
 pub fn parse(path: &Path) -> Conversation {
+    parse_prefix(path, None, None, &mut Vec::new())
+}
+
+fn parse_prefix(
+    path: &Path,
+    bytes: Option<u64>,
+    lines: Option<u64>,
+    ancestors: &mut Vec<PathBuf>,
+) -> Conversation {
     let mut conv = Conversation {
         tool: Tool::Codex,
         id: codex_id_from_path(path),
@@ -96,7 +105,8 @@ pub fn parse(path: &Path) -> Conversation {
     };
     let mut seen_meta = false;
     let mut last_ts = String::new();
-    for_each_json(path, |v| {
+    ancestors.push(path.to_owned());
+    for_each_json_prefix(path, bytes, lines, |v| {
         let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
         let ts = v
             .get("timestamp")
@@ -108,6 +118,15 @@ pub fn parse(path: &Path) -> Conversation {
         match kind {
             "session_meta" if !seen_meta => {
                 seen_meta = true;
+                // Paginated Codex forks store only a snapshot pointer plus their own new turns.
+                // Legacy forks inline their history and have no history_base.
+                if let Some(base) = p.get("history_base") {
+                    if let Some(parent) = read_fork_base(path, base, ancestors) {
+                        conv.items = parent.items;
+                        conv.images = parent.images;
+                        conv.model = parent.model;
+                    }
+                }
                 if let Some(id) = p.get("id").or_else(|| p.get("session_id")).and_then(Value::as_str) {
                     if !id.is_empty() {
                         conv.id = id.to_string();
@@ -134,7 +153,28 @@ pub fn parse(path: &Path) -> Conversation {
             _ => {}
         }
     });
+    ancestors.pop();
     conv
+}
+
+fn read_fork_base(path: &Path, base: &Value, ancestors: &mut Vec<PathBuf>) -> Option<Conversation> {
+    // Resolve only within this Codex home. Bound traversal for malformed or cyclic rollouts.
+    if ancestors.len() >= 64 {
+        return None;
+    }
+    let id = base.get("thread_id")?.as_str()?;
+    let bytes = base.get("end_byte_offset").and_then(Value::as_u64);
+    let lines = base.get("end_ordinal_exclusive").and_then(Value::as_u64);
+    if bytes.is_none() && lines.is_none() {
+        return None;
+    }
+    let home = path.ancestors()
+        .find(|part| part.file_name().is_some_and(|name| name == "sessions" || name == "archived_sessions"))?
+        .parent()?;
+    let parent = codex_files_in(home).into_iter().rev()
+        .find(|candidate| codex_id_from_path(candidate) == id && !ancestors.contains(candidate))?;
+    // A byte cursor counts raw JSONL records, including any line too large to parse.
+    Some(parse_prefix(&parent, bytes, if bytes.is_some() { None } else { lines }, ancestors))
 }
 
 fn parse_response_item(p: &Value, ts: String, items: &mut Vec<Item>, images: &mut Vec<(usize, String)>) {

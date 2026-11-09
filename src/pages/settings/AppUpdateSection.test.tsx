@@ -7,7 +7,7 @@ import { AppUpdateSection } from "./AppUpdateSection";
 it("renders release headings, fixes and PR links in the update panel", async () => {
   const update = {
     version: "0.1.2",
-    body: "## 更新与改进\n\n- **更新面板**\n\n## 问题修复\n\n- 修复链接显示\n\n[PR #42](https://github.com/example/project/pull/42)",
+    body: "## 更新与改进\n\n- **更新面板**\n\n## 问题修复\n\n- 修复链接显示\n\n[PR #42](https://github.com/example/project/pull/42)\n\n<!-- Release notes generated using configuration in .github/release.yml at v0.1.2 -->\n\n**Full Changelog**: https://github.com/example/project/compare/v0.1.1...v0.1.2",
   } as Update;
   renderApp(<AppUpdateSection state={{
     enabled: true,
@@ -26,6 +26,7 @@ it("renders release headings, fixes and PR links in the update panel", async () 
   expect(screen.getByRole("heading", { name: "更新与改进" })).toBeVisible();
   expect(screen.getByRole("heading", { name: "问题修复" })).toBeVisible();
   expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  expect(screen.queryByText(/Release notes generated|Full Changelog/)).not.toBeInTheDocument();
   expect(screen.getByRole("link", { name: "PR #42" })).toHaveAttribute("href", "https://github.com/example/project/pull/42");
 });
 

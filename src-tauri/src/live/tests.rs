@@ -76,6 +76,7 @@ fn opts(cwd: &str) -> StartOptions {
         effort: None,
         permission: PermissionMode::Ask,
         resume_id: None,
+        fork_from: None,
         extra_args: vec![],
         prompt: None,
         prompt_images: vec![],

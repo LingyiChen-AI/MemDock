@@ -1,6 +1,6 @@
 //! Reads Claude Code and Codex session logs into a unified list of turns.
 
-use std::io::BufRead;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -121,14 +121,30 @@ fn next_line(r: &mut dyn BufRead) -> Option<Option<Vec<u8>>> {
 }
 
 /// Calls `f` for each parsed JSON line of `path`. Oversized lines and unparsable lines are skipped.
-pub(crate) fn for_each_json<F: FnMut(Value)>(path: &Path, mut f: F) {
+pub(crate) fn for_each_json<F: FnMut(Value)>(path: &Path, f: F) {
+    for_each_json_prefix(path, None, None, f);
+}
+
+pub(crate) fn for_each_json_prefix<F: FnMut(Value)>(
+    path: &Path,
+    byte_limit: Option<u64>,
+    line_limit: Option<u64>,
+    mut f: F,
+) {
     let Ok(meta) = std::fs::metadata(path) else { return };
     if meta.len() > MAX_FILE_BYTES {
         eprintln!("extract: skipping oversized session file {}", path.display());
         return;
     }
-    let Ok(mut reader) = open_jsonl(path) else { return };
-    while let Some(line) = next_line(reader.as_mut()) {
+    let Ok(reader) = open_jsonl(path) else { return };
+    let mut reader: Box<dyn BufRead> = match byte_limit {
+        Some(limit) => Box::new(BufReader::new(reader.take(limit))),
+        None => reader,
+    };
+    let mut lines = 0;
+    while lines < line_limit.unwrap_or(u64::MAX) {
+        let Some(line) = next_line(reader.as_mut()) else { break };
+        lines += 1;
         let Some(bytes) = line else { continue };
         if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
             f(v);
@@ -244,9 +260,13 @@ pub fn read_claude_turns(paths: &AgentPaths, since_ms: i64) -> Vec<Turn> {
 }
 
 pub(crate) fn codex_files(paths: &AgentPaths) -> Vec<PathBuf> {
+    codex_files_in(&paths.codex_home)
+}
+
+pub(crate) fn codex_files_in(home: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = ["sessions", "archived_sessions"]
         .iter()
-        .flat_map(|d| WalkDir::new(paths.codex_home.join(d)))
+        .flat_map(|d| WalkDir::new(home.join(d)))
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .filter(|e| {

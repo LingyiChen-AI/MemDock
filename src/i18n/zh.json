@@ -1153,7 +1153,8 @@
     },
     "newChatAgent": {
       "title": "新对话默认助手",
-      "desc": "应用于侧栏、对话页、快捷键和项目菜单的新对话，包括独立工作区。只安装了一个助手时自动选用，两个都安装且未设置时使用 Claude Code。",
+      "desc": "对话列表选中 Claude Code 或 Codex 时，新对话使用所选助手。选中「全部」时使用此默认值。只安装了一个助手时，「全部」会自动选用它。",
+      "notInstalled": "请先安装 {tool}，或切换到其他助手。",
       "noneInstalled": "请先在本机安装 Claude Code 或 Codex CLI。"
     },
     "newChatDir": {
@@ -1407,6 +1408,12 @@
   },
   "chat": {
     "catchUpTerminal": "接上终端的最新进度",
+    "writerBusy": {
+      "title": "已在另一个应用中打开",
+      "hint": "请先在那边关闭会话，再重试。也可以创建聊天分叉。",
+      "retry": "重试",
+      "fork": "创建聊天分叉"
+    },
     "usedElsewhere": "这个会话也在外部终端的 Claude Code 里使用中：在这里压缩、切换模型都不会影响那边，上下文显示的是最近一次请求（来自外部）。两边同时用会互相覆盖记录，建议只在一处继续。",
     "notices": {
       "commandOutput": "命令输出",

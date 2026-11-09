@@ -24,6 +24,8 @@ export interface StartOptions {
   permission: PermissionMode;
   /** Claude session id / Codex thread id to continue. */
   resume_id?: string | null;
+  /** Source thread for a separate Codex conversation. */
+  fork_from?: string;
   /** Claude: extra CLI args (already split). Codex: `key=value` config overrides. */
   extra_args?: string[];
   /** Sent right after the process starts. */

@@ -159,6 +159,7 @@ fn opts(permission: PermissionMode) -> StartOptions {
         effort: None,
         permission,
         resume_id: Some("sid".into()),
+        fork_from: None,
         extra_args: vec!["--add-dir".into(), "x".into()],
         prompt: None,
         prompt_images: vec![],

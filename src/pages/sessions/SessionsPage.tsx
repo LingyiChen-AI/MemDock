@@ -2,10 +2,10 @@ import * as React from "react";
 import { useTurnInterrupt } from "@/pages/chat/useTurnInterrupt";
 import { WorkspaceCodeContext, useWorkspaceCode } from "@/pages/chat/workspaceCodeLinks";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Eye, EyeOff, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Eye, EyeOff, Folder, GitBranch, Hash, Info, Loader2, LockKeyhole, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
+import { liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner, type StartOptions } from "@/api/live";
 import { envDetect } from "@/api/env";
 import { worktreeCreate } from "@/api/worktree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -51,7 +51,7 @@ import { agentSettings, isActive, loadChatPrefs, parseExtraArgs, rememberLast } 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { closeLive, ensureTranscript, getLiveState, selectListSlice, selectLive, shallowObjectEqual, startLive, useLiveConv, useLiveStore } from "@/pages/chat/liveStore";
 import { getConvUi, moveConvUi, newDraftKey, patchConvUi } from "@/pages/chat/convUiState";
-import { loadNewChatAgent, resolveNewChatAgent } from "@/pages/chat/newChatAgent";
+import { isChatAgentInstalled, loadNewChatAgent, resolveNewChatAgent } from "@/pages/chat/newChatAgent";
 import { resolveNewChatDir } from "@/pages/chat/newChatDir";
 import { ContextMeters } from "@/pages/chat/ContextMeter";
 import { convertSession, convertTargetDir, listSessions, renameSession, sessionPreview } from "@/api/sessions";
@@ -68,7 +68,7 @@ import { fmt } from "@/pages/memory/paths";
 import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
 import { LOAD_MORE_STEP, Timeline, TimelineFilterBar, type TimelineFilter } from "./Timeline";
-import { EMPTY_CONV } from "@/pages/chat/liveModel";
+import { EMPTY_CONV, isCodexWriterBusy } from "@/pages/chat/liveModel";
 import { filterSessions, formatTime, groupByProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
 
 type S = Messages["sessions"];
@@ -873,6 +873,8 @@ function ChatPane({
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = React.useState<TimelineFilter>("all");
   const [usedElsewhere, setUsedElsewhere] = React.useState(false);
+  const [blockedResume, setBlockedResume] = React.useState<StartOptions | null>(null);
+  const [recovering, setRecovering] = React.useState(false);
   // One key per conversation: its terminal, unsent text, scroll position and settings.
   const termKey = terminalKey(target);
   const [busyPty, setBusyPty] = React.useState<((choice: "close" | "show" | "cancel") => void) | null>(null);
@@ -980,6 +982,35 @@ function ChatPane({
     return false;
   };
 
+  const isActiveWriter = (error: unknown) =>
+    target.tool === "codex" && isCodexWriterBusy(errorMessage(error));
+
+  const recoverCodex = async (fork: boolean) => {
+    if (!blockedResume?.resume_id || recovering) return;
+    setRecovering(true);
+    setActionError(null);
+    try {
+      const opts = fork
+        ? { ...blockedResume, resume_id: null, fork_from: blockedResume.resume_id }
+        : blockedResume;
+      await startLive(opts, (info) => {
+        if (fork) {
+          const { text, images, settings } = getConvUi(termKey);
+          const to = info.native_id ? `codex:${info.native_id}` : LIVE_PREFIX + info.live_id;
+          patchConvUi(to, { text, images, settings });
+        }
+      });
+      setBlockedResume(null);
+      onRefresh();
+    } catch (error) {
+      if (fork || !isActiveWriter(error)) {
+        setActionError(fmt(c.actionFailed, { error: errorMessage(error) }));
+      }
+    } finally {
+      setRecovering(false);
+    }
+  };
+
   // Any message continues the conversation: through the running process, or by resuming it.
   // Returns false when the send was given up (the composer keeps the text).
   const send = async ({ text, images, permission, model, effort, args }: ComposerMessage): Promise<boolean | void> => {
@@ -1020,9 +1051,16 @@ function ChatPane({
       moveConvUi(termKey, to);
       migrateTerminal(termKey, to);
     };
+    const handleBlocked = (error: unknown) => {
+      if (!opts.resume_id || !isActiveWriter(error)) return false;
+      setActionError(null);
+      setBlockedResume({ ...opts, prompt: null, prompt_images: [] });
+      return true;
+    };
     try {
       await startLive(opts, carry);
     } catch (e) {
+      if (handleBlocked(e)) return false;
       const busy = parseBusy(e);
       if (busy?.kind !== "pty") throw e;
       // The terminal took the session after the check: same choice, then one retry.
@@ -1030,6 +1068,7 @@ function ChatPane({
       try {
         await startLive(opts, carry);
       } catch (e2) {
+        if (handleBlocked(e2)) return false;
         throw parseBusy(e2) ? new Error(c.busyPty) : e2;
       }
     }
@@ -1290,6 +1329,22 @@ function ChatPane({
                     ) : null}
                   </p>
                 ) : null}
+                {blockedResume ? (
+                  <div role="status" className="mx-4 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <LockKeyhole aria-hidden="true" className="size-4 shrink-0" />
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-semibold">{c.writerBusy.title}</p>
+                        <p className="text-xs text-muted-foreground">{c.writerBusy.hint}</p>
+                      </div>
+                    </div>
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                      {recovering ? <Loader2 aria-label={c.loading} className="size-4 animate-spin motion-reduce:animate-none" /> : null}
+                      <Button type="button" variant="ghost" size="sm" disabled={recovering} onClick={() => void recoverCodex(false)}>{c.writerBusy.retry}</Button>
+                      <Button type="button" variant="ghost" size="sm" disabled={recovering} onClick={() => void recoverCodex(true)}>{c.writerBusy.fork}</Button>
+                    </div>
+                  </div>
+                ) : null}
                 <ChatComposer
                   key={termKey}
                   stateKey={termKey}
@@ -1310,7 +1365,7 @@ function ChatPane({
                   }
                   agent={target.tool}
                   cwd={target.cwd}
-                  disabled={wtDeleted || creatingWt}
+                  disabled={wtDeleted || creatingWt || !!blockedResume}
                   placeholder={wtDeleted ? w.deletedHint : running ? c.inputQueued : undefined}
                   hint={wtDeleted ? w.deletedHint : creatingWt ? w.creating : undefined}
                   draft={
@@ -1625,7 +1680,12 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     const dir = cwd ?? (await resolveNewChatDir(selected?.cwd ?? selectedLive?.cwd ?? null, p.cwd));
     let agent: LiveAgent | null;
     try {
-      agent = resolveNewChatAgent(await envDetect(), loadNewChatAgent());
+      const env = await envDetect();
+      if (tool !== "all" && !isChatAgentInstalled(env, tool)) {
+        setPageError(fmt(t.settings.newChatAgent.notInstalled, { tool: s.tools[tool] }));
+        return;
+      }
+      agent = tool === "all" ? resolveNewChatAgent(env, loadNewChatAgent()) : tool;
     } catch (e) {
       setPageError(fmt(c.actionFailed, { error: errorMessage(e) }));
       return;

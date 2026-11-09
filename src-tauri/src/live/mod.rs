@@ -72,6 +72,9 @@ pub struct StartOptions {
     /// (`thread/resume`). `None` starts a new conversation.
     #[serde(default)]
     pub resume_id: Option<String>,
+    /// Create a separate Codex thread from this saved conversation.
+    #[serde(default)]
+    pub fork_from: Option<String>,
     /// Advanced, user-typed. Claude: extra CLI arguments appended as-is
     /// (already split into words). Codex: `key=value` config overrides, each
     /// passed as `codex app-server -c key=value`.
@@ -536,6 +539,44 @@ impl LiveManager {
         self.info(&live_id)
     }
 
+    fn start_codex_thread(&self, mut opts: StartOptions) -> Result<LiveSessionInfo, String> {
+        let prompt = opts.prompt.take().unwrap_or_default();
+        let images = std::mem::take(&mut opts.prompt_images);
+        let info = self.start(opts)?;
+        let id = &info.live_id;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let result = (|| {
+            let session = self.shared.get(id).ok_or("会话不存在")?;
+            loop {
+                {
+                    let entry = session.entry.lock().unwrap();
+                    if entry.info.state == LiveState::Exited {
+                        return Err(entry.events.iter().rev().find_map(|item| match &item.event {
+                            LiveEvent::Error { message, fatal: true } => Some(message.clone()),
+                            _ => None,
+                        }).unwrap_or_else(|| "Codex 会话已结束".into()));
+                    }
+                    if entry.info.state != LiveState::Starting {
+                        break;
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err("等待 Codex 打开会话超时".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = self.close(id);
+            return Err(error);
+        }
+        if !prompt.trim().is_empty() || !images.is_empty() {
+            self.send(id, &prompt, &images)?;
+        }
+        self.info(id)
+    }
+
     fn info(&self, live_id: &str) -> Result<LiveSessionInfo, String> {
         let s = self.shared.get(live_id).ok_or("会话不存在")?;
         let info = s.entry.lock().unwrap().info.clone();
@@ -877,7 +918,16 @@ fn enforce_cap(e: &mut Entry, limits: &Limits) {
 #[tauri::command]
 pub async fn live_start(mgr: tauri::State<'_, Arc<LiveManager>>, opts: StartOptions) -> Result<LiveSessionInfo, String> {
     let mgr = mgr.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || mgr.start(opts)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        if opts.fork_from.is_some() && (opts.agent != Agent::Codex || opts.resume_id.is_some()) {
+            return Err("分叉只能从一个 Codex 会话创建".into());
+        }
+        if opts.agent == Agent::Codex && (opts.resume_id.is_some() || opts.fork_from.is_some()) {
+            mgr.start_codex_thread(opts)
+        } else {
+            mgr.start(opts)
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

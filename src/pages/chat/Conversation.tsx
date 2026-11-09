@@ -13,7 +13,7 @@ import type { Messages } from "@/i18n";
 import { fmt } from "@/pages/memory/paths";
 import { CHIP_FOLD, IoBlock, KIND_ICON, KIND_TONE, Thumbs } from "@/pages/sessions/Timeline";
 import { getConvUi, patchConvUi } from "./convUiState";
-import { isPendingApproval, pendingApprovals, toConvBlocks, type ConvBlock, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
+import { isCodexWriterBusy, isPendingApproval, pendingApprovals, toConvBlocks, type ConvBlock, type ConvState, type LiveApproval, type LiveToolCall, type TurnSegment } from "./liveModel";
 
 type C = Messages["chat"];
 
@@ -143,6 +143,7 @@ export function Conversation({
                 </ChatRow>
               );
             case "fatal":
+              if (agent === "codex" && isCodexWriterBusy(b.message)) return null;
               return (
                 <li key={b.key} role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/8 px-3.5 py-2.5 text-sm text-destructive">
                   <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />

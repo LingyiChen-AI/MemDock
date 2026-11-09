@@ -114,12 +114,13 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
     steps:
+      - uses: actions/checkout@v4
       - name: Validate and publish signed release
         run: |
           gh release download "$GITHUB_REF_NAME" --pattern latest.json
           prefix="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/"
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > assets.json
-          gh release view "$GITHUB_REF_NAME" --json body --jq .body > release-notes.md
+          cp "docs/releases/$GITHUB_REF_NAME.md" release-notes.md
           jq --slurpfile assets assets.json --rawfile notes release-notes.md --arg repo "$GITHUB_REPOSITORY" --arg prefix "$prefix" '
             .notes = ($notes | rtrimstr("\n")) |
             .platforms |= with_entries(

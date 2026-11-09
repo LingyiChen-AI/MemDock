@@ -221,6 +221,10 @@ pub struct SessionSummary {
     pub project_name: String,
     pub title: Option<String>,
     pub first_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) forked_from_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) forked_at: Option<i64>,
     /// Starts from an automatic summary of an earlier conversation.
     pub continued: bool,
     pub message_count: usize,
@@ -320,6 +324,8 @@ pub fn summarize(conv: &Conversation, path: &Path) -> SessionSummary {
         project_name: project_name(&conv.cwd),
         title: conv.title.clone(),
         first_prompt,
+        forked_from_id: None,
+        forked_at: None,
         continued,
         message_count,
         tool_calls,

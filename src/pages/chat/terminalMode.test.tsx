@@ -302,14 +302,13 @@ describe("new chats and terminals", () => {
     (liveStart as Mock).mockReset();
   });
 
-  it("新对话 uses the configured assistant regardless of the list filter and last used assistant", async () => {
+  it("新对话 uses the configured assistant when the list filter is All", async () => {
     (homeDir as unknown as { mockResolvedValueOnce: (v: string) => void }).mockResolvedValueOnce("/work/demo"); // no conversation open: new chats start in the home folder
     saveNewChatAgent("codex");
     saveChatPrefs({ ...DEFAULT_PREFS, agent: "claude", cwd: "/work/demo", effort: { claude: "", codex: "high" }, args: { claude: "", codex: "a=1 b=2" } });
     (liveStart as Mock).mockResolvedValue({ ...liveInfo("starting"), live_id: "L9", agent: "codex", native_id: null });
     renderApp(<SessionsPage />);
     await screen.findByRole("region", { name: "demo" });
-    await userEvent.click(screen.getByRole("radio", { name: "Claude Code" }));
     await userEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "新对话" }));
     const status = await screen.findByLabelText("当前设置");
     expect(within(status).getByText("Codex")).toBeInTheDocument();

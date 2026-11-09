@@ -248,6 +248,10 @@ export function applyAll(state: ConvState, envs: LiveEnvelope[]): ConvState {
 }
 
 /** Approval requests still waiting for a decision. */
+export function isCodexWriterBusy(message: string): boolean {
+  return /already has an active writer/i.test(message);
+}
+
 export function isPendingApproval(approval: LiveApproval): boolean {
   return approval.decision === null && !approval.expired;
 }

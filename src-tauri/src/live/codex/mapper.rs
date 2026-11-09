@@ -52,6 +52,7 @@ pub struct Mapper {
     model: Option<String>,
     permission: PermissionMode,
     resume_id: Option<String>,
+    fork_from: Option<String>,
     version: String,
     next_id: u64,
     pending: HashMap<u64, Pending>,
@@ -203,6 +204,7 @@ impl Mapper {
             model: opts.model.clone().filter(|m| !m.trim().is_empty()),
             permission: opts.permission,
             resume_id: opts.resume_id.clone().filter(|r| !r.trim().is_empty()),
+            fork_from: opts.fork_from.clone(),
             version: version.to_string(),
             next_id: 0,
             pending: HashMap::new(),
@@ -253,6 +255,11 @@ impl Mapper {
         p.insert("sandbox".into(), json!(sandbox));
         if let Some(m) = &self.model {
             p.insert("model".into(), json!(m));
+        }
+        if let Some(id) = &self.fork_from {
+            p.insert("threadId".into(), json!(id));
+            p.insert("excludeTurns".into(), json!(true));
+            return self.request(Pending::Thread, "thread/fork", Value::Object(p));
         }
         match self.resume_id.clone() {
             Some(id) => {
@@ -391,7 +398,7 @@ impl Mapper {
             Pending::Thread => {
                 let tid = result.get("thread").map(|t| s(t, "id")).unwrap_or("");
                 if let Some(e) = error.or_else(|| tid.is_empty().then_some(result)) {
-                    let what = if self.resume_id.is_some() { "恢复" } else { "创建" };
+                    let what = if self.fork_from.is_some() { "分叉" } else if self.resume_id.is_some() { "恢复" } else { "创建" };
                     let detail = if e.is_null() { "未返回会话 id".to_string() } else { s(e, "message").to_string() };
                     st.events.push(LiveEvent::Error { message: format!("Codex {what}会话失败：{detail}"), fatal: true });
                     st.kill = true;

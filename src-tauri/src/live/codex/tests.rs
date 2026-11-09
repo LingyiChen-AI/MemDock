@@ -25,6 +25,7 @@ fn opts(permission: PermissionMode, resume: Option<&str>) -> StartOptions {
         effort: None,
         permission,
         resume_id: resume.map(str::to_string),
+        fork_from: None,
         extra_args: vec![],
         prompt: None,
         prompt_images: vec![],
@@ -96,6 +97,20 @@ fn resume_uses_thread_resume() {
     assert_eq!(p["params"]["model"], "gpt-5");
     assert_eq!(p["params"]["approvalPolicy"], "never");
     assert_eq!(p["params"]["sandbox"], "danger-full-access");
+}
+
+#[test]
+fn fork_creates_a_distinct_thread() {
+    let mut o = opts(PermissionMode::Ask, None);
+    o.fork_from = Some("OLD".into());
+    let mut m = Mapper::new(&o, "0.1.0");
+    m.begin();
+    let request = line(&mut m, json!({"id": 1, "result": {}}));
+    assert_eq!(request.writes[1]["method"], "thread/fork");
+    assert_eq!(request.writes[1]["params"]["threadId"], "OLD");
+    let started = line(&mut m, json!({"id": 2, "result": {"thread": {"id": "NEW"}}}));
+    assert!(matches!(&started.events[..], [LiveEvent::Started { native_id, .. }] if native_id == "NEW"));
+    assert_eq!(m.send("continue", &[], None)[0]["params"]["threadId"], "NEW");
 }
 
 #[test]

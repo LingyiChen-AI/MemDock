@@ -23,7 +23,7 @@ const PREVIEW_CHARS: usize = 1200;
 const TIMELINE_IO_CHARS: usize = 4000;
 
 type CacheEntry = (u64, i64, Option<SessionSummary>);
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 4;
 
 /// Parsed previews kept for quick re-opening (keyed by path, checked by size + mtime).
 const PREVIEW_CACHE: usize = 6;
@@ -88,23 +88,29 @@ fn save_index(data_dir: &Path, cache: &HashMap<PathBuf, CacheEntry>) {
 }
 
 fn summarize_indexed(tool: Tool, path: &Path) -> Option<SessionSummary> {
-    if tool == Tool::Codex && codex_subagent(path) {
+    let meta = if tool == Tool::Codex { codex_session_meta(path) } else { None };
+    if meta.as_ref().and_then(|meta| meta.get("source")).is_some_and(|source| {
+        source.as_str() == Some("subagent") || source.get("subagent").is_some()
+    }) {
         return None;
     }
-    Some(convert::summarize(&convert::parse(tool, path), path))
+    let mut summary = convert::summarize(&convert::parse(tool, path), path);
+    if let Some(meta) = meta {
+        summary.forked_from_id = meta.get("forked_from_id").and_then(serde_json::Value::as_str).map(str::to_owned);
+        if summary.forked_from_id.is_some() {
+            summary.forked_at = meta.get("timestamp").and_then(serde_json::Value::as_str)
+                .and_then(crate::extract::sessions::parse_ts);
+        }
+    }
+    Some(summary)
 }
 
-fn codex_subagent(path: &Path) -> bool {
-    let Ok(reader) = crate::projects::open_jsonl(path) else { return false };
+fn codex_session_meta(path: &Path) -> Option<serde_json::Value> {
+    let reader = crate::projects::open_jsonl(path).ok()?;
     let mut header = Vec::new();
-    if reader.take(1024 * 1024).read_until(b'\n', &mut header).is_err() {
-        return false;
-    }
-    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&header) else { return false };
-    record["type"] == "session_meta"
-        && record.pointer("/payload/source").is_some_and(|source| {
-            source.as_str() == Some("subagent") || source.get("subagent").is_some()
-        })
+    reader.take(1024 * 1024).read_until(b'\n', &mut header).ok()?;
+    let mut record = serde_json::from_slice::<serde_json::Value>(&header).ok()?;
+    (record["type"] == "session_meta").then(|| record["payload"].take())
 }
 
 /// Titles set in MemDock (`tool:id` -> title); they win over the tools' own names.
@@ -223,7 +229,31 @@ pub fn list_sessions_impl(
     });
     let mut codex_ids = HashSet::new();
     out.retain(|session| session.tool != Tool::Codex || codex_ids.insert(session.id.clone()));
+    apply_codex_fork_titles(&mut out, &titles);
     out
+}
+
+fn apply_codex_fork_titles(sessions: &mut [SessionSummary], custom_titles: &HashMap<String, String>) {
+    let mut names: HashMap<String, String> = sessions.iter().filter(|s| s.tool == Tool::Codex)
+        .map(|s| (s.id.clone(), s.title.clone().unwrap_or_else(|| s.first_prompt.clone())))
+        .collect();
+    let mut forks: Vec<_> = sessions.iter_mut().filter(|s| s.forked_from_id.is_some()).collect();
+    // Fork creation order is independent of turns and updates to either conversation.
+    forks.sort_by(|a, b| a.forked_at.cmp(&b.forked_at).then_with(|| a.id.cmp(&b.id)));
+    let mut counts = HashMap::new();
+    for fork in forks {
+        let parent_id = fork.forked_from_id.as_ref().unwrap();
+        let count = counts.entry(parent_id.clone()).or_insert(0);
+        *count += 1;
+        if !custom_titles.contains_key(&title_key(Tool::Codex, &fork.id)) {
+            let base = names.get(parent_id).map(String::as_str).unwrap_or(&fork.first_prompt);
+            let suffix = format!("（{count}）");
+            let base: String = base.chars().take(200 - suffix.chars().count()).collect();
+            let title = format!("{base}{suffix}");
+            names.insert(fork.id.clone(), title.clone());
+            fork.title = Some(title);
+        }
+    }
 }
 
 /// Canonical path of a session file of `tool`, refusing anything outside the

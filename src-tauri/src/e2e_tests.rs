@@ -182,6 +182,7 @@ fn opts(agent: Agent, cwd: &Path, prompt: &str) -> StartOptions {
         effort: None,
         permission: PermissionMode::Bypass,
         resume_id: None,
+        fork_from: None,
         extra_args: vec![],
         prompt: Some(prompt.to_string()),
         prompt_images: vec![],

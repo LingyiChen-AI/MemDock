@@ -8,6 +8,10 @@ import type { AppUpdate } from "./useAppUpdate";
 export function AppUpdateSection({ state }: { state: AppUpdate }) {
   const { t: { appUpdate: t } } = useI18n();
   const { enabled, version, update, status, progress, blocked, restartFailed } = state;
+  const notes = update?.body
+    ?.replace(/^\s*<!-- Release notes generated using configuration[^\r\n]*-->[\s\S]*$/im, "")
+    .replace(/^\s*\*\*Full Changelog\*\*:[^\r\n]*$/gim, "")
+    .trim();
   const busy = status === "checking" || status === "downloading" || status === "installing";
   const installed = status === "installed";
   const transferring = status === "downloading" || status === "installing";
@@ -68,11 +72,11 @@ export function AppUpdateSection({ state }: { state: AppUpdate }) {
         {update && blocked && !busy && <p>{t.blocked}</p>}
         {restartFailed && <p>{t.restartError}</p>}
       </div>
-      {update?.body && !installed && (
+      {notes && !installed && (
         <details className="rounded-md border border-border px-3 py-2 text-xs">
           <summary className="cursor-pointer font-medium">{t.notes}</summary>
           <div className="mt-2 max-h-72 overflow-auto pr-2 text-muted-foreground">
-            <ChatMarkdown text={update.body} />
+            <ChatMarkdown text={notes} />
           </div>
         </details>
       )}

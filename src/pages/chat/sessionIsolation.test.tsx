@@ -279,6 +279,28 @@ describe("GUI / terminal handoff", () => {
     expect(ptyClose).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])("keeps the draft when Codex is locked and recovers it (fork=%s)", async (fork) => {
+    (listSessions as Mock).mockResolvedValue([{ ...session, tool: "codex" }]);
+    (liveStart as Mock)
+      .mockRejectedValueOnce("Codex: thread c1 already has an active writer")
+      .mockResolvedValueOnce(liveInfo({ agent: "codex", live_id: "L2", native_id: fork ? "new-thread" : "c1" }));
+    await openSession();
+    const input = await screen.findByRole("textbox", { name: "消息" });
+    await userEvent.type(input, "keep this draft{Enter}");
+    expect(await screen.findByText("已在另一个应用中打开")).toBeInTheDocument();
+    expect(input).toHaveValue("keep this draft");
+    expect(input).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: fork ? "创建聊天分叉" : "重试" }));
+    expect(liveStart).toHaveBeenLastCalledWith(expect.objectContaining(
+      fork ? { resume_id: null, fork_from: "c1", prompt: null } : { resume_id: "c1", prompt: null },
+    ));
+    await waitFor(() => {
+      const draft = screen.getByRole("textbox", { name: "消息" });
+      expect(draft).toBeEnabled();
+      expect(draft).toHaveValue("keep this draft");
+    });
+  });
+
   it("live_start refused with busy_pty (terminal opened after the check): same choice, then one retry", async () => {
     (liveStart as Mock).mockRejectedValueOnce({ code: "busy", message: "busy_pty:P8" }).mockResolvedValueOnce(liveInfo({ live_id: "L2", state: "starting" }));
     await openSession();

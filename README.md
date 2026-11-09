@@ -125,7 +125,7 @@ pnpm tauri build      # 打包
 
 - `main` 的 CI 运行测试并构建 macOS 和 Windows 安装包。安装包可从该次 Actions 运行的 Artifacts 下载。
 - 正式发布时同步更新 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json` 的应用版本，再从已通过 CI 的 `main` 提交推送同版本的 `vX.Y.Z` 标签。Desktop Release 会打包 macOS（Apple Silicon / Intel）及 Windows（x64），确认更新清单包含三个平台的签名后发布 GitHub Release。
-- 打 tag 前，在 `docs/releases/vX.Y.Z.md` 写好「更新与改进」和「问题修复」，按用户能看到的变化来写。GitHub 会附上已合并的 PR（如有）和完整变更链接，客户端显示同一份 Markdown。
+- 打 tag 前，在 `docs/releases/vX.Y.Z.md` 写好「更新与改进」和「问题修复」，按用户能看到的变化来写。GitHub 会附上已合并的 PR（如有）和完整变更链接，客户端只显示手写的更新说明。
 - 首次发布、升级 Rust 工具链或较大范围调整 Rust 依赖后，可在 Actions 的 Desktop Release 中选择 `main` 并运行一次工作流，提前编译三种平台并保存缓存。等预热结束再推 tag，正式发布会尝试复用缓存。
 - 发布工作流使用 Actions Secrets 中的 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。请长期保存这对签名凭据。客户端使用配置中的公钥验签，下载 GitHub Release 不需要登录。GitHub 同步的设备登录使用公开的 OAuth Client ID，可在自行打包时通过 `MEMDOCK_GITHUB_CLIENT_ID` 覆盖。
 - 安装版客户端启动后及运行期间每 30 分钟检查一次更新。也可在「环境与设置 → 应用更新」手动检查并安装。已有版本首次接入时需要手动安装支持更新的版本。

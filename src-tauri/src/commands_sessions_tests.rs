@@ -389,6 +389,51 @@ fn session_list_hides_codex_subagents_but_keeps_explicit_user_forks() {
 }
 
 #[test]
+fn paginated_codex_fork_inherits_only_the_saved_parent_prefix() {
+    let e = env();
+    let parent_id = "11111111-2222-3333-4444-555555555555";
+    let fork_id = "11111111-2222-3333-4444-555555555557";
+    let fork = e.codex_src.with_file_name(format!("rollout-2026-11-02T08-00-02-{fork_id}.jsonl"));
+    let original = convert::parse(Tool::Codex, &e.codex_src);
+    let offset = fs::metadata(&e.codex_src).unwrap().len();
+    let mut lines = codex_sample();
+    lines.push(json!({
+        "timestamp": "2026-11-03T08:00:00Z", "type": "response_item",
+        "payload": {"type":"message","role":"user","content":[{"type":"input_text","text":"Parent-only follow-up"}]}
+    }));
+    let archived = e.paths.codex_home.join("archived_sessions").join(e.codex_src.file_name().unwrap());
+    fs::create_dir_all(archived.parent().unwrap()).unwrap();
+    write_lines(&archived, &lines);
+    fs::remove_file(&e.codex_src).unwrap();
+
+    let mut meta = lines[0].clone();
+    meta["payload"]["id"] = json!(fork_id);
+    meta["payload"]["forked_from_id"] = json!(parent_id);
+    meta["payload"]["history_base"] = json!({"thread_id": parent_id, "end_byte_offset": offset});
+    meta["payload"]["timestamp"] = json!("2026-11-02T08:00:02Z");
+    write_lines(&fork, &[meta.clone()]);
+    let second_id = "11111111-2222-3333-4444-555555555558";
+    let second = fork.with_file_name(format!("rollout-2026-11-02T08-00-03-{second_id}.jsonl"));
+    meta["payload"]["id"] = json!(second_id);
+    meta["payload"]["timestamp"] = json!("2026-11-02T08:00:03Z");
+    write_lines(&second, &[meta]);
+    codex::append_session_index(&e.paths.codex_home, fork_id, "Native fork name").unwrap();
+
+    let parsed = convert::parse(Tool::Codex, &fork);
+    assert_eq!(parsed.id, fork_id);
+    assert_eq!(parsed.items, original.items);
+    let cache = Mutex::new(load_index(&e.data));
+    let list = list_sessions_impl(&e.paths, &e.data, &cache);
+    let first = list.iter().find(|session| session.id == fork_id).unwrap();
+    let second = list.iter().find(|session| session.id == second_id).unwrap();
+    assert!(!first.first_prompt.is_empty());
+    assert!(first.title.as_deref().unwrap().ends_with("（1）"));
+    assert!(second.title.as_deref().unwrap().ends_with("（2）"));
+    let reloaded = Mutex::new(load_index(&e.data));
+    assert_eq!(list_sessions_impl(&e.paths, &e.data, &reloaded), list);
+}
+
+#[test]
 fn session_list_keeps_the_latest_rollout_for_a_codex_thread() {
     let e = env();
     let latest = e.codex_src.with_file_name(

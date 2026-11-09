@@ -124,6 +124,30 @@ describe("SessionsPage", () => {
     expect(screen.getByText("没有匹配的会话")).toBeInTheDocument();
   });
 
+  it("sorts projects by name and remembers hidden projects across remounts", async () => {
+    const key = "memdock.sessions.hiddenProjects";
+    localStorage.removeItem(key);
+    vi.mocked(listSessions).mockResolvedValue([{ ...claudeSession, updated_at: 1_700_001_000_000 }, codexSession]);
+    try {
+      const first = renderApp(<SessionsPage />);
+      await screen.findByRole("region", { name: "api" });
+      expect(screen.getAllByRole("region").map((region) => region.getAttribute("aria-label"))).toEqual(["api", "demo"]);
+      await userEvent.click(screen.getByRole("button", { name: "隐藏项目：demo" }));
+      expect(screen.queryByRole("region", { name: "demo" })).toBeNull();
+      first.unmount();
+
+      renderApp(<SessionsPage />);
+      await screen.findByRole("region", { name: "api" });
+      expect(screen.queryByRole("region", { name: "demo" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "已隐藏项目" }));
+      await userEvent.click(screen.getByRole("button", { name: "显示项目：demo" }));
+      await userEvent.click(screen.getByRole("button", { name: "已隐藏项目" }));
+      expect(screen.getByRole("region", { name: "demo" })).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
   it("hides an archived conversation across remounts and restores it from the archive", async () => {
     const key = "memdock.sessions.archived";
     localStorage.removeItem(key);

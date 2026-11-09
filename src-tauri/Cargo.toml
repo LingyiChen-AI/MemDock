@@ -1,6 +1,6 @@
 [package]
 name = "memdock"
-version = "0.1.6"
+version = "0.1.7"
 description = "Memdock: manage Claude Code and Codex memories"
 authors = ["Memdock contributors"]
 edition = "2024"

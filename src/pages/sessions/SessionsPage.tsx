@@ -2,7 +2,7 @@ import * as React from "react";
 import { useTurnInterrupt } from "@/pages/chat/useTurnInterrupt";
 import { WorkspaceCodeContext, useWorkspaceCode } from "@/pages/chat/workspaceCodeLinks";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Eye, EyeOff, Folder, GitBranch, Hash, Info, Loader2, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner } from "@/api/live";
@@ -296,8 +296,15 @@ const COLLAPSED_PROJECTS_KEY = "memdock.sessions.collapsedProjects";
 
 /** Project groups the user folded in the session list (by project id), remembered across restarts. */
 export function loadCollapsedProjects(): Set<string> {
+  return loadProjectIds(COLLAPSED_PROJECTS_KEY);
+}
+
+const HIDDEN_PROJECTS_KEY = "memdock.sessions.hiddenProjects";
+const projectNameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function loadProjectIds(key: string): Set<string> {
   try {
-    const v = JSON.parse(localStorage.getItem(COLLAPSED_PROJECTS_KEY) ?? "[]");
+    const v = JSON.parse(localStorage.getItem(key) ?? "[]");
     return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   } catch {
     return new Set();
@@ -1368,6 +1375,20 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const [query, setQuery] = React.useState("");
   const [archived, setArchived] = React.useState(loadArchivedSessions);
   const [showArchived, setShowArchived] = React.useState(false);
+  const [showHidden, setShowHidden] = React.useState(false);
+  const [hiddenProjects, setHiddenProjects] = React.useState(() => loadProjectIds(HIDDEN_PROJECTS_KEY));
+
+  const toggleHiddenProject = (key: string) => {
+    const next = new Set(hiddenProjects);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    try {
+      localStorage.setItem(HIDDEN_PROJECTS_KEY, JSON.stringify([...next]));
+      setHiddenProjects(next);
+    } catch {
+      setPageError(s.hiddenSaveFailed);
+    }
+  };
   const [collapsed, setCollapsed] = React.useState<Set<string>>(loadCollapsedProjects);
   const toggleProject = React.useCallback((id: string) => {
     setCollapsed((prev) => {
@@ -1531,10 +1552,9 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     }
   }, [selectedPath, selectedUpdated]);
 
-  const archivedCount = (sessions ?? []).filter((x) => archived.has(archiveKey(x))).length;
   const visible = React.useMemo(
-    () => filterSessions((sessions ?? []).filter((x) => archived.has(archiveKey(x)) === showArchived), tool, query),
-    [sessions, tool, query, archived, showArchived],
+    () => filterSessions((sessions ?? []).filter((x) => showHidden || archived.has(archiveKey(x)) === showArchived), tool, query),
+    [sessions, tool, query, archived, showArchived, showHidden],
   );
 
   const toggleArchive = (session: SessionSummary) => {
@@ -1559,7 +1579,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     }
     return m;
   }, [sessions, wtState]);
-  const groups = React.useMemo(() => {
+  const matchingGroups = React.useMemo(() => {
     if (wtLinks.size === 0) return groupByProject(visible);
     const all = sessions ?? [];
     const regrouped = visible.map((x) => {
@@ -1573,6 +1593,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     });
     return groupByProject(regrouped);
   }, [visible, sessions, wtLinks]);
+  const projectKey = (g: { cwd: string; projectId: string }) => g.cwd ? normPath(g.cwd) : g.projectId;
+  const groups = matchingGroups
+    .filter((g) => hiddenProjects.has(projectKey(g)) === showHidden)
+    .sort((a, b) => projectNameOrder.compare(a.name, b.name) || a.projectId.localeCompare(b.projectId));
+  const visibleCount = groups.reduce((count, g) => count + g.sessions.length, 0);
+  const isHiddenPath = (path: string) => hiddenProjects.has(normPath(worktreeOf(wtState, path)?.repoRoot ?? path));
+  const archivedCount = (sessions ?? []).filter((x) => archived.has(archiveKey(x)) && !hiddenProjects.has(x.cwd ? normPath(wtLinks.get(sessionKey(x))?.repoRoot ?? x.cwd) : x.project_id)).length;
   // Folders the composer's /cwd offers: every project, most recent first.
   const projects: ProjectChoice[] = React.useMemo(() => {
     const out: ProjectChoice[] = [];
@@ -1582,9 +1609,9 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     return out;
   }, [sessions]);
   // Shell terminals sit at the top of their folder's group; the rest in a "terminals" group.
-  const looseShells = shells.filter((x) => !groups.some((g) => samePath(g.cwd, x.cwd)));
+  const looseShells = shells.filter((x) => !isHiddenPath(x.cwd) && !groups.some((g) => samePath(g.cwd, x.cwd)));
   // New chats not on the list yet also sit at the top of their folder's group.
-  const looseLive = liveOnly.filter((x) => !groups.some((g) => samePath(g.cwd, x.cwd)));
+  const looseLive = liveOnly.filter((x) => !isHiddenPath(x.cwd) && !groups.some((g) => samePath(g.cwd, x.cwd)));
 
   const resetPane = () => {
     setResult(null);
@@ -1807,33 +1834,52 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
             </div>
             <div className="flex items-center justify-between gap-2">
               <ToolFilterBar value={tool} onChange={setTool} s={s} />
-              {sessions ? <span className="text-xs text-muted-foreground">{fmt(s.count, { n: visible.length })}</span> : null}
+              {sessions ? <span className="text-xs text-muted-foreground">{fmt(s.count, { n: visibleCount })}</span> : null}
             </div>
-            <Button
-              type="button"
-              variant={showArchived ? "secondary" : "ghost"}
-              size="sm"
-              aria-pressed={showArchived}
-              className="h-7 justify-start"
-              onClick={() => setShowArchived((value) => !value)}
-            >
-              <Archive aria-hidden="true" />
-              {s.archived}
-              <span className="text-muted-foreground">{archivedCount}</span>
-            </Button>
+            <div className="flex flex-wrap items-center gap-1">
+              <Button
+                type="button"
+                variant={showArchived ? "secondary" : "ghost"}
+                size="sm"
+                aria-pressed={showArchived}
+                className="h-7 justify-start"
+                onClick={() => {
+                  setShowArchived(!showArchived);
+                  setShowHidden(false);
+                }}
+              >
+                <Archive aria-hidden="true" />
+                {s.archived}
+                <span className="text-muted-foreground">{archivedCount}</span>
+              </Button>
+              <Button
+                type="button"
+                variant={showHidden ? "secondary" : "ghost"}
+                size="sm"
+                aria-pressed={showHidden}
+                className="h-7 justify-start"
+                onClick={() => {
+                  setShowHidden(!showHidden);
+                  setShowArchived(false);
+                }}
+              >
+                <EyeOff aria-hidden="true" />
+                {s.hiddenProjects}
+              </Button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
-            {!showArchived && looseShells.length > 0 ? (
+            {!showArchived && !showHidden && looseShells.length > 0 ? (
               <section aria-label={c.terminals} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.terminals}</h2>
                 <ul className="flex flex-col gap-0.5">{looseShells.map(shellRow)}</ul>
               </section>
             ) : null}
-            {!showArchived && (looseLive.length > 0 || draftTerms.length > 0) ? (
+            {!showArchived && !showHidden && (looseLive.length > 0 || draftTerms.some((x) => !isHiddenPath(x.opts.cwd))) ? (
               <section aria-label={c.newChats} className="mb-2">
                 <h2 className="px-2.5 pt-2 pb-1 text-xs font-semibold">{c.newChats}</h2>
                 <ul className="flex flex-col gap-0.5">
-                  {draftTerms.map((x) => (
+                  {draftTerms.filter((x) => !isHiddenPath(x.opts.cwd)).map((x) => (
                     <li key={x.key}>
                       <ShellRow
                         shell={{ key: x.key, cwd: x.opts.cwd, created_at: 0 }}
@@ -1857,6 +1903,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
               </p>
             ) : sessions === null ? (
               <SessionListSkeleton label={s.loading} />
+            ) : showHidden && hiddenProjects.size === 0 ? (
+              <p className="p-2 text-sm text-muted-foreground">{s.hiddenEmpty}</p>
             ) : showArchived && archivedCount === 0 ? (
               <p className="p-2 text-sm text-muted-foreground">{s.archiveEmpty}</p>
             ) : sessions.length === 0 ? (
@@ -1893,7 +1941,19 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                         <span className="shrink-0 font-normal text-muted-foreground">{g.sessions.length}</span>
                       </button>
                     </h2>
-                    {!showArchived && g.cwd ? (
+                    <button
+                      type="button"
+                      aria-label={fmt(showHidden ? s.restoreProject : s.hideProject, { name: g.name })}
+                      title={showHidden ? s.restoreProjectAction : s.hideProjectAction}
+                      onClick={() => toggleHiddenProject(projectKey(g))}
+                      className={cn(
+                        "grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                        !showHidden && "opacity-0 group-hover/project:opacity-100 focus-visible:opacity-100",
+                      )}
+                    >
+                      {showHidden ? <Eye aria-hidden="true" className="size-3.5" /> : <EyeOff aria-hidden="true" className="size-3.5" />}
+                    </button>
+                    {!showArchived && !showHidden && g.cwd ? (
                       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 motion-reduce:transition-none">
                         <ProjectAddMenu
                           name={g.name}
@@ -1907,8 +1967,8 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                     ) : null}
                   </div>
                   <ul id={listId} hidden={!open} className="ml-[13px] flex flex-col gap-0.5 border-l border-border pl-1.5">
-                    {!showArchived && shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
-                    {!showArchived && liveOnly.filter((x) => samePath(x.cwd, g.cwd)).map(liveRow)}
+                    {!showArchived && !showHidden && shells.filter((x) => samePath(x.cwd, g.cwd)).map(shellRow)}
+                    {!showArchived && !showHidden && liveOnly.filter((x) => samePath(x.cwd, g.cwd)).map(liveRow)}
                     {g.sessions.map((x) => (
                       <li key={sessionKey(x)} className="group/session flex items-start gap-0.5">
                         <div className="min-w-0 flex-1">
@@ -1925,7 +1985,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                           c={c}
                         />
                         </div>
-                        <button
+                        {!showHidden ? <button
                           type="button"
                           aria-label={fmt(showArchived ? s.restoreSession : s.archiveSession, { title: x.title?.trim() || x.first_prompt || s.untitled })}
                           title={showArchived ? s.restoreAction : s.archiveAction}
@@ -1936,7 +1996,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                           onClick={() => toggleArchive(x)}
                         >
                           {showArchived ? <ArchiveRestore aria-hidden="true" className="size-3.5" /> : <Archive aria-hidden="true" className="size-3.5" />}
-                        </button>
+                        </button> : null}
                       </li>
                     ))}
                   </ul>

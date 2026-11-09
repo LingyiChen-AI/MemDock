@@ -2,7 +2,7 @@ import * as React from "react";
 import { useTurnInterrupt } from "@/pages/chat/useTurnInterrupt";
 import { WorkspaceCodeContext, useWorkspaceCode } from "@/pages/chat/workspaceCodeLinks";
 import { ChatSkeleton } from "@/components/chat/ChatSkeleton";
-import { Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Eye, EyeOff, Folder, GitBranch, Hash, Info, Loader2, LockKeyhole, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowDownUp, ArrowUp, Archive, ArchiveRestore, ArrowLeftRight, Check, ChevronRight, Copy, Cpu, Eye, EyeOff, Folder, GitBranch, Hash, Info, Loader2, LockKeyhole, MessagesSquare, Plus, RefreshCw, Search, Square, SquareChevronRight, SquarePen, SquareTerminal, TerminalSquare, TriangleAlert, X } from "lucide-react";
 import { homeDir } from "@tauri-apps/api/path";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { liveRespond, liveSend, liveStop, nativeOwner, parseBusy, type LiveAgent, type LiveSessionInfo, type NativeOwner, type StartOptions } from "@/api/live";
@@ -59,6 +59,7 @@ import { Pencil } from "lucide-react";
 import type { ConvertResult, SessionPreview, SessionSummary, Tool } from "@/api/types";
 import { ToolLogo } from "@/components/brand/ToolLogo";
 import { Button } from "@/components/ui/button";
+import { RadioGroup } from "radix-ui";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -300,7 +301,70 @@ export function loadCollapsedProjects(): Set<string> {
 }
 
 const HIDDEN_PROJECTS_KEY = "memdock.sessions.hiddenProjects";
-const projectNameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+const SESSION_SORT_KEY = "memdock.sessions.sort";
+const projectOrders = ["nameAsc", "nameDesc", "updatedDesc", "updatedAsc"] as const;
+const sessionOrders = [...projectOrders, "createdDesc", "createdAsc"] as const;
+type ProjectOrder = typeof projectOrders[number];
+type SessionOrder = typeof sessionOrders[number];
+
+function loadSessionSort(): { project: ProjectOrder; session: SessionOrder } {
+  try {
+    const value = JSON.parse(localStorage.getItem(SESSION_SORT_KEY) ?? "null");
+    return {
+      project: projectOrders.find((order) => order === value?.project) ?? "nameAsc",
+      session: sessionOrders.find((order) => order === value?.session) ?? "updatedDesc",
+    };
+  } catch {
+    return { project: "nameAsc", session: "updatedDesc" };
+  }
+}
+
+function SortGroup<Order extends SessionOrder>({ label, value, orders, onChange, labels }: {
+  label: string;
+  value: Order;
+  orders: readonly Order[];
+  onChange: (value: Order) => void;
+  labels: S["sort"];
+}) {
+  const field = value.replace(/Asc$|Desc$/, "");
+  const ascending = value.endsWith("Asc");
+  const direction = orders.find((order) => order === field + (ascending ? "Desc" : "Asc"));
+  const fields = [...new Set(orders.map((order) => order.replace(/Asc$|Desc$/, "")))];
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <RadioGroup.Root aria-label={label} orientation="horizontal" value={field}
+          onValueChange={(nextField) => {
+            const preferred = nextField + (nextField === "name" ? "Asc" : "Desc");
+            const next = orders.find((order) => order === preferred);
+            if (next) onChange(next);
+          }}
+          className="flex min-w-0 flex-1 rounded-md bg-muted p-0.5">
+          {fields.map((item) => (
+            <RadioGroup.Item key={item} value={item}
+              className="h-7 min-w-0 flex-1 cursor-pointer whitespace-nowrap rounded-sm px-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=checked]:bg-card data-[state=checked]:font-semibold data-[state=checked]:text-primary data-[state=checked]:shadow-sm">
+              {item === "name" ? labels.name : item === "updated" ? labels.updated : labels.created}
+            </RadioGroup.Item>
+          ))}
+        </RadioGroup.Root>
+        <Button type="button" variant="outline" size="icon" className="size-8 shrink-0"
+          title={labels[value]} aria-label={`${label} · ${labels[value]}`}
+          onClick={() => direction && onChange(direction)}>
+          {ascending ? <ArrowUp aria-hidden="true" /> : <ArrowDown aria-hidden="true" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function compareTime(a: number | null, b: number | null, ascending: boolean): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return ascending ? a - b : b - a;
+}
 
 function loadProjectIds(key: string): Set<string> {
   try {
@@ -1431,6 +1495,14 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const [archived, setArchived] = React.useState(loadArchivedSessions);
   const [showArchived, setShowArchived] = React.useState(false);
   const [showHidden, setShowHidden] = React.useState(false);
+  const [sortOrder, setSortOrder] = React.useState(loadSessionSort);
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(SESSION_SORT_KEY, JSON.stringify(sortOrder));
+    } catch {
+      // Sorting still applies for the current window.
+    }
+  }, [sortOrder]);
   const [hiddenProjects, setHiddenProjects] = React.useState(() => loadProjectIds(HIDDEN_PROJECTS_KEY));
 
   const toggleHiddenProject = (key: string) => {
@@ -1649,9 +1721,40 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     return groupByProject(regrouped);
   }, [visible, sessions, wtLinks]);
   const projectKey = (g: { cwd: string; projectId: string }) => g.cwd ? normPath(g.cwd) : g.projectId;
-  const groups = matchingGroups
-    .filter((g) => hiddenProjects.has(projectKey(g)) === showHidden)
-    .sort((a, b) => projectNameOrder.compare(a.name, b.name) || a.projectId.localeCompare(b.projectId));
+  const groups = React.useMemo(() => {
+    const updatedAt = (session: SessionSummary) => {
+      const live = primaryLive(liveByNative.get(session.id));
+      return live ? Math.max(live.updated_at, session.updated_at ?? 0) : session.updated_at;
+    };
+    const title = (session: SessionSummary) => session.title?.trim() || session.first_prompt || s.untitled;
+    const bySession = (a: SessionSummary, b: SessionSummary) => {
+      const order = sortOrder.session;
+      switch (order) {
+        case "nameAsc": return nameOrder.compare(title(a), title(b));
+        case "nameDesc": return nameOrder.compare(title(b), title(a));
+        case "createdAsc":
+        case "createdDesc": return compareTime(a.started_at, b.started_at, order === "createdAsc");
+        default: return compareTime(updatedAt(a), updatedAt(b), order === "updatedAsc");
+      }
+    };
+    return matchingGroups
+      .filter((g) => hiddenProjects.has(g.cwd ? normPath(g.cwd) : g.projectId) === showHidden)
+      .map((g) => ({
+        ...g,
+        updated: g.sessions.reduce<number | null>((latest, session) => {
+          const time = updatedAt(session);
+          return time !== null && (latest === null || time > latest) ? time : latest;
+        }, null),
+        sessions: [...g.sessions].sort(bySession),
+      }))
+      .sort((a, b) => {
+        const order = sortOrder.project;
+        const byName = nameOrder.compare(a.name, b.name);
+        const primary = order === "nameAsc" ? byName : order === "nameDesc" ? -byName
+          : compareTime(a.updated, b.updated, order === "updatedAsc");
+        return primary || byName || a.projectId.localeCompare(b.projectId);
+      });
+  }, [matchingGroups, hiddenProjects, showHidden, liveByNative, sortOrder, s.untitled]);
   const visibleCount = groups.reduce((count, g) => count + g.sessions.length, 0);
   const isHiddenPath = (path: string) => hiddenProjects.has(normPath(worktreeOf(wtState, path)?.repoRoot ?? path));
   const archivedCount = (sessions ?? []).filter((x) => archived.has(archiveKey(x)) && !hiddenProjects.has(x.cwd ? normPath(wtLinks.get(sessionKey(x))?.repoRoot ?? x.cwd) : x.project_id)).length;
@@ -1926,6 +2029,26 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                 <EyeOff aria-hidden="true" />
                 {s.hiddenProjects}
               </Button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button type="button" variant="ghost" size="sm" className="ml-auto h-7" aria-label={s.sort.label}>
+                    <ArrowDownUp aria-hidden="true" />
+                    {s.sort.label}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" sideOffset={6} className="w-[268px] p-0">
+                  <div className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm font-semibold">
+                    <ArrowDownUp aria-hidden="true" className="size-4 text-muted-foreground" />
+                    {s.sort.label}
+                  </div>
+                  <div className="grid gap-3 p-3">
+                    <SortGroup label={s.sort.projects} value={sortOrder.project} orders={projectOrders} labels={s.sort}
+                      onChange={(project) => setSortOrder((current) => ({ ...current, project }))} />
+                    <SortGroup label={s.sort.sessions} value={sortOrder.session} orders={sessionOrders} labels={s.sort}
+                      onChange={(session) => setSortOrder((current) => ({ ...current, session }))} />
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">

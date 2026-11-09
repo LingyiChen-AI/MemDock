@@ -23,8 +23,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -36,7 +36,7 @@ use super::prompt::{
 };
 use super::runner::{CliRunner, RunError};
 use super::sessions::{read_claude_turns, read_codex_turns, Turn};
-use super::store::{RunErrorCode, RunRecord, RunStatus, RunTrigger, Schedule, Store};
+use super::store::{RunErrorCode, RunRecord, RunStatus, RunTrigger, Schedule, Store, ExtractConfig};
 use crate::memory::io::read_memory;
 use crate::memory::scan::scan_all;
 use crate::model::{MemoryFile, MemoryIndex, MemoryKind, Tool};
@@ -49,6 +49,7 @@ pub const GLOBAL_KEY: &str = "__global__";
 pub const MAX_PROJECTS: usize = 20;
 /// Excerpt chunks (CLI calls) per project per run.
 pub const MAX_CHUNKS: usize = 3;
+const MAX_CONCURRENT_PROJECTS: usize = 3;
 /// Timeout of one CLI call.
 pub const CLI_TIMEOUT: Duration = Duration::from_secs(180);
 /// Scheduler check interval.
@@ -70,7 +71,7 @@ pub enum ExtractError {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Progress {
     pub project: String,
-    /// 1-based.
+    /// Number of projects processed so far.
     pub index: u32,
     pub total: u32,
 }
@@ -373,6 +374,136 @@ struct Batch {
     last_ts: i64,
 }
 
+#[derive(Default)]
+struct ProjectResult {
+    warnings: Vec<String>,
+    suggestions_new: u32,
+    attempted: bool,
+    succeeded: bool,
+    cancelled: bool,
+    fatal: Option<(RunErrorCode, String)>,
+    failure: Option<(RunErrorCode, String)>,
+    save_error: Option<String>,
+}
+
+fn extract_project(
+    ctx: &ExtractCtx,
+    cfg: &ExtractConfig,
+    index: &MemoryIndex,
+    runner: &dyn CliRunner,
+    lang: &str,
+    run_id: &str,
+    b: &Batch,
+    cancel: &AtomicBool,
+    stop_dispatch: &AtomicBool,
+) -> ProjectResult {
+    let mut result = ProjectResult::default();
+    // ---- targets
+    let mut tw: Vec<String> = Vec::new();
+    let mut targets: Vec<MemoryTarget> = if b.key == GLOBAL_KEY {
+        global_targets(ctx, index, &mut tw)
+    } else if let Some(pm) = index.projects.iter().find(|p| p.project.id == b.key) {
+        let root = Path::new(&pm.project.path);
+        let fb = pm.project.exists.then(|| placeholder(&root.join("CLAUDE.md")));
+        let mut t = collect_targets(&pm.files, fb, false, &mut tw);
+        if cfg.include_global {
+            t.extend(global_targets(ctx, index, &mut tw));
+        }
+        t
+    } else {
+        Vec::new()
+    };
+    // Same file can appear twice (e.g. global placeholder); keep the first.
+    let mut seen_ids = BTreeSet::new();
+    targets.retain(|t| seen_ids.insert(t.file_id.clone()));
+    result.warnings.extend(tw.into_iter().map(|w| format!("{}: {w}", b.name)));
+    if targets.is_empty() {
+        result.warnings.push(format!("{}: no memory file to propose changes for, skipped", b.name));
+        return result;
+    }
+
+    // ---- chunks: oldest first, each fits the excerpt cap; at most
+    // MAX_CHUNKS per project per run, the rest waits for the next run.
+    result.attempted = true;
+    let all: Vec<&Turn> = b.turns.iter().collect();
+    let chunks = chunk_turns(&all, MAX_EXCERPT_CHARS);
+    let mut done_chunks = 0usize;
+    let mut project_failed = false;
+    for chunk in chunks.iter().take(MAX_CHUNKS) {
+        if cancel.load(Ordering::SeqCst) || stop_dispatch.load(Ordering::SeqCst) {
+            result.cancelled = cancel.load(Ordering::SeqCst);
+            break;
+        }
+        let previous = previous_suggestions(&lock(&ctx.store).suggestions().to_vec());
+        let prompt = build_prompt_full(&b.name, &targets, chunk, lang, cfg.custom_prompt.as_deref(), &previous);
+        let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
+            Ok(r) => r,
+            Err(RunError::Cancelled) => {
+                stop_dispatch.store(true, Ordering::SeqCst);
+                result.cancelled = true;
+                break;
+            }
+            Err(e @ (RunError::NotInstalled | RunError::NotLoggedIn(_))) => {
+                stop_dispatch.store(true, Ordering::SeqCst);
+                result.fatal = Some((code_of(&e), describe(&e)));
+                break;
+            }
+            Err(e) => {
+                let m = format!("{}: {}", b.name, describe(&e));
+                result.failure.get_or_insert_with(|| (code_of(&e), m.clone()));
+                result.warnings.push(m);
+                project_failed = true;
+                break;
+            }
+        };
+        let parsed = parse_output_full(&raw, &targets, runner.tool(), chunk);
+        result.warnings.extend(parsed.warnings.into_iter().map(|w| format!("{}: {w}", b.name)));
+        if parsed.unusable {
+            let m = format!("{}: model output unusable", b.name);
+            result.failure.get_or_insert_with(|| (RunErrorCode::InvalidOutput, m.clone()));
+            result.warnings.push(m);
+            project_failed = true;
+            break;
+        }
+
+        // ---- store + watermark (only after this chunk succeeded)
+        let total_parsed = parsed.suggestions.len();
+        let kept: Vec<_> = parsed
+            .suggestions
+            .into_iter()
+            .filter(meets_recurrence)
+            .map(|mut s| {
+                s.run_id = Some(run_id.to_owned());
+                s
+            })
+            .collect();
+        if kept.len() < total_parsed {
+            result.warnings.push(format!("{}: {} suggestion(s) dropped: backed by a single mention", b.name, total_parsed - kept.len()));
+        }
+        let mut st = lock(&ctx.store);
+        result.suggestions_new += st.add_suggestions(kept);
+        for tool in [Tool::Claude, Tool::Codex] {
+            if let Some(m) = chunk.iter().filter(|t| t.tool == tool).map(|t| t.ts).max() {
+                if m > st.watermark(&b.key, tool) {
+                    st.set_watermark(&b.key, tool, m);
+                }
+            }
+        }
+        if let Err(e) = st.save() {
+            let m = format!("{}: could not save store: {e}", b.name);
+            result.warnings.push(m.clone());
+            result.save_error.get_or_insert(m);
+        }
+        done_chunks += 1;
+    }
+    result.succeeded = done_chunks > 0;
+    if !result.cancelled && result.fatal.is_none() && !project_failed && done_chunks == MAX_CHUNKS && chunks.len() > MAX_CHUNKS {
+        let n: usize = chunks[MAX_CHUNKS..].iter().map(Vec::len).sum();
+        result.warnings.push(format!("{}: {n} newer turns deferred to the next run", b.name));
+    }
+    result
+}
+
 /// Writes the final record; a save failure is surfaced in the record itself.
 fn finish(ctx: &ExtractCtx, rec: &mut RunRecord) {
     let mut st = lock(&ctx.store);
@@ -551,121 +682,59 @@ fn execute(
     let mut first_failure: Option<(RunErrorCode, String)> = None;
     let mut save_error: Option<String> = None;
 
-    for (i, b) in projects.iter().enumerate() {
-        if cancel.load(Ordering::SeqCst) {
-            cancelled = true;
-            break;
+    // Workers take the next project when free. Within a project, keep chunks
+    // in order so a failure cannot advance its watermark past unread turns.
+    let next = AtomicUsize::new(0);
+    let stop_dispatch = AtomicBool::new(false);
+    let results = thread::scope(|scope| {
+        let (send, receive) = mpsc::channel();
+        let run_id = &rec.id;
+        let mut results = Vec::new();
+        if let Some(first) = projects.first().filter(|_| !cancel.load(Ordering::SeqCst)) {
+            progress(Progress { project: first.name.clone(), index: 0, total });
         }
-        progress(Progress { project: b.name.clone(), index: i as u32 + 1, total });
-
-        // ---- targets
-        let mut tw: Vec<String> = Vec::new();
-        let mut targets: Vec<MemoryTarget> = if b.key == GLOBAL_KEY {
-            global_targets(ctx, &index, &mut tw)
-        } else if let Some(pm) = index.projects.iter().find(|p| p.project.id == b.key) {
-            let root = Path::new(&pm.project.path);
-            let fb = pm.project.exists.then(|| placeholder(&root.join("CLAUDE.md")));
-            let mut t = collect_targets(&pm.files, fb, false, &mut tw);
-            if cfg.include_global {
-                t.extend(global_targets(ctx, &index, &mut tw));
-            }
-            t
-        } else {
-            Vec::new()
-        };
-        // Same file can appear twice (e.g. global placeholder); keep the first.
-        let mut seen_ids = BTreeSet::new();
-        targets.retain(|t| seen_ids.insert(t.file_id.clone()));
-        rec.warnings.extend(tw.into_iter().map(|w| format!("{}: {w}", b.name)));
-        if targets.is_empty() {
-            rec.warnings.push(format!("{}: no memory file to propose changes for, skipped", b.name));
-            continue;
-        }
-
-        // ---- chunks: oldest first, each fits the excerpt cap; at most
-        // MAX_CHUNKS per project per run, the rest waits for the next run.
-        attempted += 1;
-        let all: Vec<&Turn> = b.turns.iter().collect();
-        let chunks = chunk_turns(&all, MAX_EXCERPT_CHARS);
-        let mut done_chunks = 0usize;
-        let mut project_failed = false;
-        for chunk in chunks.iter().take(MAX_CHUNKS) {
-            if cancel.load(Ordering::SeqCst) {
-                cancelled = true;
-                break;
-            }
-            let previous = previous_suggestions(&lock(&ctx.store).suggestions().to_vec());
-            let prompt = build_prompt_full(&b.name, &targets, chunk, &lang, cfg.custom_prompt.as_deref(), &previous);
-            let raw = match runner.run(&prompt, &output_schema(), CLI_TIMEOUT, cancel) {
-                Ok(r) => r,
-                Err(RunError::Cancelled) => {
-                    cancelled = true;
-                    break;
-                }
-                Err(e @ (RunError::NotInstalled | RunError::NotLoggedIn(_))) => {
-                    fatal = Some((code_of(&e), describe(&e)));
-                    break;
-                }
-                Err(e) => {
-                    let m = format!("{}: {}", b.name, describe(&e));
-                    first_failure.get_or_insert_with(|| (code_of(&e), m.clone()));
-                    rec.warnings.push(m);
-                    project_failed = true;
-                    break;
-                }
-            };
-            let parsed = parse_output_full(&raw, &targets, runner.tool(), chunk);
-            rec.warnings.extend(parsed.warnings.into_iter().map(|w| format!("{}: {w}", b.name)));
-            if parsed.unusable {
-                let m = format!("{}: model output unusable", b.name);
-                first_failure.get_or_insert_with(|| (RunErrorCode::InvalidOutput, m.clone()));
-                rec.warnings.push(m);
-                project_failed = true;
-                break;
-            }
-
-            // ---- store + watermark (only after this chunk succeeded)
-            let total_parsed = parsed.suggestions.len();
-            let kept: Vec<_> = parsed
-                .suggestions
-                .into_iter()
-                .filter(meets_recurrence)
-                .map(|mut s| {
-                    s.run_id = Some(rec.id.clone());
-                    s
-                })
-                .collect();
-            if kept.len() < total_parsed {
-                rec.warnings.push(format!("{}: {} suggestion(s) dropped: backed by a single mention", b.name, total_parsed - kept.len()));
-            }
-            let mut st = lock(&ctx.store);
-            rec.suggestions_new += st.add_suggestions(kept);
-            for tool in [Tool::Claude, Tool::Codex] {
-                if let Some(m) = chunk.iter().filter(|t| t.tool == tool).map(|t| t.ts).max() {
-                    if m > st.watermark(&b.key, tool) {
-                        st.set_watermark(&b.key, tool, m);
+        // Move a sender clone into each worker so the receiver closes when they finish.
+        for _ in 0..projects.len().min(MAX_CONCURRENT_PROJECTS) {
+            let send = send.clone();
+            let next = &next;
+            let stop_dispatch = &stop_dispatch;
+            let projects = &projects;
+            let cfg = &cfg;
+            let index = &index;
+            let runner = runner.as_ref();
+            let lang = &lang;
+            scope.spawn(move || {
+                while !cancel.load(Ordering::SeqCst) && !stop_dispatch.load(Ordering::SeqCst) {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(batch) = projects.get(i) else { break };
+                    let result = extract_project(ctx, cfg, index, runner, lang, run_id, batch, cancel, stop_dispatch);
+                    if send.send((i, result)).is_err() {
+                        break;
                     }
                 }
-            }
-            if let Err(e) = st.save() {
-                let m = format!("{}: could not save store: {e}", b.name);
-                rec.warnings.push(m.clone());
-                save_error.get_or_insert(m);
-            }
-            done_chunks += 1;
+            });
         }
-        if done_chunks > 0 {
-            ok += 1;
-            rec.projects += 1;
+        drop(send);
+        for (i, result) in receive {
+            results.push((i, result));
+            progress(Progress { project: projects[i].name.clone(), index: results.len() as u32, total });
         }
-        if !cancelled && fatal.is_none() && !project_failed && done_chunks == MAX_CHUNKS && chunks.len() > MAX_CHUNKS {
-            let n: usize = chunks[MAX_CHUNKS..].iter().map(Vec::len).sum();
-            rec.warnings.push(format!("{}: {n} newer turns deferred to the next run", b.name));
-        }
-        if cancelled || fatal.is_some() {
-            break;
-        }
+        results
+    });
+    let mut results = results;
+    results.sort_by_key(|(i, _)| *i);
+    for (_, result) in results {
+        rec.warnings.extend(result.warnings);
+        rec.suggestions_new += result.suggestions_new;
+        attempted += u32::from(result.attempted);
+        ok += u32::from(result.succeeded);
+        cancelled |= result.cancelled;
+        fatal = fatal.or(result.fatal);
+        first_failure = first_failure.or(result.failure);
+        save_error = save_error.or(result.save_error);
     }
+    cancelled |= cancel.load(Ordering::SeqCst);
+    rec.projects = ok;
 
     rec.status = if cancelled {
         RunStatus::Cancelled
@@ -979,8 +1048,17 @@ mod tests {
     }
 
     #[test]
-    fn runs_per_project_and_stores_suggestions() {
-        let e = two();
+    fn runs_projects_concurrently_and_stores_suggestions() {
+        let entered = AtomicUsize::new(0);
+        let e = two_with(Fake::with(Box::new(move |prompt| {
+            entered.fetch_add(1, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while entered.load(Ordering::SeqCst) < 2 {
+                assert!(std::time::Instant::now() < deadline, "second project never started");
+                thread::sleep(Duration::from_millis(5));
+            }
+            Ok(reply(prompt))
+        })));
         let seen = Mutex::new(Vec::new());
         let c = AtomicBool::new(false);
         let rec = start_run(&e.ctx, RunTrigger::Manual, &c, &|p| seen.lock().unwrap().push(p)).unwrap();
@@ -990,8 +1068,8 @@ mod tests {
         assert_eq!(rec.sessions_read, 2);
         assert_eq!(e.fake.calls().len(), 2);
         let prog = seen.into_inner().unwrap();
-        assert_eq!(prog[0], Progress { project: "alpha".into(), index: 1, total: 2 });
-        assert_eq!(prog[1], Progress { project: "beta".into(), index: 2, total: 2 });
+        assert_eq!(prog.iter().map(|p| p.index).collect::<Vec<_>>(), [0, 1, 2]);
+        assert!(prog.iter().all(|p| p.total == 2));
         let st = lock(&e.ctx.store);
         assert_eq!(st.suggestions().len(), 2);
         assert_eq!(st.runs().last().unwrap().id, rec.id);
@@ -1094,7 +1172,7 @@ mod tests {
         let e = two_with(f);
         let rec = go(&e);
         assert_eq!(rec.status, RunStatus::Cancelled);
-        assert_eq!(e.fake.calls().len(), 1, "stopped before the second project");
+        assert!((1..=2).contains(&e.fake.calls().len()));
         assert_eq!(lock(&e.ctx.store).runs().last().unwrap().status, RunStatus::Cancelled);
         // runner reporting Cancelled also ends as Cancelled
         let e2 = two_with(Fake::with(Box::new(|_| Err(RunError::Cancelled))));

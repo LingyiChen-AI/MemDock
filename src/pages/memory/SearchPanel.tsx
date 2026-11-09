@@ -11,7 +11,7 @@ const DEBOUNCE_MS = 300;
 
 export interface SearchPanelProps {
   /** Opens a file at a 1-based line. `fileId` is the normalized file id from the index. */
-  onOpen: (fileId: string, line: number) => void;
+  onOpen: (fileId: string, line: number, threadId?: string) => void;
   /** Used to label results with tool, project and file name. */
   index?: MemoryIndex;
   initialQuery?: string;
@@ -67,9 +67,12 @@ export function SearchPanel({ onOpen, index, initialQuery = "", onClose, idle }:
   const { t } = useI18n();
   const m = t.memory;
   const [input, setInput] = React.useState(initialQuery);
-  const [result, setResult] = React.useState<{ query: string; hits: SearchHit[] } | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [busy, setBusy] = React.useState(false);
+  const [completed, setResult] = React.useState<{ query: string; hits: SearchHit[] } | null>(null);
+  const [failure, setError] = React.useState<{ query: string; message: string } | null>(null);
+  const query = input.trim();
+  const result = completed?.query === query ? completed : null;
+  const error = failure?.query === query ? failure.message : null;
+  const busy = !!query && result === null && error === null;
   const inputRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
 
@@ -92,28 +95,25 @@ export function SearchPanel({ onOpen, index, initialQuery = "", onClose, idle }:
   }, []);
 
   React.useEffect(() => {
-    const q = input.trim();
+    const q = query;
     if (!q) {
       setResult(null);
       setError(null);
-      setBusy(false);
       return;
     }
     let alive = true;
-    setBusy(true);
     const timer = window.setTimeout(() => {
       searchMemories(q).then(
         (hits) => {
           if (!alive) return;
           setResult({ query: q, hits });
           setError(null);
-          setBusy(false);
         },
         (e) => {
           if (!alive) return;
           const msg = typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e);
-          setError(msg);
-          setBusy(false);
+          setResult(null);
+          setError({ query: q, message: msg });
         },
       );
     }, DEBOUNCE_MS);
@@ -121,7 +121,7 @@ export function SearchPanel({ onOpen, index, initialQuery = "", onClose, idle }:
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [input]);
+  }, [query]);
 
   const groups = React.useMemo<Group[]>(() => {
     const byId = new Map<string, Group>();
@@ -215,10 +215,10 @@ export function SearchPanel({ onOpen, index, initialQuery = "", onClose, idle }:
                   </div>
                   {g.hits.map((h) => (
                     <button
-                      key={`${h.line}:${h.preview}`}
+                      key={`${h.thread_id ?? ""}:${h.line}:${h.preview}`}
                       type="button"
                       data-hit=""
-                      onClick={() => onOpen(g.fileId, h.line)}
+                      onClick={() => h.thread_id ? onOpen(g.fileId, h.line, h.thread_id) : onOpen(g.fileId, h.line)}
                       className="flex w-full cursor-pointer items-baseline gap-2 py-1 pr-4 pl-4 text-left text-sm outline-none transition-colors duration-150 hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none"
                     >
                       <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">{h.line}</span>

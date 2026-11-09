@@ -155,14 +155,18 @@ describe("ExtractPage", () => {
     renderApp(<ExtractPage />);
     await userEvent.click(await screen.findByRole("button", { name: "立即运行" }));
     await screen.findByText("运行中…");
+    expect(await screen.findByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
     act(() => progressCb({ project: "alpha", index: 2, total: 5 }));
-    expect(await screen.findByText("运行中… 第 2 / 5 个项目")).toBeInTheDocument();
+    expect(await screen.findByText("运行中… 已处理 2 / 5 个项目")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "2");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "5");
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(cancelExtraction).toHaveBeenCalled();
     (listExtractRuns as Mock).mockResolvedValue([run({ id: "r2", status: "cancelled" })]);
     act(() => finishedCb(run({ id: "r2", status: "cancelled" })));
     expect(await screen.findByRole("button", { name: "立即运行" })).toBeInTheDocument();
     expect(await screen.findByText("已取消")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("shows running state when a run is already in progress on mount", async () => {
@@ -317,7 +321,7 @@ describe("ExtractPage fix round 1", () => {
     await screen.findByText("还没有运行记录");
     (listExtractRuns as Mock).mockResolvedValue([run({ id: "s1", status: "running", finished_at: null, trigger: "scheduled" })]);
     act(() => progressCb({ project: "alpha", index: 1, total: 3 }));
-    expect(await screen.findByText("运行中… 第 1 / 3 个项目")).toBeInTheDocument();
+    expect(await screen.findByText("运行中… 已处理 1 / 3 个项目")).toBeInTheDocument();
   });
 
   it("failed run shows a localized error with the raw detail as tooltip", async () => {

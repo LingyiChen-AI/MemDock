@@ -69,13 +69,13 @@ export interface MemoryEditorProps {
   /** Reports whether there are unsaved edits (the page confirms before switching files). */
   onDirtyChange?: (dirty: boolean) => void;
   /** Scrolls to a 1-based line and puts the cursor there; a new `nonce` repeats the jump. */
-  reveal?: { line: number; nonce: number };
+  reveal?: { line: number; nonce: number; threadId?: string };
   /** Called once a reveal has been applied, so the page can drop it. */
   onRevealed?: () => void;
 }
 
 export function MemoryEditor(props: MemoryEditorProps) {
-  if (props.file.kind === "codex_db") return <CodexDbView />;
+  if (props.file.kind === "codex_db") return <CodexDbView reveal={props.reveal} onRevealed={props.onRevealed} />;
   return <TextEditor {...props} />;
 }
 

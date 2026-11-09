@@ -34,7 +34,7 @@ vi.mock("@uiw/react-codemirror", () => ({
 import { listMemories, onMemoryChanged, readCodexDb, readMemoryFile, removeManualProject, searchMemories } from "@/api/memory";
 import { extractMemoryGraph, getMemoryGraph, type MemoryGraph, type SavedMemoryGraph } from "@/api/memoryGraph";
 import type { MemoryIndex } from "@/api/types";
-import { renderApp, sampleIndex, globalClaude, projClaude, mkProject } from "@/test/fixtures";
+import { renderApp, sampleIndex, globalClaude, globalDb, projClaude, mkProject } from "@/test/fixtures";
 import { MemoryPage } from "./MemoryPage";
 
 const listeners: ((p: { paths: string[] }) => void)[] = [];
@@ -151,6 +151,31 @@ describe("MemoryPage", () => {
     expect(await screen.findByDisplayValue("text of /work/jev-rpa/CLAUDE.md")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
     expect(screen.getByRole("tree")).toBeInTheDocument();
+  });
+
+  it("opens the matching Codex database entry from a body search", async () => {
+    (readCodexDb as Mock).mockResolvedValue({
+      status: "ok",
+      entries: [
+        { thread_id: "other", raw_memory: "Other memory", rollout_summary: "", generated_at: 2 },
+        { thread_id: "matched", raw_memory: "同步真实知识库", rollout_summary: "", generated_at: 1 },
+      ],
+    });
+    (searchMemories as Mock).mockResolvedValue([
+      { file_id: globalDb.id, thread_id: "matched", line: 1, preview: "同步真实知识库" },
+    ]);
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      renderApp(<MemoryPage />);
+      await screen.findByDisplayValue("text of /home/u/.claude/CLAUDE.md");
+      await userEvent.keyboard("{Control>}k{/Control}");
+      await userEvent.type(await screen.findByRole("searchbox"), "同步真实");
+      await userEvent.click(await screen.findByRole("button", { name: /同步真实/ }));
+      const entry = (await screen.findByText("matched")).closest("li");
+      await waitFor(() => expect(scroll.mock.contexts).toContain(entry));
+    } finally {
+      scroll.mockRestore();
+    }
   });
 
   it("opens the graph through the project row after confirming dirty edits, then reveals a saved source", async () => {

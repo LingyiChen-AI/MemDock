@@ -137,6 +137,7 @@ export interface CommandError {
 
 export interface SearchHit {
   file_id: string;
+  thread_id?: string;
   line: number;
   preview: string;
 }

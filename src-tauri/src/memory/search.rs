@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::Serialize;
 
+use super::codex_db::{CodexDbResult, read_codex_memories};
 use super::io::read_memory;
 use crate::model::{MemoryIndex, MemoryKind};
 
@@ -12,13 +14,15 @@ const PREVIEW_CHARS: usize = 200;
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct SearchHit {
     pub file_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     /// 1-based line number.
     pub line: u32,
     /// The matching line, truncated to 200 characters.
     pub preview: String,
 }
 
-/// Case-insensitive substring search across all existing memory files.
+/// Case-insensitive substring search across memory files and the Codex database.
 ///
 /// Global files are searched first, then projects in index order; lines are
 /// visited in order within each file. Files that fail to read are skipped.
@@ -34,23 +38,45 @@ pub fn search(index: &MemoryIndex, query: &str, limit: usize) -> Vec<SearchHit> 
         .global
         .iter()
         .chain(index.projects.iter().flat_map(|p| p.files.iter()));
+    let mut seen = HashSet::new();
     for file in files {
-        if !file.exists || file.kind == MemoryKind::CodexDb {
+        if !file.exists || !seen.insert(&file.id) {
             continue;
         }
-        let Ok(content) = read_memory(Path::new(&file.path)) else {
-            continue;
-        };
-        for (i, line) in content.text.lines().enumerate() {
-            if !line.to_lowercase().contains(&needle) {
-                continue;
+        let path = Path::new(&file.path);
+        let mut collect = |text: &str, thread_id: Option<&str>| {
+            for (i, line) in text.lines().enumerate() {
+                let lower = line.to_lowercase();
+                let Some(at) = lower.find(&needle) else { continue };
+                let end = lower[..at + needle.len()].chars().count();
+                let start = if end > PREVIEW_CHARS {
+                    lower[..at].chars().count().saturating_sub(60)
+                } else {
+                    0
+                };
+                hits.push(SearchHit {
+                    file_id: file.id.clone(),
+                    thread_id: thread_id.map(str::to_owned),
+                    line: (i + 1) as u32,
+                    preview: line.chars().skip(start).take(PREVIEW_CHARS).collect(),
+                });
+                if hits.len() == limit {
+                    return true;
+                }
             }
-            hits.push(SearchHit {
-                file_id: file.id.clone(),
-                line: (i + 1) as u32,
-                preview: line.chars().take(PREVIEW_CHARS).collect(),
-            });
-            if hits.len() >= limit {
+            false
+        };
+        if file.kind == MemoryKind::CodexDb {
+            if let CodexDbResult::Ok { entries } = read_codex_memories(path) {
+                for entry in entries {
+                    let text = format!("{}\n{}", entry.raw_memory, entry.rollout_summary);
+                    if collect(&text, Some(&entry.thread_id)) {
+                        return hits;
+                    }
+                }
+            }
+        } else if let Ok(content) = read_memory(path) {
+            if collect(&content.text, None) {
                 return hits;
             }
         }
@@ -113,11 +139,13 @@ mod tests {
             vec![
                 SearchHit {
                     file_id: "g1".into(),
+                    thread_id: None,
                     line: 1,
                     preview: "Hello World".into(),
                 },
                 SearchHit {
                     file_id: "g1".into(),
+                    thread_id: None,
                     line: 3,
                     preview: "HELLO again".into(),
                 },
@@ -174,6 +202,23 @@ mod tests {
     }
 
     #[test]
+    fn searches_codex_database_body_and_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("memories_1.sqlite");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE stage1_outputs (thread_id TEXT, raw_memory TEXT, rollout_summary TEXT, generated_at INTEGER);").unwrap();
+        conn.execute("INSERT INTO stage1_outputs VALUES (?1, ?2, ?3, 1)",
+            ["thread-1", &format!("{}同步真实知识库", "长".repeat(240)), "Summary: 同步真实"]).unwrap();
+        drop(conn);
+        let idx = index_with(vec![file("db", db, MemoryKind::CodexDb, true)], vec![]);
+        let hits = search(&idx, "同步真实", 10);
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|hit| hit.thread_id.as_deref() == Some("thread-1")
+            && hit.preview.contains("同步真实")));
+        assert_eq!(search(&idx, "同步真实", 1).len(), 1);
+    }
+
+    #[test]
     fn skips_missing_files_and_codex_db() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing.md");
@@ -189,6 +234,20 @@ mod tests {
         );
 
         assert!(search(&idx, "needle", 10).is_empty());
+    }
+
+    #[test]
+    fn searches_the_same_file_only_once_across_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("CLAUDE.md");
+        fs::write(&path, "旧词\n都不构成用英文回复的理由\n").unwrap();
+        let memory = file("same", path, MemoryKind::ClaudeInstructions, true);
+        let index = index_with(vec![memory.clone()], vec![project("p", vec![memory])]);
+
+        let hits = search(&index, "都不构成用英文回复的理由", 10);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].line, 2);
     }
 
     #[test]

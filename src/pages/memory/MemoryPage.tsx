@@ -40,7 +40,7 @@ export interface MemoryPageProps {
 }
 
 type Destination =
-  | { type: "file"; key: string; line?: number }
+  | { type: "file"; key: string; line?: number; threadId?: string }
   | { type: "graph"; projectId: string };
 
 export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: MemoryPageProps = {}) {
@@ -58,7 +58,7 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
   }, [dirty, onDirtyChange]);
   React.useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const [search, setSearch] = React.useState<{ initial: string } | null>(null);
-  const [reveal, setReveal] = React.useState<{ key: string; line: number; nonce: number } | null>(null);
+  const [reveal, setReveal] = React.useState<{ key: string; line: number; nonce: number; threadId?: string } | null>(null);
   const revealNonce = React.useRef(0);
   const [width, setWidth] = React.useState(loadWidth);
   const widthRef = React.useRef(width);
@@ -130,13 +130,14 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
       setReveal(destination.line === undefined ? null : {
         key: destination.key,
         line: destination.line,
+        threadId: destination.threadId,
         nonce: ++revealNonce.current,
       });
     }
   };
-  const select = (file: MemoryFile, line?: number) => {
+  const select = (file: MemoryFile, line?: number, threadId?: string) => {
     const key = fileKey(file);
-    const destination: Destination = { type: "file", key, line };
+    const destination: Destination = { type: "file", key, line, threadId };
     if (key === selectedKey && line === undefined) return;
     if (dirty && key !== selectedKey) setPending(destination);
     else navigate(destination);
@@ -149,12 +150,12 @@ export function MemoryPage({ onDirtyChange, pendingByProject, openRequest }: Mem
   };
 
   // Search result -> open the file (global occurrence first) and jump to the line.
-  const openHit = (fileId: string, line: number) => {
+  const openHit = (fileId: string, line: number, threadId?: string) => {
     if (!index) return;
     const matches = allFiles(index).filter((f) => f.id === fileId);
     const file = matches.find((f) => f.scope.type === "global") ?? matches[0];
     if (!file) return;
-    select(file, line);
+    select(file, line, threadId);
   };
   const clearReveal = React.useCallback(() => setReveal(null), []);
 

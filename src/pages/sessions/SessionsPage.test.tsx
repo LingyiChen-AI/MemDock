@@ -148,6 +148,42 @@ describe("SessionsPage", () => {
     }
   });
 
+  it("sorts projects and conversations independently and remembers both choices", async () => {
+    const key = "memdock.sessions.sort";
+    localStorage.removeItem(key);
+    vi.mocked(listSessions).mockResolvedValue([
+      codexSession,
+      mk({ id: "z", title: "Zulu", updated_at: 1_700_001_000_000 }),
+      mk({ id: "a", title: "Alpha", updated_at: 1_700_000_000_000 }),
+    ]);
+    const projectNames = () => screen.getAllByRole("region").map((region) => region.getAttribute("aria-label"));
+    const titles = () => within(screen.getByRole("region", { name: "demo" }))
+      .getAllByRole("button", { name: /^(Alpha|Zulu)|^Claude Code.*(Alpha|Zulu)/ }).map((button) => button.textContent);
+    try {
+      const first = renderApp(<SessionsPage />);
+      await screen.findByRole("region", { name: "demo" });
+      expect(projectNames()).toEqual(["api", "demo"]);
+      expect(titles()[0]).toContain("Zulu");
+
+      await userEvent.click(screen.getByRole("button", { name: "排序" }));
+      await userEvent.click(within(screen.getByRole("radiogroup", { name: "项目排序" }))
+        .getByRole("radio", { name: "更新时间" }));
+      await userEvent.click(within(screen.getByRole("radiogroup", { name: "组内对话排序" }))
+        .getByRole("radio", { name: "名称" }));
+      await userEvent.keyboard("{Escape}");
+      expect(projectNames()).toEqual(["demo", "api"]);
+      expect(titles()[0]).toContain("Alpha");
+      first.unmount();
+
+      renderApp(<SessionsPage />);
+      await screen.findByRole("region", { name: "demo" });
+      expect(projectNames()).toEqual(["demo", "api"]);
+      expect(titles()[0]).toContain("Alpha");
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
   it("hides an archived conversation across remounts and restores it from the archive", async () => {
     const key = "memdock.sessions.archived";
     localStorage.removeItem(key);

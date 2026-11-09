@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Ban, CheckCircle2, ChevronDown, ChevronRight, CircleCheck, CircleDot, CircleX, Loader2, TriangleAlert, type LucideIcon } from "lucide-react";
-import type { RunRecord, RunStatus } from "@/api/types";
+import type { ExtractProgress, RunRecord, RunStatus } from "@/api/types";
 import { cn } from "@/lib/utils";
 import type { RunProgress } from "./runStats";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -77,14 +77,35 @@ function ProgressCell({ p, x }: { p: RunProgress | undefined; x: Messages["extra
   );
 }
 
+function ExtractionProgressCell({ progress, x }: { progress?: ExtractProgress | null; x: Messages["extract"] }) {
+  const total = progress?.total ?? 0;
+  const completed = Math.min(total, Math.max(0, progress?.index ?? 0));
+  const label = total > 0 ? fmt(x.runningProgress, { i: completed, n: total }) : x.running;
+  return (
+    <div className="grid w-40 gap-1.5">
+      {total > 0 ? <span className="text-xs text-muted-foreground tabular-nums">{label}</span> : null}
+      <div role="progressbar" aria-label={label}
+        aria-valuenow={total > 0 ? completed : undefined} aria-valuemax={total > 0 ? total : undefined}
+        className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full bg-primary", total > 0
+          ? "transition-[width] duration-200 motion-reduce:transition-none"
+          : "w-1/3 animate-pulse motion-reduce:animate-none")}
+          style={total > 0 ? { width: `${completed / total * 100}%` } : undefined} />
+      </div>
+    </div>
+  );
+}
+
 export function RunsTable({
   runs,
   progress,
+  extractionProgress,
   onOpenReview,
 }: {
   runs: RunRecord[];
   /** Review progress of each run's suggestions, by run id. */
   progress?: Map<string, RunProgress>;
+  extractionProgress?: ExtractProgress | null;
   onOpenReview?: (run: RunRecord) => void;
 }) {
   const { t } = useI18n();
@@ -155,7 +176,9 @@ export function RunsTable({
                     )}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <ProgressCell p={progress?.get(r.id)} x={x} />
+                    {r.status === "running"
+                      ? <ExtractionProgressCell progress={extractionProgress} x={x} />
+                      : <ProgressCell p={progress?.get(r.id)} x={x} />}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap"><StatusCell status={r.status} /></td>
                 </tr>

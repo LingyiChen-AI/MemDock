@@ -14,7 +14,10 @@ function formatTime(generatedAt: number): string {
 }
 
 /** Read-only list of the Codex memory store. */
-export function CodexDbView() {
+export function CodexDbView({ reveal, onRevealed }: {
+  reveal?: { threadId?: string; nonce: number };
+  onRevealed?: () => void;
+}) {
   const { t } = useI18n();
   const m = t.memory;
   const [result, setResult] = React.useState<CodexDbResult | null>(null);
@@ -29,6 +32,14 @@ export function CodexDbView() {
       alive = false;
     };
   }, []);
+
+  const target = React.useRef<HTMLLIElement>(null);
+  React.useEffect(() => {
+    if (reveal?.threadId && target.current) {
+      target.current.scrollIntoView({ block: "start" });
+      onRevealed?.();
+    }
+  }, [reveal, result, onRevealed]);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -54,7 +65,7 @@ export function CodexDbView() {
         ) : (
           <ul className="flex flex-col gap-3">
             {result.entries.map((e) => (
-              <li key={e.thread_id} className="rounded-lg border border-border bg-card">
+              <li key={e.thread_id} ref={e.thread_id === reveal?.threadId ? target : undefined} className="rounded-lg border border-border bg-card">
                 <div className="flex items-center gap-2 border-b border-border px-3.5 py-2 text-xs text-muted-foreground">
                   <span>{m.codexThread}</span>
                   <span className="truncate font-mono text-[12.5px] text-foreground">{e.thread_id}</span>

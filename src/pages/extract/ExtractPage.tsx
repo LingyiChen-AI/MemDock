@@ -234,8 +234,6 @@ export function ExtractPage({ onNavigate, onDirtyChange, onOpenRunReview }: Extr
     }
   };
 
-  const runningLabel = progress ? fmt(x.runningProgress, { i: progress.index, n: progress.total }) : x.running;
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 px-6 py-6">
@@ -248,7 +246,7 @@ export function ExtractPage({ onNavigate, onDirtyChange, onOpenRunReview }: Extr
             <div className="flex items-center gap-2">
               <span role="status" className="inline-flex items-center gap-2 text-sm">
                 <Loader2 className="size-4 animate-spin text-accent-text motion-reduce:animate-none" aria-hidden="true" />
-                <span>{runningLabel}</span>
+                <span>{x.running}</span>
               </span>
               <Button type="button" variant="outline" disabled={cancelling} onClick={() => void cancel()} className="h-8 cursor-pointer px-3 text-sm">
                 <X className="size-4" aria-hidden="true" />
@@ -328,7 +326,7 @@ export function ExtractPage({ onNavigate, onDirtyChange, onOpenRunReview }: Extr
                   <p className="text-xs text-muted-foreground">{x.emptyRunsHint}</p>
                 </div>
               ) : (
-                <RunsTable runs={runs} progress={reviewProgress} onOpenReview={onOpenRun} />
+                <RunsTable runs={runs} progress={reviewProgress} extractionProgress={progress} onOpenReview={onOpenRun} />
               )}
             </section>
           </>

@@ -53,6 +53,14 @@ describe("SearchPanel", () => {
     expect(onOpen).toHaveBeenCalledWith(globalClaude.id, 30);
   });
 
+  it("hides previous matches as soon as the query changes", async () => {
+    renderApp(<SearchPanel index={sampleIndex} onOpen={() => {}} initialQuery="mysql" />);
+    const oldHit = await screen.findByRole("button", { name: /生产/ });
+    const input = screen.getByRole("searchbox");
+    await userEvent.type(input, "x");
+    expect(oldHit).not.toBeInTheDocument();
+  });
+
   it("shows an empty message when nothing matches", async () => {
     (searchMemories as Mock).mockResolvedValue([]);
     renderApp(<SearchPanel index={sampleIndex} onOpen={() => {}} initialQuery="zzz" />);

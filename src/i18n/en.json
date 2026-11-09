@@ -1460,6 +1460,8 @@
       "context": "Context",
       "contextHint": "Context {used} / {window} ({model})",
       "weekly": "Week",
+      "fiveHour": "5h",
+      "fiveHourHint": "5-hour quota used (from the usage page's quota lookup)",
       "weeklyHint": "Weekly quota used (from the usage page's quota lookup, refreshed every 30 minutes)"
     },
     "title": "Chat",

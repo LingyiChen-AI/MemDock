@@ -8,7 +8,7 @@ vi.mock("@/api/usage", () => ({ usageQuota: () => usageQuota() }));
 
 import { ContextMeters } from "./ContextMeter";
 
-const t = { context: "上下文", contextHint: "当前上下文 {used} / {window}（{model}）", sourceTerminal: "来自外部终端", sourceMemdock: "来自 MemDock", weekly: "本周", weeklyHint: "本周额度" };
+const t = { context: "上下文", contextHint: "当前上下文 {used} / {window}（{model}）", sourceTerminal: "来自外部终端", sourceMemdock: "来自 MemDock", fiveHour: "5 小时", fiveHourHint: "5 小时额度", weekly: "本周", weeklyHint: "本周额度" };
 
 describe("ContextMeters", () => {
   it("shows the context fill and the weekly quota", async () => {
@@ -18,7 +18,16 @@ describe("ContextMeters", () => {
     expect(await screen.findByText("77%")).toBeInTheDocument();
     expect(screen.getByTitle("当前上下文 772k / 1M（claude-opus-5-5）")).toBeInTheDocument();
     expect(await screen.findByText("78%")).toBeInTheDocument();
+    expect(screen.queryByText("5 小时")).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("session_context", { tool: "claude", path: "/s.jsonl" });
+  });
+
+  it.each(["claude", "codex"] as const)("shows a reported 5-hour quota for %s", async (tool) => {
+    usageQuota.mockResolvedValue({
+      [tool]: { status: "ok", five_hour: { used_percent: 0 }, weekly: null },
+    });
+    render(<ContextMeters tool={tool} path={null} refreshKey="1" t={t} />);
+    expect(await screen.findByTitle("5 小时额度")).toHaveTextContent("0%");
   });
 
   it("renders nothing without a session file or quota", async () => {

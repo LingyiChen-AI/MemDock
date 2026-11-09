@@ -1,6 +1,7 @@
 import * as React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { usageQuota } from "@/api/usage";
+import type { ToolQuota } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { fmt } from "@/pages/memory/paths";
 
@@ -52,13 +53,15 @@ export interface ContextMeterText {
   contextHint: string;
   sourceTerminal: string;
   sourceMemdock: string;
+  fiveHour: string;
+  fiveHourHint: string;
   weekly: string;
   weeklyHint: string;
 }
 
 /**
  * Context window fill of the conversation (from its session file, refreshed whenever `refreshKey`
- * changes, e.g. after each turn) and the tool's weekly quota (from the usage page's cached quota).
+ * changes, e.g. after each turn) and the tool's available quota windows (from the usage page's cache).
  */
 export function ContextMeters({
   tool,
@@ -80,7 +83,7 @@ export function ContextMeters({
   const report = React.useRef(onContext);
   report.current = onContext;
   const [ctx, setCtx] = React.useState<SessionContext | null>(null);
-  const [weekly, setWeekly] = React.useState<number | null>(null);
+  const [quota, setQuota] = React.useState<ToolQuota | null>(null);
   React.useEffect(() => {
     if (!path && !nativeId) {
       setCtx(null);
@@ -102,15 +105,16 @@ export function ContextMeters({
     let alive = true;
     usageQuota()
       .then((q) => {
-        const w = q[tool]?.weekly;
-        if (alive) setWeekly(q[tool]?.status === "ok" && w ? w.used_percent : null);
+        if (alive) setQuota(q[tool]?.status === "ok" ? q[tool] : null);
       })
-      .catch(() => alive && setWeekly(null));
+      .catch(() => alive && setQuota(null));
     return () => {
       alive = false;
     };
   }, [tool, refreshKey]);
-  if (!ctx && weekly === null) return null;
+  const fiveHour = quota?.five_hour;
+  const weekly = quota?.weekly;
+  if (!ctx && !fiveHour && !weekly) return null;
   return (
     <>
       {ctx ? (
@@ -123,7 +127,8 @@ export function ContextMeters({
           }
         />
       ) : null}
-      {weekly !== null ? <Meter label={t.weekly} pct={weekly} tip={t.weeklyHint} /> : null}
+      {fiveHour ? <Meter label={t.fiveHour} pct={fiveHour.used_percent} tip={t.fiveHourHint} /> : null}
+      {weekly ? <Meter label={t.weekly} pct={weekly.used_percent} tip={t.weeklyHint} /> : null}
     </>
   );
 }

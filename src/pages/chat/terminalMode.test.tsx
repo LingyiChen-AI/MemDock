@@ -38,7 +38,10 @@ vi.mock("@/api/live", () => ({
   liveCommands: vi.fn().mockResolvedValue([]),
   projectFiles: vi.fn().mockResolvedValue([]),
 }));
-vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn().mockResolvedValue("/home/u") }));
+vi.mock("@tauri-apps/api/path", () => ({
+  homeDir: vi.fn().mockResolvedValue("/home/u"),
+  tempDir: vi.fn().mockResolvedValue("/tmp"),
+}));
 
 // Captured pty event callbacks, to play backend output.
 const pty = vi.hoisted(() => ({

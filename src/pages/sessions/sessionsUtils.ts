@@ -1,6 +1,16 @@
 import type { SessionSummary, Tool } from "@/api/types";
+import { normPath } from "@/pages/chat/worktreeStore";
 
 export type ToolFilter = "all" | Tool;
+
+export function isTemporaryProject(cwd: string, tempRoot: string): boolean {
+  const path = normPath(cwd);
+  const root = normPath(tempRoot);
+  return (root !== "" && (path === root || path.startsWith(root + "/"))) ||
+    /^[a-z]:\/(?:users\/[^/]+\/appdata\/local\/temp|windows\/temp)(?:\/|$)/.test(path) ||
+    /^\/(?:private\/)?(?:tmp|var\/folders\/[^/]+\/[^/]+\/T)(?:\/|$)/.test(path) ||
+    /^\/(?:private\/)?var\/tmp(?:\/|$)/.test(path);
+}
 
 export interface ProjectGroup {
   projectId: string;

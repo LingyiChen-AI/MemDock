@@ -70,7 +70,8 @@ import { ConfirmDialog } from "@/pages/memory/ConfirmDialog";
 import { asCommandError, errorMessage } from "@/pages/skills/skillUtils";
 import { LOAD_MORE_STEP, Timeline, TimelineFilterBar, type TimelineFilter } from "./Timeline";
 import { EMPTY_CONV, isCodexWriterBusy } from "@/pages/chat/liveModel";
-import { filterSessions, formatTime, groupByProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
+import { filterSessions, formatTime, groupByProject, isTemporaryProject, otherTool, resumeCommand, type ToolFilter } from "./sessionsUtils";
+import { tempDir } from "@tauri-apps/api/path";
 
 type S = Messages["sessions"];
 type C = Messages["chat"];
@@ -1485,7 +1486,7 @@ interface Confirm {
 }
 
 /** "New chat" / "new terminal" asked for from outside the page (the sidebar). */
-export type NewRequest = "chat" | "terminal";
+export type NewRequest = "chat" | "terminal" | { liveId: string };
 
 export interface SessionsPageProps {
   request?: NewRequest | null;
@@ -1497,6 +1498,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   const { t } = useI18n();
   const s = t.sessions;
   const c = t.chat;
+  const [tempRoot, setTempRoot] = React.useState("");
+  const [tempExpanded, setTempExpanded] = React.useState(false);
+  React.useEffect(() => {
+    if (isTauri()) void tempDir().then((path) => {
+      if (typeof path === "string") setTempRoot(path);
+    }).catch(() => {});
+  }, []);
   // Session infos only: streamed tokens re-render just the open conversation.
   const store = useLiveStore(selectListSlice, shallowObjectEqual);
   const [now, setNow] = React.useState(() => Date.now());
@@ -1696,11 +1704,6 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     }
   }, [selectedPath, selectedUpdated]);
 
-  const visible = React.useMemo(
-    () => filterSessions((sessions ?? []).filter((x) => showHidden || archived.has(archiveKey(x)) === showArchived), tool, query),
-    [sessions, tool, query, archived, showArchived, showHidden],
-  );
-
   const toggleArchive = (session: SessionSummary) => {
     const next = new Set(archived);
     const key = archiveKey(session);
@@ -1723,6 +1726,14 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     }
     return m;
   }, [sessions, wtState]);
+  const availableSessions = React.useMemo(
+    () => (sessions ?? []).filter((x) => !wtLinks.get(sessionKey(x))?.deleted),
+    [sessions, wtLinks],
+  );
+  const visible = React.useMemo(
+    () => filterSessions(availableSessions.filter((x) => showHidden || archived.has(archiveKey(x)) === showArchived), tool, query),
+    [availableSessions, tool, query, archived, showArchived, showHidden],
+  );
   const matchingGroups = React.useMemo(() => {
     if (wtLinks.size === 0) return groupByProject(visible);
     const all = sessions ?? [];
@@ -1773,8 +1784,11 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
       });
   }, [matchingGroups, hiddenProjects, showHidden, liveByNative, sortOrder, s.untitled]);
   const visibleCount = groups.reduce((count, g) => count + g.sessions.length, 0);
+  const regularGroups = groups.filter((g) => !isTemporaryProject(g.cwd, tempRoot));
+  const temporaryGroups = groups.filter((g) => isTemporaryProject(g.cwd, tempRoot));
+  const temporaryOpen = tempExpanded || query.trim() !== "";
   const isHiddenPath = (path: string) => hiddenProjects.has(normPath(worktreeOf(wtState, path)?.repoRoot ?? path));
-  const archivedCount = (sessions ?? []).filter((x) => archived.has(archiveKey(x)) && !hiddenProjects.has(x.cwd ? normPath(wtLinks.get(sessionKey(x))?.repoRoot ?? x.cwd) : x.project_id)).length;
+  const archivedCount = availableSessions.filter((x) => archived.has(archiveKey(x)) && !hiddenProjects.has(x.cwd ? normPath(wtLinks.get(sessionKey(x))?.repoRoot ?? x.cwd) : x.project_id)).length;
   // Folders the composer's /cwd offers: every project, most recent first.
   const projects: ProjectChoice[] = React.useMemo(() => {
     const out: ProjectChoice[] = [];
@@ -1784,9 +1798,9 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
     return out;
   }, [sessions]);
   // Shell terminals sit at the top of their folder's group; the rest in a "terminals" group.
-  const looseShells = shells.filter((x) => !isHiddenPath(x.cwd) && !groups.some((g) => samePath(g.cwd, x.cwd)));
+  const looseShells = shells.filter((x) => !worktreeOf(wtState, x.cwd)?.deleted && !isHiddenPath(x.cwd) && !groups.some((g) => samePath(g.cwd, x.cwd)));
   // New chats not on the list yet also sit at the top of their folder's group.
-  const looseLive = liveOnly.filter((x) => !isHiddenPath(x.cwd) && !groups.some((g) => samePath(g.cwd, x.cwd)));
+  const looseLive = liveOnly.filter((x) => !worktreeOf(wtState, x.cwd)?.deleted && !isHiddenPath(x.cwd) && !groups.some((g) => samePath(g.cwd, x.cwd)));
 
   const resetPane = () => {
     setResult(null);
@@ -1875,7 +1889,13 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
   React.useEffect(() => {
     if (!request) return;
     if (request === "chat") openDraftRef.current();
-    else void openHomeShellRef.current();
+    else if (request === "terminal") void openHomeShellRef.current();
+    else {
+      selectLive(request.liveId);
+      setSelectedKey(LIVE_PREFIX + request.liveId);
+      setResult(null);
+      setConvertError(null);
+    }
     onRequestHandled();
   }, [request, onRequestHandled]);
 
@@ -2019,7 +2039,7 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
             <div className="flex flex-wrap items-center gap-1">
               <Button
                 type="button"
-                variant={showArchived ? "secondary" : "ghost"}
+                variant={showArchived ? "default" : "ghost"}
                 size="sm"
                 aria-pressed={showArchived}
                 className="h-7 justify-start"
@@ -2030,11 +2050,11 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
               >
                 <Archive aria-hidden="true" />
                 {s.archived}
-                <span className="text-muted-foreground">{archivedCount}</span>
+                <span className={cn("tabular-nums", !showArchived && "text-muted-foreground")}>{archivedCount}</span>
               </Button>
               <Button
                 type="button"
-                variant={showHidden ? "secondary" : "ghost"}
+                variant={showHidden ? "default" : "ghost"}
                 size="sm"
                 aria-pressed={showHidden}
                 className="h-7 justify-start"
@@ -2115,7 +2135,9 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
             ) : groups.length === 0 ? (
               <p className="p-2 text-sm text-muted-foreground">{s.noMatch}</p>
             ) : (
-              groups.map((g) => {
+              [regularGroups, temporaryGroups].map((partition, index) => {
+                if (!partition.length) return null;
+                const rows = partition.map((g) => {
                 // While searching every group stays open so matches are never hidden.
                 const open = query.trim() !== "" || !collapsed.has(g.projectId);
                 const listId = `project-list-${g.projectId}`;
@@ -2201,6 +2223,20 @@ export function SessionsPage({ request = null, onRequestHandled = () => {} }: Se
                     ))}
                   </ul>
                 </section>
+                );
+                });
+                return index === 0 ? <React.Fragment key="projects">{rows}</React.Fragment> : (
+                  <section key="temporary" aria-label={s.temporarySessions} className="mt-2 border-t border-border pt-1">
+                    <button type="button" aria-expanded={temporaryOpen} aria-controls="temporary-session-projects"
+                      onClick={() => setTempExpanded((open) => !open)}
+                      className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-xs font-semibold hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring">
+                      <ChevronRight aria-hidden="true" className={cn("size-3.5 text-muted-foreground", temporaryOpen && "rotate-90")} />
+                      <Folder aria-hidden="true" className="size-3.5 text-muted-foreground" />
+                      {s.temporarySessions}
+                      <span className="font-normal text-muted-foreground">{temporaryGroups.reduce((count, g) => count + g.sessions.length, 0)}</span>
+                    </button>
+                    <div id="temporary-session-projects" hidden={!temporaryOpen} className="ml-3">{rows}</div>
+                  </section>
                 );
               })
             )}

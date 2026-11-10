@@ -453,16 +453,11 @@ describe("worktree panel", () => {
 });
 
 describe("deleted worktree", () => {
-  it("stays in history with a muted badge and cannot be continued", async () => {
+  it("hides sessions whose worktree has been deleted", async () => {
     (worktreeList as Mock).mockResolvedValue([]);
     renderApp(<SessionsPage />);
     const demo = await screen.findByRole("region", { name: "demo" });
-    const row = await within(demo).findByRole("button", { name: /^(?!归档：|恢复：).*Fix login/ });
-    await waitFor(() => expect(row).toHaveTextContent("工作区已删除"));
-    await userEvent.click(row);
-    const box = await screen.findByRole("textbox", { name: "消息" });
-    expect(box).toBeDisabled();
-    expect(screen.getAllByText("这个会话的独立工作区已删除，不能继续对话；记录仍然保留").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("region", { name: "独立工作区" })).toBeNull();
+    await waitFor(() => expect(within(demo).queryByRole("button", { name: /Fix login/ })).toBeNull());
+    expect(screen.queryByRole("region", { name: "fix-login" })).toBeNull();
   });
 });

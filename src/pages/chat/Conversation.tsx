@@ -139,7 +139,7 @@ export function Conversation({
                   || b.segments.flatMap((seg) => seg.kind === "tools" ? seg.calls.map((call) => call.summary) : []).join("\n")
                 }>
                   {b.segments.map((seg, i) => (
-                    <Segment key={seg.kind === "approval" ? seg.approval.request_id : i} seg={seg} onRespond={onRespond} onOpen={(call) => setDetail({ callId: call.id })} onApproval={(approval) => setDetail({ requestId: approval.request_id })} c={c} />
+                    <Segment key={seg.kind === "approval" ? seg.approval.request_id : i} seg={seg} showCaret={lastTurn && i === b.segments.length - 1} onRespond={onRespond} onOpen={(call) => setDetail({ callId: call.id })} onApproval={(approval) => setDetail({ requestId: approval.request_id })} c={c} />
                   ))}
                   {lastTurn && !streamingTail(b.segments) ? <InlineTyping c={c} /> : null}
                 </ChatRow>
@@ -300,13 +300,13 @@ function TypingRow({ agent, c }: { agent: LiveAgent; c: C }) {
   );
 }
 
-function Segment({ seg, onOpen, onApproval, onRespond, c }: { seg: TurnSegment; onOpen: (call: LiveToolCall) => void; onApproval: (approval: LiveApproval) => void; onRespond: Respond; c: C }) {
+function Segment({ seg, showCaret, onOpen, onApproval, onRespond, c }: { seg: TurnSegment; showCaret: boolean; onOpen: (call: LiveToolCall) => void; onApproval: (approval: LiveApproval) => void; onRespond: Respond; c: C }) {
   switch (seg.kind) {
     case "text":
       return seg.streaming ? (
         // Streaming text is re-rendered on every delta; skip the fold until it settles.
         // Same layout as the finished text; the caret is drawn after the last block (no layout change).
-        <div className="min-w-0 [&>div>*:last-child]:after:ml-0.5 [&>div>*:last-child]:after:inline-block [&>div>*:last-child]:after:h-4 [&>div>*:last-child]:after:w-1.5 [&>div>*:last-child]:after:translate-y-0.5 [&>div>*:last-child]:after:animate-pulse [&>div>*:last-child]:after:bg-primary/60 [&>div>*:last-child]:after:content-[''] motion-reduce:[&>div>*:last-child]:after:animate-none">
+        <div className={cn("min-w-0", showCaret && "[&>div>*:last-child]:after:ml-0.5 [&>div>*:last-child]:after:inline-block [&>div>*:last-child]:after:h-4 [&>div>*:last-child]:after:w-1.5 [&>div>*:last-child]:after:translate-y-0.5 [&>div>*:last-child]:after:animate-pulse [&>div>*:last-child]:after:bg-primary/60 [&>div>*:last-child]:after:content-[''] motion-reduce:[&>div>*:last-child]:after:animate-none")}>
           <ChatMarkdown text={seg.text} />
         </div>
       ) : (

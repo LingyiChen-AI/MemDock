@@ -16,6 +16,8 @@ mod feishu_bridge;
 mod feishu_registration;
 mod feishu_transport;
 pub mod live;
+#[cfg(windows)]
+mod quick_reply;
 pub mod fsutil;
 pub mod ghimport;
 pub mod memory;
@@ -68,6 +70,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_updater::Builder::new().build())
         // VISIBLE is excluded: the window starts hidden and setup shows it once it is sized.
@@ -265,6 +268,10 @@ pub fn run() {
             tray::set_tray_labels,
             live::live_start,
             live::live_send,
+            #[cfg(windows)]
+            quick_reply::show_reply_notification,
+            #[cfg(windows)]
+            quick_reply::open_reply_conversation,
             live::live_respond,
             live::live_interrupt,
             live::live_stop,

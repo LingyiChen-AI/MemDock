@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { onLiveEvent } from "@/api/live";
 import { AppProviders } from "@/providers";
 import { AppShell, type NavKey } from "@/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -19,7 +23,7 @@ import { AccountSlot } from "@/components/account/AccountSlot";
 import { LoginDialog } from "@/components/account/LoginDialog";
 import { useSyncStatus } from "@/components/account/useSyncStatus";
 import { SyncPage } from "@/pages/sync/SyncPage";
-import { initLiveStore, selectActiveCount, useLiveStore } from "@/pages/chat/liveStore";
+import { getLiveState, initLiveStore, selectActiveCount, useLiveStore } from "@/pages/chat/liveStore";
 
 function Shell() {
   const { t } = useI18n();
@@ -37,6 +41,52 @@ function Shell() {
   const toasts = useToasts();
   // Live chats keep streaming (and the badge stays right) whichever page is open.
   useEffect(() => initLiveStore(), []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    const listener = onLiveEvent(({ live_id, event }) => {
+      if (!active || document.hasFocus() || event.type !== "turn_completed") return;
+      const { sessions, convs } = getLiveState();
+      const session = sessions.find((item) => item.live_id === live_id);
+      if (!session) return;
+      const agent = session.agent === "claude" ? "Claude Code" : "Codex";
+      const status = event.is_error ? t.shell.chatFailed : t.shell.chatFinished;
+      const title = session.title.trim() || agent;
+      const items = convs[live_id]?.conv.items ?? [];
+      let reply = "";
+      if (!event.is_error) {
+        for (let i = items.length - 1; i >= 0; i--) {
+          const item = items[i];
+          if (item.type === "user") break;
+          if (item.type === "assistant" && item.text.trim()) {
+            reply = item.text.replace(/\s+/g, " ").trim();
+            break;
+          }
+        }
+      }
+      const body = reply.length > 220 ? `${reply.slice(0, 220)}…` : reply || status;
+      void (async () => {
+        if (!active || document.hasFocus()) return;
+        if (navigator.userAgent.includes("Windows")) {
+          await invoke("show_reply_notification", {
+            liveId: live_id, title, body, status: `${agent} · ${status}`,
+            placeholder: t.shell.replyPlaceholder,
+            replyLabel: t.shell.reply,
+            failedLabel: t.shell.replyFailed,
+            closeLabel: t.shell.replyClose,
+          });
+          return;
+        }
+        const allowed = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+        if (active && allowed && !document.hasFocus()) sendNotification({ title, body });
+      })().catch(() => {});
+    });
+    void listener.catch(() => {});
+    return () => {
+      active = false;
+      void listener.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [t]);
   // Counts only: streaming tokens do not re-render the shell.
   const activeChats = useLiveStore(selectActiveCount);
   const appUpdate = useAppUpdate(dirty || activeChats > 0);
@@ -44,11 +94,26 @@ function Shell() {
   const [newRequest, setNewRequest] = useState<NewRequest | null>(null);
   const requestHandled = useCallback(() => setNewRequest(null), []);
 
-  const navigate = (key: NavKey) => {
+  const navigate = useCallback((key: NavKey) => {
     if (key === current) return;
     if (dirty) setPendingNav(key);
     else setCurrent(key);
-  };
+  }, [current, dirty]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    const listener = listen<string>("quick-reply-open", ({ payload }) => {
+      if (!active) return;
+      setNewRequest({ liveId: payload });
+      navigate("chat");
+    });
+    void listener.catch(() => {});
+    return () => {
+      active = false;
+      void listener.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [navigate]);
 
   return (
     <>

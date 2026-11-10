@@ -8,15 +8,17 @@ import "@fontsource-variable/jetbrains-mono";
 import "lxgw-wenkai-screen-webfont/lxgwwenkaiscreen.css";
 import "./styles/globals.css";
 import App from "./App";
+import { QuickReply, type QuickReplyPayload } from "./QuickReply";
 import { RootErrorBoundary } from "./components/RootErrorBoundary";
 import { installOverflowTitles } from "./lib/overflowTitles";
 
-installOverflowTitles();
+const notice = (window as Window & { __memdockQuickReply?: QuickReplyPayload }).__memdockQuickReply;
+if (!notice) installOverflowTitles();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      <App />
+      {notice ? <QuickReply notice={notice} /> : <App />}
     </RootErrorBoundary>
   </React.StrictMode>,
 );

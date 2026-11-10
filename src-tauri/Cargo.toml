@@ -1,6 +1,6 @@
 [package]
 name = "memdock"
-version = "0.1.12"
+version = "0.1.13"
 description = "Memdock: manage Claude Code and Codex memories"
 authors = ["Memdock contributors"]
 edition = "2024"
@@ -55,6 +55,7 @@ tauri-plugin-process = "2.4.0"
 toml = "1.2"
 semver = "1"
 tauri-plugin-autostart = "2.7.0"
+tauri-plugin-notification = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

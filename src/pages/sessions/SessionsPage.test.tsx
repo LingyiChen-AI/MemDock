@@ -135,6 +135,29 @@ describe("SessionsPage", () => {
     expect(screen.getByText("没有匹配的会话")).toBeInTheDocument();
   });
 
+  it("puts temporary projects last and reveals them when searching", async () => {
+    const temporary = mk({
+      id: "temp-chat",
+      cwd: "C:/Users/Admin/AppData/Local/Temp/.tmp123",
+      project_id: "temp-project",
+      project_name: ".tmp123",
+      title: "Temporary build check",
+    });
+    vi.mocked(listSessions).mockResolvedValue([temporary, claudeSession]);
+    renderApp(<SessionsPage />);
+    const group = await screen.findByRole("region", { name: "临时会话" });
+    expect(screen.getAllByRole("region").indexOf(group)).toBeGreaterThan(
+      screen.getAllByRole("region").indexOf(screen.getByRole("region", { name: "demo" })),
+    );
+    const toggle = within(group).getByRole("button", { name: /临时会话/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(within(group).getByText("Temporary build check")).toBeVisible();
+    await userEvent.click(toggle);
+    await userEvent.type(screen.getByRole("searchbox"), "Temporary build check");
+    expect(within(group).getByText("Temporary build check")).toBeVisible();
+  });
+
   it("sorts projects by name and remembers hidden projects across remounts", async () => {
     const key = "memdock.sessions.hiddenProjects";
     localStorage.removeItem(key);

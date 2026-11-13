@@ -272,6 +272,11 @@ export function SyncPage({ status, onStatus, onOpenLogin, onDirtyChange, onOpenM
             <RefreshCw className="size-8 text-muted-foreground" aria-hidden="true" />
             <h2 className="text-base font-semibold">{s.loggedOutTitle}</h2>
             <p className="max-w-md text-sm text-muted-foreground">{s.loggedOutBody}</p>
+            {status.logout_reason ? (
+              <p className="max-w-md rounded-md bg-warning/15 px-3 py-1.5 text-xs text-muted-foreground">
+                {fmt(s.logoutReason, { reason: status.logout_reason })}
+              </p>
+            ) : null}
             <Button type="button" onClick={onOpenLogin} className="mt-2 h-8 cursor-pointer px-4 text-sm font-semibold">
               <LogIn className="size-4" aria-hidden="true" />
               {t.account.login}

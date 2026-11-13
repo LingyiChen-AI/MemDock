@@ -882,6 +882,7 @@
   "sync": {
     "title": "同步",
     "loggedOutTitle": "在多台电脑间同步记忆",
+    "logoutReason": "上次登录失效的原因：{reason}",
     "loggedOutBody": "登录 GitHub 后，MemDock 会把记忆保存到你账号下的私有仓库，并在每台电脑上合并改动。",
     "private": "私有",
     "public": "公开",

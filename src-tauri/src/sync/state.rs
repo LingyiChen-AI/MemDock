@@ -76,6 +76,9 @@ pub struct SyncState {
     /// `updated_at` of the preferences this machine last uploaded or applied.
     #[serde(default)]
     pub prefs_seen: Option<String>,
+    /// Why the login was dropped (the error GitHub gave), shown on the login screen.
+    #[serde(default)]
+    pub logout_reason: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -102,6 +105,7 @@ impl Default for SyncState {
             repo_private: None,
             prefs_with_memory: true,
             prefs_seen: None,
+            logout_reason: None,
         }
     }
 }

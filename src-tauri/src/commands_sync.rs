@@ -295,6 +295,8 @@ pub struct SyncStatusDto {
     /// Never synced on this machine while the cloned repository already holds
     /// memory files (a new computer): offer a download.
     pub remote_has_memory: bool,
+    /// Why the last login was dropped (shown while logged out).
+    pub logout_reason: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -504,22 +506,39 @@ fn try_sync_lock(state: &AppState) -> Result<MutexGuard<'_, ()>, CommandError> {
     }
 }
 
-/// `unauthorized`: forget the token and the login, ask the UI to log in again.
-fn handle_unauthorized(state: &AppState) {
+/// Whether GitHub really refuses the stored token. Anything else (a keychain read
+/// that failed, the network, a rate limit) keeps the login: it is retried later.
+fn token_rejected(state: &AppState) -> bool {
+    match state.sync.tokens.get() {
+        Ok(Some(t)) if !t.is_empty() => matches!(state.sync.api.user(&t), Err(ApiError::Unauthorized)),
+        Ok(_) => true, // nothing stored: there is no login to keep
+        Err(_) => false,
+    }
+}
+
+/// `unauthorized`: when GitHub confirms the token is refused, forget it and the
+/// login and ask the UI to log in again. Returns whether the login was dropped.
+fn handle_unauthorized(state: &AppState, reason: &str) -> bool {
+    if !token_rejected(state) {
+        return false;
+    }
     let _ = state.sync.clear_token();
     if let Ok(mut s) = load(state) {
         s.login = None;
         s.needs = Some("relogin".into());
+        s.logout_reason = Some(reason.to_string());
         let _ = store(state, &s);
     }
     state.sync.emit(LOGIN_EVENT, &LoginEvent::of("relogin"));
     emit_status(state);
+    true
 }
 
 /// Applies the side effects every error code needs before returning it.
 fn on_error(state: &AppState, e: CommandError) -> CommandError {
-    if e.code == "unauthorized" {
-        handle_unauthorized(state);
+    if e.code == "unauthorized" && !handle_unauthorized(state, &e.message) {
+        // The token still works: report a plain failure, the login stays.
+        return err("github_error", e.message);
     }
     e
 }
@@ -998,6 +1017,7 @@ pub fn sync_status_impl(state: &AppState) -> SyncStatusDto {
         last_sync_at: s.last_sync_at,
         needs: s.needs.clone(),
         remote_has_memory: logged_in && remote_has_memory(state, &s),
+        logout_reason: if logged_in { None } else { s.logout_reason.clone() },
         pending: pending(state, s),
     }
 }
@@ -1135,15 +1155,17 @@ fn run_login(state: &AppState, code: &DeviceCode) -> Result<Option<String>, Logi
     }
     s.login = Some(user.login.clone());
     s.needs = None;
+    s.logout_reason = None;
     store(state, &s).map_err(fail)?;
     match setup_repo(state, &token, &user.login, &mut s) {
         Ok(needs) => Ok(needs),
         Err(e) => {
-            if e.code == "unauthorized" {
+            if e.code == "unauthorized" && token_rejected(state) {
                 let _ = rt.clear_token();
                 if let Ok(mut s) = load(state) {
                     s.login = None;
                     s.needs = Some("relogin".into());
+                    s.logout_reason = Some(e.message.clone());
                     let _ = store(state, &s);
                 }
             }

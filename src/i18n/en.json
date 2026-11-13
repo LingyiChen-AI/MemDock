@@ -882,6 +882,7 @@
   "sync": {
     "title": "Sync",
     "loggedOutTitle": "Sync memories between computers",
+    "logoutReason": "Last login ended: {reason}",
     "loggedOutBody": "After you sign in to GitHub, MemDock keeps your memories in a private repository in your account and merges changes on every computer.",
     "private": "Private",
     "public": "Public",

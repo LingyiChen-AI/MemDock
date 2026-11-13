@@ -746,7 +746,8 @@ fn git_unauthorized_after_local_writes_relogs_and_keeps_base() {
     let e = env();
     let plan = conflict_setup(&e);
     let head1 = e.head();
-    // The remote refuses the push as GitHub does for a revoked token.
+    // The remote refuses the push as GitHub does for a revoked token (and the API agrees).
+    e.api.unauthorized.store(true, Ordering::SeqCst);
     let hook = e.bare.join("hooks").join("pre-receive");
     fs::write(&hook, "#!/bin/sh\necho 'fatal: Authentication failed' >&2\nexit 1\n").unwrap();
     #[cfg(unix)]
@@ -766,6 +767,31 @@ fn git_unauthorized_after_local_writes_relogs_and_keeps_base() {
     assert_eq!(s.login, None);
     assert_eq!(s.last_sync_commit.as_deref(), Some(head1.as_str()));
     assert_eq!(fs::read_to_string(e.global()).unwrap(), "M1\nl2\nl3\nl4\nl5\n");
+}
+
+#[test]
+fn git_auth_error_with_a_working_token_keeps_the_login() {
+    let e = env();
+    let plan = conflict_setup(&e);
+    // git reports an auth failure, but GitHub still accepts the token: no logout.
+    let hook = e.bare.join("hooks").join("pre-receive");
+    fs::write(&hook, "#!/bin/sh\necho 'fatal: Authentication failed' >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let res: HashMap<String, ResolutionDto> = serde_json::from_value(serde_json::json!({
+        GLOBAL: { "kind": "text", "text": "M1\nl2\nl3\nl4\nl5\n" }
+    }))
+    .unwrap();
+    let err = sync_finish_impl(&e.state, &plan.id, res).unwrap_err();
+    assert_eq!(err.code, "github_error", "{err:?}");
+    assert!(e.tokens.get().unwrap().is_some());
+    let s = e.sync_state();
+    assert!(s.login.is_some());
+    assert_eq!(s.needs, None);
+    assert_eq!(s.logout_reason, None);
 }
 
 #[test]

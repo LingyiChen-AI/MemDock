@@ -480,6 +480,8 @@ export interface SyncStatus {
   needs: SyncNeeds | null;
   /** Never synced here while the cloud already holds memories (a new computer). */
   remote_has_memory: boolean;
+  /** Why the last login was dropped (the error GitHub gave); only while logged out. */
+  logout_reason?: string | null;
 }
 
 export interface DeviceCodeInfo {

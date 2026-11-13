@@ -109,13 +109,13 @@ fn classify(stderr: &str) -> SyncGitError {
     {
         return SyncGitError::Rejected;
     }
+    // Only a refused credential counts. 403 (rate limits, repository rules, proxies) and
+    // "no credentials given" (`terminal prompts disabled`) are ordinary failures: the token
+    // may still be fine, and treating them as a logout throws a valid login away.
     if low.contains("authentication failed")
-        || low.contains("terminal prompts disabled")
-        || low.contains("could not read username")
-        || low.contains("error: 401")
-        || low.contains("error: 403")
+        || low.contains("invalid username or password")
         || low.contains("returned error: 401")
-        || low.contains("returned error: 403")
+        || low.contains("error: 401")
         || low.contains("invalid credentials")
     {
         return SyncGitError::Unauthorized;
@@ -1107,9 +1107,18 @@ mod tests {
             SyncGitError::Unauthorized
         );
         assert_eq!(
-            classify("fatal: unable to access: The requested URL returned error: 403"),
+            classify("fatal: unable to access: The requested URL returned error: 401"),
             SyncGitError::Unauthorized
         );
+        // 403 and a missing credential keep the login.
+        assert!(matches!(
+            classify("fatal: unable to access: The requested URL returned error: 403"),
+            SyncGitError::Failed { .. }
+        ));
+        assert!(matches!(
+            classify("fatal: could not read Username for 'https://github.com': terminal prompts disabled"),
+            SyncGitError::Failed { .. }
+        ));
         assert_eq!(
             classify(" ! [rejected]        a -> main (fetch first)"),
             SyncGitError::Rejected
